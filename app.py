@@ -40,7 +40,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 상단 모닝 브리핑 배너
+# 상단 1분 모닝 브리핑 배너
 st.markdown("""
 <div class='morning-banner'>
     <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -317,3 +317,319 @@ with tab3:
             <div style='font-size:12px; color:#94a3b8; margin: 4px 0;'>현재가: $145.20</div>
             <div style='font-size:13px; color:#f87171;'><strong>풋 지지선: $135 / $140</strong></div>
             <div style='font-size:11px; color:#64748b;'>$50M 대형 풋 벽 형성</div>
+            <div style='font-size:13px; color:#4ade80; margin-top:4px;'><strong>콜 저항선: $150</strong></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_g2:
+        st.markdown("""
+        <div class='gex-card'>
+            <div style='font-size:16px; font-weight:800; color:#00e676;'>SPY / SPX</div>
+            <div style='font-size:12px; color:#94a3b8; margin: 4px 0;'>현재가: $598.00</div>
+            <div style='font-size:13px; color:#f87171;'><strong>풋 지지선: $580</strong></div>
+            <div style='font-size:11px; color:#64748b;'>기관 대량 풋 헷지 바닥</div>
+            <div style='font-size:13px; color:#4ade80; margin-top:4px;'><strong>콜 저항선: $600 / 7000</strong></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_g3:
+        st.markdown("""
+        <div class='gex-card'>
+            <div style='font-size:16px; font-weight:800; color:#00e676;'>MU</div>
+            <div style='font-size:12px; color:#94a3b8; margin: 4px 0;'>현재가: $795.20</div>
+            <div style='font-size:13px; color:#f87171;'><strong>풋 지지선: $1050 (ITM)</strong></div>
+            <div style='font-size:11px; color:#64748b;'>$62M 딥 ITM 헷지 블록</div>
+            <div style='font-size:13px; color:#4ade80; margin-top:4px;'><strong>콜 저항선: $1100</strong></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_g4:
+        st.markdown("""
+        <div class='gex-card'>
+            <div style='font-size:16px; font-weight:800; color:#00e676;'>MSFT</div>
+            <div style='font-size:12px; color:#94a3b8; margin: 4px 0;'>현재가: $565.00</div>
+            <div style='font-size:13px; color:#f87171;'><strong>풋 지지선: $550</strong></div>
+            <div style='font-size:11px; color:#64748b;'>하방 방어선 확보</div>
+            <div style='font-size:13px; color:#4ade80; margin-top:4px;'><strong>콜 저항선: $580</strong></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ================= TAB 4: AI OPTIONS PLAYS & NOTEWORTHY =================
+with tab4:
+    st.title("⚡ AI Options Plays & Noteworthy Trades")
+    st.caption("출처: InsiderFinance AI Options Plays BETA & AI Noteworthy Trades (2026-11-10)")
+
+    st.subheader("🎯 AI Options Plays BETA (기관 추천 실전 옵션 전략 6선)")
+    plays = [
+        ("1. NVDA Bear Put Spread (베어 풋 스프레드)", "Bearish (5/5 Strength)", False,
+         "향후 1~3개월 만기의 약내가격(ITM) 또는 약외가격(OTM) 풋 스프레드를 활용하여 기술주 변동성이 진정되더라도 프리미엄 비용을 방어하면서 추가 하방 수익을 추구합니다.",
+         "Use slightly in the money to modestly out of the money put spreads in the next 1-3 months to lean into further downside while containing premium if tech volatility cools.",
+         "기술주 옵션의 약 70%가 풋옵션에 쏠려 있으며, NVDA 단일 종목에서만 주간 11억 달러 이상의 프리미엄이 하방으로 치우쳐 있고 오늘 5천만 달러 규모의 Above-Ask 원월물 풋 블록이 상단을 제한하고 있습니다. 이는 기술주 주식 매도세, 예상치를 웃돈 CPI, 매파적 연준 기조와 맞물려 헷지 수요가 높은 상태로 유지되는 한 AI 하드웨어 밸류에이션을 취약하게 만듭니다.",
+         "Tech options are roughly seventy percent puts and NVDA alone carries over $1.1B of weekly premium tilted to downside, capped by today's $50M above ask long dated put block. That aligns with strong equity side distribution in technology and a hot CPI plus hawkish Fed tone, leaving AI hardware vulnerable if hedging demand remains elevated."),
+
+        ("2. CCJ Long Call (우라늄 롱 콜 전략)", "Bullish (5/5 Strength)", True,
+         "1~3개월 만기의 등가격(ATM) 또는 약외가격(OTM) 콜옵션을 매수하여 에너지 심리가 유가 하락을 따라 잠시 주춤하더라도 변동성을 견디면서 우라늄 강세 랠리에 동참합니다.",
+         "Favor at the money to modestly out of the money calls 1-3 months out to ride uranium strength while allowing for volatility if energy sentiment briefly tracks softer crude.",
+         "주간 CCJ 옵션은 압도적으로 콜옵션이 주도하고 있으며, 전반적인 에너지 섹터 약세 속에서도 최근 2,470만 달러 규모의 3월 만기 상방 콜 블록 체결 및 5일 연속 주가 상승을 기록했습니다. 이러한 지속적인 상방 포지셔닝은 인플레이션 및 지정학적 리스크 속에서 우라늄과 에너지 전환 테마를 선호하는 시장 테마에 완벽히 부합합니다.",
+         "Weekly CCJ options are overwhelmingly call driven with a recent $24.7M top position March call block and five day price gains despite broader energy weakness. That persistent upside positioning fits our theme of inflation and geopolitical risk keeping uranium and transition energy in favor."),
+
+        ("3. ASML Bull Call Spread (불 콜 스프레드)", "Bullish (4/5 Strength)", True,
+         "1~3개월 만기의 등가격(ATM) 또는 약외가격(OTM) 콜 스프레드를 매수하여 첨단 반도체 장비의 상대적 강세에 참여하되 섹터 전반의 매도세가 가속될 경우 리스크를 제한합니다.",
+         "Use at the money to modestly out of the money call spreads 1-3 months out to participate in relative strength in high end semicap while capping risk if sector wide tech distribution accelerates.",
+         "ASML은 2,000만 달러 이상의 Above-Ask 최상위 콜 블록을 끌어모았으며 주간 플로우가 콜옵션에 크게 치우쳐 있고 약세 기술주 대비 5일 수익률이 플러스입니다. 광범위한 AI 하드웨어 헷지 압력 속에서도 독점적 노광 장비 리더에 대한 타겟 매집을 시사합니다.",
+         "ASML has attracted over $20M in above ask top position call blocks with weekly flow heavily call skewed and five day performance positive against a weak tech sector. Points to targeted accumulation of upside in a key equipment leader."),
+
+        ("4. VLO Bull Call Spread (정유주 불 콜 스프레드)", "Bullish (4/5 Strength)", True,
+         "2~6주 만기의 약외가격(OTM) 콜 스프레드를 매수하여 건설적인 정유 상방을 취하되 유가나 정제마진이 추가 약세를 보일 경우 노출을 제한합니다.",
+         "Consider slightly out of the money call spreads 2-6 weeks out to express constructive refinery upside while limiting exposure if crude prices or crack spreads soften further.",
+         "에너지 옵션은 일간 및 주간 모두 콜 프리미엄이 지배하고 있으며, VLO는 약외가격에 531만 달러 규모의 Above-Ask 최상위 콜 스플릿을 기록했습니다. 인플레이션과 지정학적 리스크 속에서 기관들이 섹터 조정을 틈타 상방 레버리지를 추가하고 있습니다.",
+         "Energy options show call premium dominating daily and weekly flow, and VLO just printed a $5.3M above ask top position call slightly out of the money. Suggests institutions adding refinery upside into sector weakness."),
+
+        ("5. HIMS Long Put (롱 풋 하방 공략)", "Bearish (4/5 Strength)", False,
+         "2~6주 만기의 약외가격(OTM) 풋옵션을 매수하여 하락 추세를 추종하되 변동성이 큰 소형주의 급격한 숏커버링 랠리 위험을 관리합니다.",
+         "Favor slightly out of the money puts 2-6 weeks out to press the downtrend while allowing room for sharp short covering rallies in this volatile small cap.",
+         "HIMS는 5일간 25% 이상 급락했으며 주간/일간 옵션 플로우 모두 풋옵션이 압도하고 있습니다. 시간대별 테이프에서도 일방적인 하방 포지셔닝이 관찰되어 트레이더들이 즉각적인 평균 회귀 반등보다는 지속적인 주가 압박을 예상하고 있습니다.",
+         "HIMS is down more than 25% over 5 days with weekly/daily flow dominated by puts. Alignment of price momentum and protection demand indicates traders expect continued pressure rather than immediate mean reversion."),
+
+        ("6. RIOT Long Call (비트코인 채굴주 롱 콜)", "Bullish (4/5 Strength)", True,
+         "향후 1~2주 만기의 등가격(ATM) 또는 약외가격(OTM) 단기 콜옵션으로 가상자산 채굴주 모멘텀을 공략하되 위험 심리 악화 시 급격한 반락 위험을 감수합니다.",
+         "Use at the money to modestly out of the money calls in the next 1-2 weeks to target ongoing crypto miner momentum, accepting the risk of sharp reversals if broader risk sentiment sours.",
+         "RIOT은 5일 동안 20% 이상 급등했으며 주간 옵션이 전적으로 콜에 집중되어 있고 장마감 직전 신규 Above-Ask 최상위 콜 블록이 유입되었습니다. 매크로 헷지가 거센 상황에서도 고베타 주식 및 크립토 익스포저를 위한 레버리지 수단으로 채굴주를 활용하고 있습니다.",
+         "RIOT has rallied over 20% in 5 days with weekly options entirely in calls and a fresh above ask top position call block hitting into the close. Traders using miners as leveraged vehicles for crypto exposure.")
+    ]
+
+    for title, out, is_bull, st_ko, st_en, why_ko, why_en in plays:
+        c_cls = "strategy-card" if is_bull else "strategy-card strategy-card-red"
+        col = "#00e676" if is_bull else "#f23645"
+        st.markdown(f"""
+        <div class='{c_cls}'>
+            <div style='display:flex; justify-content:space-between; align-items:center;'>
+                <span style='font-size:16px; font-weight:700; color:white;'>{title}</span>
+                <span style='background:{col}; color:black; font-size:11px; font-weight:800; padding:2px 8px; border-radius:4px;'>{out}</span>
+            </div>
+            <div style='margin-top:8px; font-size:13px; color:#e0e0e0;'><strong>💡 실행 전략:</strong> {st_ko}</div>
+            <div style='font-size:11px; color:#787b86; margin-bottom:8px;'>[EN] {st_en}</div>
+            <div style='font-size:13px; color:#cfd8dc;'><strong>🔍 선정 배경:</strong> {why_ko}</div>
+            <div style='font-size:11px; color:#787b86;'>[EN] {why_en}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("⚡ AI Noteworthy Trades BETA (기관 핵심 대형 체결 6선 전체)")
+    
+    notes = [
+        ("NVDA 140 PUT 2027-1-15 @ $50M", "2026-11-10 12:14 PM", "Hedge (5/5 Strength)", False, "Above Ask · Top Position · Block",
+         "미결제약정을 초과하는 140달러 행사가의 5천만 달러($50M) 규모 Above-Ask 블록 매수는 NVDA의 장기 풋 하방 압력을 가중시킵니다. 뜨거운 CPI 발표와 연준의 매파적 금리인상 발언 이후 기술주 옵션이 이미 풋으로 심하게 기울어진 장세에서 대규모 포트폴리오를 지키기 위한 기관의 고확신 헷지입니다.",
+         "A massive $50M above ask block at 140 strike with size exceeding open interest adds to the long dated NVDA put overhang. In a tape where tech options are already heavily put skewed after hot CPI and hawkish Fed remarks, this looks like high conviction protection on a large underlying book rather than a short term trade."),
+
+        ("MU 1050 PUT 2027-1-15 @ $34.72M", "2026-11-10 10:56 AM", "Hedge (4/5 Strength)", False, "Split",
+         "1,050달러 깊은 내가격(Deep ITM) 풋옵션 스플릿으로 단일 레그에 3,472만 달러가 지출되었으며 동일 만기/행사가에 2,770만 달러 트랜치가 추가되었습니다. 메모리 및 AI 투자 붐의 지속성에 의문을 품은 기관의 대규모 현물 위험 분산 헷지입니다.",
+         "This deep in the money January MU put spends $34.7M on a single leg, layered alongside a second $27.7M tranche at the same strike and expiry. Suggests institutional hedging or de-risk of a substantial equity exposure as investors question the durability of the memory and AI spending boom."),
+
+        ("ASML 1740 CALL 2027-2-19 @ $12.78M", "2026-11-10 12:06 PM", "Positioning (4/5 Strength)", True, "Above Ask · Top Position · Block",
+         "미결제약정의 60배에 달하는 단일 1,278만 달러 콜 블록 체결. 독점적 반도체 노광장비 선도 기업에 대한 강력한 장기 상방 매집 포지션입니다.",
+         "An above ask top position ASML call block roughly sixty times open interest targets moderate upside about three months out in a stock that is still outperforming the broader tech tape. That kind of size looks like a deliberate grab for upside convexity."),
+
+        ("MSFT 580 CALL 2026-12-18 @ $12.92M", "2026-11-10 1:05 PM", "Positioning (4/5 Strength)", True, "Block",
+         "만기까지 약 5주 남은 약외가격 580달러 행사가 콜 블록에 1,292만 달러가 유입되었습니다. CPI와 연준 쇼크가 흡수된 후 대형 소프트웨어의 스윙 롱 반등을 겨냥한 자금입니다.",
+         "This $12.9M December MSFT call block sits just out of the money with around five weeks to expiry, aligning with call dominant weekly flow despite today's price weakness. Reads as a swing long bet on mega cap software stabilizing."),
+
+        ("VLO 380 CALL 2027-1-15 @ $5.31M", "2026-11-10 2:13 PM", "Positioning (4/5 Strength)", True, "Above Ask · Top Position · Split",
+         "정유 기업 발레로 에너지에 380달러 행사가로 531만 달러 규모의 콜 스플릿 매수가 집중 유입되었습니다. 정제마진 호조 및 지정학적 원유 인플레이션 노출을 겨냥한 기관 자금입니다.",
+         "An above ask top position VLO call split adds over $5.3M of premium at only about ten percent out of the money into early next year, pointing to institutions adding refinery upside and inflation exposure into the recent energy drawdown."),
+
+        ("AMD 510 CALL 2026-11-11 @ $2.48M", "2026-11-10 12:40 PM", "Short-Term (4/5 Strength)", True, "Golden Sweep",
+         "만기가 단 1일 남은 초단기 골든 스윕으로 510달러 콜옵션에 248만 달러가 전격 매수되었습니다. 미결제약정의 2.9배 규모로 주중 즉각적인 모멘텀 랠리에 베팅하는 촉매 플레이입니다.",
+         "This golden sweep spends about $2.5M on near dated AMD calls just above the money after a strong multi week rally. The 2.9x size over open interest and one day tenor flag a high conviction momentum or catalyst play.")
+    ]
+
+    for title, tm, intent, is_bull, tags, why_ko, why_en in notes:
+        c_cls = "ainote-card ainote-card-green" if is_bull else "ainote-card"
+        col = "#00e676" if is_bull else "#f23645"
+        st.markdown(f"""
+        <div class='{c_cls}'>
+            <div style='display:flex; justify-content:space-between; align-items:center;'>
+                <span style='font-size:15px; font-weight:700; color:white;'>[{tm}] {title}</span>
+                <span style='background:{col}; color:black; font-size:11px; font-weight:800; padding:2px 8px; border-radius:4px;'>{intent}</span>
+            </div>
+            <div style='font-size:11px; color:#ffb74d; margin: 4px 0;'>🏷️ {tags}</div>
+            <div style='font-size:13px; color:#d1d4dc; margin-top:6px;'><strong>🔎 AI 심층 분석:</strong> {why_ko}</div>
+            <div style='font-size:11px; color:#787b86; margin-top:4px;'>[원문] {why_en}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ================= TAB 5: OPTIONS TOP TICKERS CHARTS =================
+with tab5:
+    st.title("📊 Options Top Tickers 차트 및 데이터 해석")
+    st.caption("출처: InsiderFinance Evening Edge Options Top Tickers (2026-11-10)")
+    
+    col_c1, col_c2 = st.columns(2)
+    
+    with col_c1:
+        st.subheader("🔵 Unusual OTM % (외가격 이상 급등 종목)")
+        otm_data = {
+            "Ticker": ["SOXL", "SMMT", "ONDS", "IREN", "HIMS", "SMH", "SQQQ", "APLD", "CRWG", "GME", "BRBR", "AAOI"],
+            "OTM_Pct": [80, 71, 44, 38, 32, 30, 28, 28, 28, 27, 27, 24]
+        }
+        df_otm = pd.DataFrame(otm_data)
+        fig_otm = px.bar(
+            df_otm, x="Ticker", y="OTM_Pct", text="OTM_Pct",
+            color_discrete_sequence=["#2979ff"]
+        )
+        fig_otm.update_traces(texttemplate='%{text}%', textposition='outside')
+        fig_otm.update_layout(
+            plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
+            font_color="#d1d4dc", yaxis=dict(title="OTM %", range=[0, 95], gridcolor="#1e222d"),
+            xaxis=dict(title="", gridcolor="#1e222d"), margin=dict(l=20, r=20, t=30, b=20)
+        )
+        st.plotly_chart(fig_otm, use_container_width=True)
+        
+        st.markdown("""
+        <div class='chart-analysis'>
+            <h4 style='color:#2979ff; margin:0 0 8px 0;'>💡 Unusual OTM % 데이터 해석</h4>
+            <ul style='font-size:13px; color:#cfd8dc; margin-bottom:0; padding-left:18px; line-height:1.6;'>
+                <li><strong>SOXL (80%) & SMH (30%):</strong> 반도체 3배 레버리지 ETF와 섹터 ETF에 현재가 대비 무려 80% 이상 떨어진 극단적 OTM 옵션 유입. 반도체 급반등에 대한 로또성 복권형 콜옵션 또는 극단적 꼬리위험(Tail Risk) 헷지가 공존함을 시사합니다.</li>
+                <li><strong>SMMT (71%):</strong> 바이오텍 종목으로 71% 외가격 행사가에 콜 스윕이 집중되며 임상 데이터 발표나 라이선스 계약 등 돌발 촉매를 겨냥한 투기성 자금이 포착되었습니다.</li>
+                <li><strong>ONDS (44%), IREN (38%), HIMS (32%):</strong> 고변동성 기술주 및 비트코인 채굴주에 단기 가격 급등을 노린 초외가격 옵션 공격적 매집이 지속되고 있습니다.</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_c2:
+        st.subheader("🟣 Sweep Volume (기관 초강력 스윕 계약수)")
+        sweep_data = {
+            "Ticker": ["SPY", "QQQ", "NVDA", "IWM", "SPCX", "AMZN", "IREN", "TLT", "TSLA", "SOXL", "AAPL", "KWEB"],
+            "Contracts_K": [2350, 1220, 500, 120, 50, 49, 35, 30, 27, 26, 25, 24]
+        }
+        df_swp = pd.DataFrame(sweep_data)
+        fig_swp = px.bar(
+            df_swp, x="Ticker", y="Contracts_K", text="Contracts_K",
+            color_discrete_sequence=["#ab47bc"]
+        )
+        fig_swp.update_traces(texttemplate='%{text:,.0f}K', textposition='outside')
+        fig_swp.update_layout(
+            plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
+            font_color="#d1d4dc", yaxis=dict(title="Sweep Contracts (천 건)", range=[0, 2600], gridcolor="#1e222d"),
+            xaxis=dict(title="", gridcolor="#1e222d"), margin=dict(l=20, r=20, t=30, b=20)
+        )
+        st.plotly_chart(fig_swp, use_container_width=True)
+        
+        st.markdown("""
+        <div class='chart-analysis' style='border-left-color: #ab47bc;'>
+            <h4 style='color:#ab47bc; margin:0 0 8px 0;'>💡 Sweep Volume 데이터 해석</h4>
+            <ul style='font-size:13px; color:#cfd8dc; margin-bottom:0; padding-left:18px; line-height:1.6;'>
+                <li><strong>SPY (2.35M) & QQQ (1.22M):</strong> 지수 ETF에 수백만 계약 규모의 전광석화 같은 스윕 체결 집중. 매파적 연준 발언과 CPI 쇼크 이후 기관들이 시장 방향성에 즉각적으로 대응하기 위해 가장 유동성이 큰 지수 옵션을 대량 매수하고 있습니다.</li>
+                <li><strong>NVDA (500K 계약):</strong> 개별 주식 중 유일하게 50만 건 이상의 압도적 스윕 볼륨 기록. 오늘 5천만 달러짜리 원월물 풋 블록과 맞물려 기관의 대규모 포트폴리오 헷지와 주가 변동성 베팅이 극에 달해 있습니다.</li>
+                <li><strong>IWM (120K) & TLT (30K):</strong> 중소형주 지수(IWM)의 풋옵션 스윕과 금리 인하 기대 후퇴에 따른 채권(TLT) 방향성 베팅이 활발하게 전개 중입니다.</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ================= TAB 6: TREEMAP & THEMES =================
+with tab6:
+    st.title("🗺️ 섹터별 기관 수급 히트맵 & 핵심 테마 분석")
+    st.caption("출처: InsiderFinance AI Market Insights BETA (2026-11-10)")
+
+    tree_data = [
+        {"Sector": "Technology", "Ticker": "NVDA", "Premium_M": 1115.6, "Call_Pct": 32, "Flow": "Put 68% (대규모 헷지)"},
+        {"Sector": "Technology", "Ticker": "INTC", "Premium_M": 568.6, "Call_Pct": 20, "Flow": "Put 80% (하방 지속)"},
+        {"Sector": "Technology", "Ticker": "MU", "Premium_M": 475.9, "Call_Pct": 49, "Flow": "Put 51% (수익 실현 헷지)"},
+        {"Sector": "Technology", "Ticker": "AAPL", "Premium_M": 116.6, "Call_Pct": 50, "Flow": "Put 50% (중립)"},
+        {"Sector": "Technology", "Ticker": "AMZN", "Premium_M": 81.4, "Call_Pct": 84, "Flow": "Call 84% (소프트웨어 강세)"},
+        {"Sector": "Technology", "Ticker": "PLTR", "Premium_M": 80.2, "Call_Pct": 26, "Flow": "Put 74% (차익 매도)"},
+        {"Sector": "Technology", "Ticker": "CRWV", "Premium_M": 76.7, "Call_Pct": 24, "Flow": "Put 76% (차입비용 부담)"},
+        {"Sector": "Technology", "Ticker": "ASML", "Premium_M": 32.8, "Call_Pct": 85, "Flow": "Call 85% (독점 장비 롱)"},
+        {"Sector": "Technology", "Ticker": "MSFT", "Premium_M": 28.5, "Call_Pct": 88, "Flow": "Call 88% (스윙 롱 매집)"},
+        {"Sector": "Consumer Cyclical", "Ticker": "TSLA", "Premium_M": 294.9, "Call_Pct": 42, "Flow": "Put 58% (하방 우세)"},
+        {"Sector": "Energy & Uranium", "Ticker": "CCJ", "Premium_M": 35.2, "Call_Pct": 92, "Flow": "Call 92% (우라늄 슈퍼사이클)"},
+        {"Sector": "Energy & Uranium", "Ticker": "VLO", "Premium_M": 18.5, "Call_Pct": 86, "Flow": "Call 86% (정제마진 호조)"},
+        {"Sector": "Crypto / High-Beta", "Ticker": "IREN", "Premium_M": 51.6, "Call_Pct": 41, "Flow": "Put 59% (단기 변동성)"},
+        {"Sector": "Crypto / High-Beta", "Ticker": "RIOT", "Premium_M": 22.4, "Call_Pct": 100, "Flow": "Call 100% (비트코인 랠리)"},
+        {"Sector": "Utilities & Defensives", "Ticker": "PCG", "Premium_M": 10.1, "Call_Pct": 100, "Flow": "Call 100% (경기방어 매수)"},
+        {"Sector": "Small Caps", "Ticker": "SNDK", "Premium_M": 2.2, "Call_Pct": 100, "Flow": "Call 100% (반등 콜 스윕)"},
+        {"Sector": "Small Caps", "Ticker": "HIMS", "Premium_M": 15.8, "Call_Pct": 12, "Flow": "Put 88% (마진 악화 급락)"}
+    ]
+    df_tree = pd.DataFrame(tree_data)
+
+    fig = px.treemap(
+        df_tree, path=['Sector', 'Ticker'], values='Premium_M', color='Call_Pct',
+        color_continuous_scale=['#f23645', '#363a45', '#00e676'],
+        color_continuous_midpoint=50,
+        hover_data=['Flow'],
+        title="<b>기관 프리미엄 규모 및 Call 비중 (%)</b> (초록색: 콜 우세, 붉은색: 풋 우세)"
+    )
+    fig.update_layout(
+        paper_bgcolor="#0b0e14", plot_bgcolor="#0b0e14", font_color="#d1d4dc",
+        margin=dict(t=40, l=10, r=10, b=10)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📌 AI Market Insights (시장 핵심 4대 테마 원문 및 한글 해석)")
+
+    themes = [
+        ("AI 하드웨어 및 반도체: 인플레이션 이후 대규모 하방 헷지 집중",
+         "Bearish (5/5 Strength) · Established (최초 포착: 2026-10-05)", False,
+         "기술주 옵션 플로우는 일간 및 주간 모두 약 70%가 풋옵션에 쏠려 있습니다. 특히 NVDA 단일 종목에서만 주간 11억 달러 이상의 프리미엄이 하방으로 기울어져 있으며, 오늘 5천만 달러 규모의 Above-Ask 원월물 풋 블록이 추가 체결되었습니다. 이는 기술주 현물 매도세, 예상치를 웃돈 CPI, 연준의 매파적 메시지와 맞물려 헷지 수요가 유지되는 한 AI 하드웨어 밸류에이션에 지속적인 하방 압력을 가하고 있습니다.",
+         "Technology options flow is roughly seventy percent puts on both the day and week, with NVDA alone seeing over $1.1B in weekly premium skewed to downside and a new $50M above ask long dated put block today. That aligns with strong equity side distribution in technology and a hotter than expected CPI plus hawkish Fed messaging, keeping valuations for AI hardware under persistent pressure."),
+
+        ("중소형주: 거시 경제 하방 리스크에 대한 핵심 헷지 수단으로 활용",
+         "Bearish (5/5 Strength) · Established (최초 포착: 2026-11-04)", False,
+         "러셀 2000(IWM) 옵션 플로우는 일간 및 주간 모두 90% 이상이 풋옵션이며, 중소형주가 대형 지수 대비 부진함에 따라 풋 프리미엄이 콜을 압도하고 있습니다. 이러한 집중적인 인덱스 헷지는 뜨거운 CPI와 월러 이사의 추가 긴축 지지 발언에 정확히 부합하며, 중소형주가 고금리 장기화(Higher-for-Longer) 리스크의 가장 확실한 헷지 수단이 되고 있습니다.",
+         "IWM options are over ninety percent puts on both daily and weekly flow, with put premium overwhelming calls as small caps lag broad indices. This concentrated index protection fits the hot CPI and Waller's support for more tightening, making small caps the clean hedge for higher for longer risk."),
+
+        ("경기방어 소비재 및 유틸리티: 금리 공포 속 지속적인 아웃퍼폼",
+         "Bullish (4/5 Strength) · Established (최초 포착: 2026-11-10)", True,
+         "필수소비재와 유틸리티 섹터는 5일간 약 3% 상승한 몇 안 되는 섹터 중 하나이며, 주간 옵션 프리미엄도 풋옵션이 극히 제한된 채 콜옵션이 지배하고 있습니다. 금일 발생한 단기 필수재 헷지 급증은 추세 반전이라기보다는 차익 실현 보호 성격이 강하며, 금리 불확실성 국면에서 경기방어주를 선호하는 시장 체제와 일치합니다.",
+         "Consumer defensive and utilities are among the few sectors up roughly three percent over five days while weekly options premium is call dominated with limited puts. Today's spike in short term staple hedges looks more like profit protection than trend change, consistent with a regime that favors defensives under higher rate uncertainty."),
+
+        ("에너지 및 우라늄: 최근 섹터 조정에도 불구하고 끈질긴 상방 포지셔닝 유지",
+         "Bullish (4/5 Strength) · Established (최초 포착: 2026-11-06)", True,
+         "에너지 옵션은 5일 동안 섹터가 약 6% 하락했음에도 불구하고 일간 및 주간 모두 콜 프리미엄이 풋을 압도하고 있습니다. CCJ, VLO, RIG에 대한 지속적인 상방 콜 블록(오늘 VLO의 신규 Above-Ask 최상위 콜 포함)은 기관 펀드들이 최근의 약세를 활용해 인플레이션 및 지정학적 상방 볼록성(Convexity)을 포트폴리오에 추가하고 있음을 보여줍니다.",
+         "Energy options show call premium heavily outweighing puts on both daily and weekly flow even as the sector is down about six percent over five days. Persistent upside call blocks in CCJ, VLO and RIG suggest funds are using weakness to add inflation and geopolitical convexity.")
+    ]
+
+    for title, sub, is_bull, ko, en in themes:
+        c_cls = "theme-card theme-card-green" if is_bull else "theme-card"
+        col = "#00e676" if is_bull else "#f23645"
+        st.markdown(f"""
+        <div class='{c_cls}'>
+            <div class='theme-title'>{title}</div>
+            <div class='theme-sub' style='color:{col}; font-weight:700;'>{sub}</div>
+            <div class='theme-body'><strong>[한글 심층 분석]</strong> {ko}</div>
+            <div style='font-size:11px; color:#787b86; margin-top:6px; line-height:1.4;'><strong>[Original Analysis]</strong> {en}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ================= TAB 7: TRENDING NEWS =================
+with tab7:
+    st.title("📰 Evening Edge 트레이딩 뉴스 전문 (19선 전체)")
+    st.caption("출처: InsiderFinance Trending News (2026-11-10 발행)")
+
+    news_list = [
+        ("🧲 USA Rare Earth (USAR)", "최초 상업용 NdFeB 자석 판매 및 Serra Verde MREC 선적을 기록하며 300만 달러 매출과 1억 2,600만 달러의 조정 순손실을 발표했습니다.", "Had recorded first commercial NdFeB magnet sales and Serra Verde MREC shipments and reported $3 million revenue and a $126 million adjusted net loss."),
+        ("💾 Micron (MU)", "회계연도 4분기 매출 542억 달러와 약 1,500억 달러 규모의 잔여 이행 의무(RPO)를 발표하여, AI 메모리 수요가 유지될 경우 가치 상승 가설을 뒷받침했습니다.", "Had reported fiscal fourth-quarter revenue of $54.2 billion and approximately $150 billion in remaining performance obligations, underpinning a value-upside thesis if AI memory demand holds."),
+        ("⚙️ D-Wave (QBTS)", "3분기 매출 450만 달러를 기록했으나 판관비 등 운영 비용이 5,590만 달러로 증가하면서 GAAP 순손실이 확대되었습니다. 4분기 2,000만 달러 규모 FAU 시스템 판매 매출 인식 여부에 관심이 쏠립니다.", "Had $4.5 million Q3 revenue but a wider GAAP loss as operating expenses rose to $55.9 million, leaving Q4 recognition of a $20 million FAU system sale in focus."),
+        ("💸 CoreWeave (CRWV)", "3분기 매출 가이던스를 34억 5천만~36억 달러, 이자 비용을 8억 6천만~9억 4천만 달러, 자본지출(Capex)을 115억~135억 달러로 제시하여, 백로그 전환 속도가 높은 차입 비용을 상쇄할 수 있을지 시험대에 올랐습니다.", "Had guided Q3 revenue of $3.45B–$3.60B with interest expense of $860M–$940M and capex of $11.5B–$13.5B, testing whether backlog converts fast enough to offset higher borrowing costs."),
+        ("✈️ Archer Aviation (ACHR)", "3분기 매출 510만 달러, 조정 EBITDA 손실 1억 7,850만 달러를 기록했습니다. 2억 700만 달러 현금 소진 후 보유 현금은 13억 5,360만 달러이며, Midnight 기체가 FAA 시장 조사 특별 감항 인증을 획득했다고 밝혔습니다.", "Had reported Q3 revenue of $5.1 million, an adjusted EBITDA loss of $178.5 million, cash of $1.3536 billion after a $207 million decline, and said Midnight received an FAA Market Survey Special Airworthiness Certificate."),
+        ("🏛️ Fed (연방준비제도)", "12월 추가 금리 인상을 지지하면서 더 큰 폭의 인상 가능성도 배제하지 않아 긴축 확률을 끌어올렸습니다.", "Had signaled support for a December rate hike while leaving a larger move on the table, raising tightening odds."),
+        ("📈 Digital Turbine (APPS)", "2분기 매출 1억 7,870만 달러(전년비 27% 증가)를 기록하고, 2027 회계연도 연간 매출 가이던스를 6억 7천만~6억 9천만 달러로 상향 조정하면서 조정 EBITDA 가이던스(1억 4,500만~1억 5,500만 달러)를 재확인했습니다.", "Had Q2 revenue of $178.7 million, up 27%, and raised fiscal-2027 revenue guidance to $670 million-$690 million while reaffirming adjusted EBITDA guidance."),
+        ("📊 U.S. Macro October CPI (미국 10월 소비자물가지수)", "전월 대비 0.4% 상승하여 시장 전망치를 상회하였으며, 연방준비제도의 추가 금리 인상 기대감을 강화시켰습니다.", "October CPI had risen 0.4% m/m, above forecasts and reinforcing expectations for further Federal Reserve rate increases."),
+        ("💊 Hims & Hers (HIMS)", "3분기 매출 8억 9,040만 달러를 발표했으나 3,300만 달러의 GAAP 순손실을 기록했고, 2026년 연간 조정 EBITDA 가이던스를 2억 5,700만~2억 7,700만 달러로 하향 조정했습니다.", "Had posted Q3 revenue of $890.4 million, recorded a $33.0 million GAAP loss and cut 2026 adjusted EBITDA guidance to $257 million-$277 million."),
+        ("📝 Trump Media (DJT)", "11월 9일 Form 10-Q 및 8-K 보고서를 제출했으나, 공개된 SEC 발췌본에는 투자자들이 매출, 순이익 및 디지털 자산 평가이익을 검증하는 데 필요한 재무제표가 누락되어 있었습니다.", "Had filed Form 10-Q and Form 8-K on Nov. 9, 2026, but accessible SEC excerpts omit financial tables investors need to verify revenue, net income and digital-asset gains."),
+        ("⚖️ Nvidia (NVDA)", "젠슨 황 CEO가 혼외 관계를 인정한 후 이사회 차원의 독립적인 조사가 시작되었습니다. 공시 미비 및 국가 안보 위험 노출을 이유로 연방 증권 집단소송이 제기되었습니다.", "Had an independent board probe opened after CEO Jensen Huang acknowledged an extramarital relationship; a proposed federal securities class action was filed alleging nondisclosure."),
+        ("⚠️ GLP-1 비만 치료제 제약사", "FDA 합동 검토 결과 임상시험에서 GLP-1 투여군 10건 대 대조군 5건의 NAION(허혈성 시신경병증) 추정 사례가 발견됨에 따라, 미국 제품 라벨에 경고 문구를 추가하도록 의무화되었습니다.", "Had been required to add NAION warnings to U.S. labels following an FDA pooled review that found 10 probable trial cases with GLP-1s versus five in controls."),
+        ("🎬 Skydance (SKYD)", "워너 브라더스 디스커버리 인수 종결에 앞서 3분기 실적을 발표하며 스트리밍 사업 계획과 60억 달러 규모의 비용 절감 목표를 공개했습니다.", "Had reported third-quarter results that preceded the Warner Bros. Discovery close, flagged streaming plans and a reported $6 billion cost-savings target."),
+        ("📈 Plug Power (PLUG)", "매출 2억 100만 달러, 역대 최저 수준의 순현금 사용액(2,800만 달러)을 발표하고, 2026년 연간 매출 성장 및 4분기 EBITDAS 흑자 전환 목표를 재확인했습니다.", "Had reported $201 million of revenue, record-low net cash usage of $28 million and reaffirmed 2026 revenue growth and a Q4 positive EBITDAS target."),
+        ("📉 Crude Oil (원유)", "트럼프 대통령이 미국의 이란 추가 공습 가능성이 낮다고 언급함에 따라 지정학적 프리미엄이 완화되며 하락했습니다. 브렌트유는 92.57달러, WTI는 86.85달러에 마감했습니다.", "Had fallen after President Trump said renewed U.S. strikes on Iran were unlikely, easing geopolitical premium; Brent settled at $92.57 and WTI at $86.85."),
+        ("💸 Anthropic (ANT)", "11월 말 IPO를 목표로 하고 있으나, 시장에 돌았던 693억 달러 공모액 수치가 사실이 아닌 것으로 밝혀지며 실제 투자자들의 수요에 대한 불확실성이 남았습니다.", "Had targeted a late-November IPO; a circulated $69.3 billion proceeds figure was later described as inaccurate, leaving investor appetite uncertain."),
+        ("🎬 Skydance - DC Studios", "1,100억 달러 규모의 인수 이후 DC 창작 부문을 통합하기 위해 제러미 래첨(Jeremy Latcham)을 2026년 12월 1일부로 DC 스튜디오 대표 겸 CCO로 임명했습니다.", "Named Jeremy Latcham president and chief creative officer of DC Studios effective Dec. 1, 2026, consolidating DC creative oversight after its $110.0 billion acquisition."),
+        ("🛰️ AST SpaceMobile", "일본 저궤도 다이렉트-투-디바이스(D2D) 통신망 구축을 위해 라쿠텐과 합작법인 '라쿠텐 AST'를 설립한다고 발표했습니다. 일본 정부로부터 약 10억 달러 규모의 지원을 받는 것으로 알려졌으나 3분기 매출은 4,230만 달러로 시장 전망치를 하회했습니다.", "Announced a joint venture with Rakuten to form Rakuten AST for Japan LEO network; project reported government support near $1B while Q3 revenue of $42.3M missed consensus."),
+        ("💸 Lucid Group (LCID)", "3분기 실적이 시장 전망치를 하회했으나, 사우디 국부펀드(PIF)와의 분할 인출 조건부 대출 한도를 17억 5천만 달러 증액하기로 발표하여 가용 유동성을 37억 5천만 달러로 확대하고 자금 조달 기간을 2027년 4분기까지 연장했습니다.", "Missed Q3 estimates and announced a $1.75B increase to PIF loan, lifting pro forma liquidity to $3.75B and extending funding into Q4 2027.")
+    ]
+
+    for title, ko, en in news_list:
+        st.markdown(f"""
+        <div class='news-box'>
+            <div style='font-size:14px; font-weight:700; color:#ffffff; margin-bottom:4px;'>{title}</div>
+            <div style='font-size:13px; color:#e0e0e0; line-height:1.6;'>{ko}</div>
+            <div style='font-size:11px; color:#787b86; margin-top:4px;'>[EN] {en}</div>
+        </div>
+        """, unsafe_allow_html=True)
