@@ -40,7 +40,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 상단 1분 모닝 브리핑 배너
+# ================= 상단 1분 모닝 핵심 브리핑 배너 =================
 st.markdown("""
 <div class='morning-banner'>
     <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
@@ -64,6 +64,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# 7개 풀 탭 구성
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "🔥 Top Ticker 전종목 플로우",
     "🚀 Top 10 문샷(Moonshot) 급등주",
