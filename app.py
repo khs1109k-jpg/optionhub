@@ -94,7 +94,36 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+
+DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (한국시간 11/12 장전)
+
+1️⃣ 시장 총평: "지수·반도체 반등 속 기관은 철저한 하방 보험(Hedge) 유지"
+• 10월 CPI 예상치 상회 및 매파적 연준 기조로 금리 경계감이 여전한 가운데, 반도체·소형주 주가가 단기 반등하자 기관들은 상방 추격 대신 '풋옵션 헷지 연장'을 선택했습니다.
+• SPX에서는 8000 Put($77M, $39.4M, $37.5M 등) 대규모 풋 스플릿/블록이 쏟아졌고, 중소형주(IWM) 역시 5일 연속 극단적 풋 편중이 유지되고 있습니다.
+
+2️⃣ 기관 수급의 핵심 특징 (양극화 장세)
+• [반도체 풋 방어 vs 선별적 콜]
+  - MU($24.3M 800 Put), AMD($6.2M 600 Put) 등 급등한 반도체 주도주에 대형 풋 헷지가 집중되었습니다.
+  - 반면 INTC($31.0M 50 Call 블록, 85C 문샷 스윕), SNDK(9건, $6.8M 콜 스윕 집중)에는 공격적 상방 베팅이 유입되었습니다.
+  - NVDA는 이사회 독립 조사 및 Baird 목표가 하향($500→$200) 여파 속에서도 장기 콜($175C/$150C)과 단기 거래가 공존하며 413K 스윕 볼륨 1위를 기록했습니다.
+• [빅테크·소비재 선별 매수 (META · TSLA · AMZN)]
+  - 커뮤니케이션·경기소비재 섹터 전반은 부진하지만, 기관 자금은 '확실한 주도주'에만 쏠렸습니다.
+  - META($31.0M 750 Call + 다크풀 매집), TSLA($4.2M 410C + $6.1M 340C), AMZN(AWS 매출 +39.3%, 수주잔고 $5,780억 기반 꾸준한 콜 스윕)이 대표적입니다.
+
+3️⃣ 테마·원자재·문샷 특이 동향
+• 금·원자재·인프라: KGC(킨로스 골드, 평소 대비 11.2배 거래량 폭증, 0% Put), BW(6.0배, 0% Put), ACHR(5.3배, 0% Put)에 전량 콜옵션 매집이 포착되었습니다.
+• 크립토·채굴주: IBIT $48 Call($63.4M 대형 스플릿), CIFR $9 Call($870K), IREN(43% OTM), RIOT(31% OTM) 등 고베타 자산 상방 베팅이 지속되었습니다.
+• 단기 과열 경계: LITE는 급등 직후 $12.6M 750 Put(미결제약정 39배) 초단기 골든 스윕이 유입되어 단기 되돌림 주의가 필요합니다.
+
+4️⃣ 오늘의 대응 전략 및 체크포인트
+• [공격적 매수 유효] 다크풀 매집 + 콜 스윕이 일치하는 META, TSLA, AMZN 및 모멘텀 콜 집중 종목(SNDK, KGC, BW)
+• [헷지·리스크 관리 필요] 단기 급등 후 대형 풋 헷지가 들어온 MU, AMD, LITE 및 목표가 하향 이슈가 있는 NVDA
+• [주요 뉴스 촉매] 앤스로픽 IPO 로드쇼($70~$78, 첫날 개인 매수세 $2.5억 예상), 코스트코 주당 $30 특별배당($133억 규모)
+
+🌐 대시보드 바로가기: http://132.226.3.145:8501"""
+
+tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "📝 오늘의 종합평",
     "🔥 Top Ticker 전종목 플로우",
     "🚀 Top 10 문샷(Moonshot) 급등주",
     "📅 5일 누적 기관 수급 & GEX",
@@ -227,6 +256,65 @@ def load_all_flows():
         pass
     return res
 
+# ================= TAB 0: TODAY COMPREHENSIVE REVIEW =================
+with tab0:
+    st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
+    st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
+
+    col_r1, col_r2 = st.columns([4, 1])
+    with col_r2:
+        if st.button("📩 이 종합평 텔레그램으로 바로 보내기", type="primary", use_container_width=True):
+            t_tok, t_cid = load_tg_config()
+            ok, msg = send_telegram_msg(t_tok, t_cid, DAILY_REVIEW_2026_11_11)
+            if ok: st.success(f"✅ {msg}")
+            else: st.error(f"❌ {msg}")
+
+    st.markdown("""
+    <div class='flow-card' style='border-left: 4px solid #3b82f6;'>
+        <h3 style='color:#60a5fa; margin-top:0;'>1️⃣ 시장 총평: "지수·반도체 반등 속 기관은 철저한 하방 보험(Hedge) 유지"</h3>
+        <p style='color:#e2e8f0; font-size:14px; line-height:1.7;'>
+            • 10월 CPI 예상치 상회 및 매파적 연준 기조로 금리 경계감이 여전한 가운데, 반도체·소형주 주가가 단기 반등하자 기관들은 상방 추격 대신 <strong>'풋옵션 헷지 연장'</strong>을 선택했습니다.<br>
+            • <strong>SPX</strong>에서는 8000 Put($77M, $39.4M, $37.5M 등) 대규모 풋 스플릿/블록이 집중되었고, 중소형주(<strong>IWM</strong>) 역시 5일 연속 극단적 풋 편중이 유지되고 있습니다.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("""
+        <div class='flow-card' style='border-left: 4px solid #ef4444;'>
+            <h4 style='color:#f87171; margin-top:0;'>2️⃣ 반도체 풋 방어 & 과열 경계</h4>
+            <ul style='color:#d1d4dc; font-size:13px; line-height:1.7; padding-left:18px;'>
+                <li><strong>MU ($24.3M 800 Put) · AMD ($6.2M 600 Put):</strong> 급등한 반도체 주도주에 대형 풋 헷지가 집중되어 단기 차익실현·방어 심리가 강합니다.</li>
+                <li><strong>NVDA:</strong> 이사회 독립 조사 및 Baird 목표가 하향($500→$200) 여파 속에서도 장기 콜($175C/$150C)과 단기 거래가 공존하며 <strong>413K 스윕 볼륨 1위</strong>를 기록했습니다.</li>
+                <li><strong>LITE ($12.6M 750 Put):</strong> 하루 두 자릿수 급등 직후 미결제약정 39배 규모의 단기 풋 골든 스윕이 유입되어 되돌림 주의가 필요합니다.</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.markdown("""
+        <div class='flow-card' style='border-left: 4px solid #10b981;'>
+            <h4 style='color:#34d399; margin-top:0;'>3️⃣ 주도주 선별 콜 집중 & 모멘텀</h4>
+            <ul style='color:#d1d4dc; font-size:13px; line-height:1.7; padding-left:18px;'>
+                <li><strong>META ($31.0M 750C) · TSLA ($4.2M 410C) · AMZN:</strong> 섹터 전반의 약세 속에서도 기관 자금이 확실한 주도주에만 선별 집중되고 있습니다.</li>
+                <li><strong>INTC ($31.0M 50C) · SNDK (9건, $6.8M 스윕):</strong> 인텔의 주식 대체형 초대형 콜 블록과 샌디스크의 9연속 콜 스윕이 포착되었습니다.</li>
+                <li><strong>KGC (11.2x) · BW (6.0x) · ACHR (5.3x):</strong> 0% Put Flow로 전량 콜옵션 모멘텀 매집이 유입되었습니다.</li>
+                <li><strong>IBIT ($63.4M 48C) · CIFR ($870K):</strong> 크립토·채굴주 장기 상방 베팅도 지속 중입니다.</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class='flow-card' style='border-left: 4px solid #f59e0b;'>
+        <h4 style='color:#fbbf24; margin-top:0;'>4️⃣ 오늘의 대응 전략 및 핵심 뉴스 촉매</h4>
+        <ul style='color:#d1d4dc; font-size:13px; line-height:1.7; padding-left:18px;'>
+            <li><strong>공격적 매수 관심군:</strong> 다크풀 매집과 콜 스윕이 일치하는 <strong>META, TSLA, AMZN</strong> 및 모멘텀 콜 집중 종목(<strong>SNDK, KGC, BW</strong>)</li>
+            <li><strong>리스크 관리 구간:</strong> 단기 급등 후 대형 풋 헷지가 유입된 <strong>MU, AMD, LITE</strong> 및 목표가 하향 이슈가 있는 <strong>NVDA</strong></li>
+            <li><strong>핵심 뉴스 촉매:</strong> 앤스로픽 IPO 로드쇼($70~$78, 첫날 개인 매수세 $2.5억 예상), 코스트코 주당 $30 특별배당($133억 규모)</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
 # ================= TAB 1: TOP TICKER =================
 with tab1:
     st.sidebar.title("⚙️ OptionHub")
@@ -270,6 +358,11 @@ with tab1:
         lines.append("\n🌐 대시보드: http://132.226.3.145:8501")
         ok, msg = send_telegram_msg(tg_token, tg_chat_id, "\n".join(lines))
         if ok: st.sidebar.success(f"✅ {msg}")
+        else: st.sidebar.error(f"❌ 전송 실패: {msg}")
+
+    if st.sidebar.button("📝 오늘 종합평 텔레그램 전송", use_container_width=True):
+        ok, msg = send_telegram_msg(tg_token, tg_chat_id, DAILY_REVIEW_2026_11_11)
+        if ok: st.sidebar.success(f"✅ 종합평 {msg}")
         else: st.sidebar.error(f"❌ 전송 실패: {msg}")
 
     if st.sidebar.button("🚀 오늘의 대형체결·문샷·뉴스 전체 전송", use_container_width=True):
