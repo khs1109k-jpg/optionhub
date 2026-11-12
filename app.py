@@ -333,6 +333,30 @@ if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings
 </div>
 """, unsafe_allow_html=True)
 
+with st.expander("🔬 반도체 기본군 (SOXX · SMH · SOXS · SOXL) 개폐·OI 핵심 정리", expanded=True):
+    st.caption("기준: 11/11 ET 마감 확정분 (전달된 텔레그램 표 요약)")
+    semi_rows = [
+        {"종목": "SOXX ($151.24)", "핵심 체결": "125P 청산(-3,525) + 140P SELL(+2,206) | 160C(+4,665)", "해석": "125P→140P 하방 지지 상향 · 160C 단기 저항"},
+        {"종목": "SMH ($489.50)", "핵심 체결": "380P BTO + 295P STO (각 1만계약) | 385/285P STO | 630P 청산(-4,000)", "해석": "대부분 동시 체결 풋 스프레드·헤지 롤링 (단독 폭락 베팅 아님)"},
+        {"종목": "SOXS ($48.90)", "핵심 체결": "69C(+2,552, 일중 BTO≥672·STO≥448) | 47C(+573) | 42.5P(+562)", "해석": "단기 69C 양방향 혼재 · 47C/42.5P 소폭 유입"},
+        {"종목": "SOXL ($60.95)", "핵심 체결": "60C 청산(-2,253/-2,304) | 60P(+2,403) | 55P 청산(-4,839) | 11/27 100C BTC≥1,299(-2,819)", "해석": "단기 60C 차익+60P 헤지, 위쪽 100C 매도 저항은 BTC로 일부 해제"},
+    ]
+    st.dataframe(pd.DataFrame(semi_rows), use_container_width=True, hide_index=True)
+    photo_dir = os.path.expanduser("~/.optionhub_tg_photos")
+    photo_list = []
+    if os.path.isdir(photo_dir):
+        photo_list = [os.path.join(photo_dir, x) for x in sorted(os.listdir(photo_dir), reverse=True) if x.endswith(".jpg")][:5]
+    if not photo_list:
+        semi_img_p = os.path.expanduser("~/.optionhub_semi_latest.jpg")
+        if os.path.exists(semi_img_p):
+            photo_list = [semi_img_p]
+    if photo_list:
+        st.markdown(f"**🖼️ 텔레그램 전달 표 갤러리 (최근 {len(photo_list)}장)**")
+        cols_img = st.columns(2)
+        for idx_i, p_img in enumerate(photo_list):
+            with cols_img[idx_i % 2]:
+                st.image(p_img, use_container_width=True)
+
 
 DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (한국시간 11/12 장전)
 

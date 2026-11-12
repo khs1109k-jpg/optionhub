@@ -577,6 +577,47 @@ def check_sheet_review(token, chat_id):
         pass
 
 
+
+SEMI_IMG_PATH = os.path.expanduser("~/.optionhub_semi_latest.jpg")
+PHOTO_DIR = os.path.expanduser("~/.optionhub_tg_photos")
+
+def save_forwarded_photo(token, chat_id, msg):
+    from datetime import datetime
+    try:
+        photos = msg.get("photo") or []
+        doc = msg.get("document") or {}
+        file_id = None
+        if photos:
+            file_id = photos[-1].get("file_id")
+        elif doc and str(doc.get("mime_type", "")).startswith("image/"):
+            file_id = doc.get("file_id")
+        if not file_id:
+            return False
+        info = json.loads(urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}", timeout=15).read().decode("utf-8"))
+        fp = info.get("result", {}).get("file_path")
+        if not fp:
+            return False
+        img_bytes = urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{fp}", timeout=20).read()
+        os.makedirs(PHOTO_DIR, exist_ok=True)
+        fname = datetime.now().strftime("tg_%Y%m%d_%H%M%S_%f.jpg")
+        with open(os.path.join(PHOTO_DIR, fname), "wb") as f:
+            f.write(img_bytes)
+        with open(SEMI_IMG_PATH, "wb") as f:
+            f.write(img_bytes)
+        # Keep only latest 5 photos
+        files = sorted([x for x in os.listdir(PHOTO_DIR) if x.endswith(".jpg")])
+        for old_f in files[:-5]:
+            try:
+                os.remove(os.path.join(PHOTO_DIR, old_f))
+            except Exception:
+                pass
+        cnt = min(len(files), 5)
+        send_msg(token, chat_id, f"✅ [OptionHub 이미지 반영 완료] (최근 {cnt}장 보관 중)\n🌐 http://132.226.3.145:8501")
+        return True
+    except Exception as e:
+        send_msg(token, chat_id, f"이미지 저장 오류: {e}")
+        return False
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -603,10 +644,13 @@ def main():
                         handle_command(token, cid, cb_data)
                     continue
                 msg = upd.get("message") or {}
-                txt = msg.get("text", "")
+                txt = msg.get("text", "") or msg.get("caption", "")
                 cid = str(msg.get("chat", {}).get("id", ""))
-                if txt and cid == my_chat_id:
-                    handle_command(token, cid, txt)
+                if cid == my_chat_id:
+                    if msg.get("photo") or (msg.get("document") and str(msg["document"].get("mime_type", "")).startswith("image/")):
+                        save_forwarded_photo(token, cid, msg)
+                    if txt:
+                        handle_command(token, cid, txt)
         except Exception as e:
             print("Loop err:", e)
             time.sleep(5)
