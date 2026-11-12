@@ -264,6 +264,24 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+tide_cache = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), {})
+if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings"):
+    tide_str = tide_cache.get("tide", "-")
+    flows_html = " · ".join([f"<span style='color:{'#34d399' if '콜' in x.get('dir','') else '#f87171'}; font-weight:700;'>{x['tk']} {x['net']}</span>" for x in tide_cache.get("flows", [])[:8]])
+    warn_html = " · ".join([f"<span style='background:rgba(245,158,11,0.18); color:#fbbf24; padding:1px 6px; border-radius:4px; font-size:12px;'>{w['tk']}: {w['tag']}</span>" for w in tide_cache.get("warnings", [])[:6]])
+    dir_note = tide_cache.get("dir_note", "")
+    st.markdown(f"""
+<div style='background:#131722; border:1px solid #2a2e39; border-left:4px solid #38bdf8; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#e2e8f0;'>
+  <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
+    <span><strong style='color:#38bdf8;'>🌊 Market Tide & 순자금 흐름</strong> &nbsp;|&nbsp; {tide_str}</span>
+    <span style='color:#94a3b8; font-size:11px;'>갱신: {tide_cache.get('updated', '-')}</span>
+  </div>
+  {f"<div style='margin-bottom:5px;'><strong>자금 TOP:</strong> {flows_html}</div>" if flows_html else ""}
+  {f"<div style='margin-bottom:4px;'><strong>⚠️ OI·커버드콜 검증:</strong> {warn_html}</div>" if warn_html else ""}
+  {f"<div style='color:#cbd5e1; font-size:12px;'>💡 {dir_note}</div>" if dir_note else ""}
+</div>
+""", unsafe_allow_html=True)
+
 
 DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (한국시간 11/12 장전)
 

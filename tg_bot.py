@@ -11,6 +11,9 @@ import urllib.request
 CFG_PATH = os.path.expanduser("~/.telegram_config.json")
 STATE_PATH = os.path.expanduser("~/.last_tg_review.txt")
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
+LIVE_PATH = os.path.expanduser("~/.optionhub_intraday_live.json")
+EARN_PATH = os.path.expanduser("~/.optionhub_earnings_scan.json")
+TIDE_PATH = os.path.expanduser("~/.optionhub_tide_brief.json")
 APP_PATH = os.path.expanduser("~/app.py")
 SHEET_ID = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
 
@@ -25,8 +28,12 @@ INLINE_MENU = {
             {"text": "📐 Geeks·Menthor Q", "callback_data": "cmd:geeks"},
         ],
         [
+            {"text": "⚡ 장중 Vol>OI", "callback_data": "cmd:live"},
+            {"text": "📅 실발 예상변동폭", "callback_data": "cmd:em"},
+        ],
+        [
             {"text": "🔥 $10M+ 대형체결", "callback_data": "cmd:scan"},
-            {"text": "🚀 Top 10 문샷", "callback_data": "cmd:moon"},
+            {"text": "🎯 조용한 OI 급증", "callback_data": "cmd:oi"}, {"text": "🚀 Top 10 문샷", "callback_data": "cmd:moon"},
         ],
     ]
 }
@@ -46,6 +53,9 @@ def set_bot_commands(token):
         {"command": "chart", "description": "🖼️ 실시간 GEX 차트 받기"},
         {"command": "geeks", "description": "📐 최신 Geeks·Menthor Q 리포트"},
         {"command": "flow", "description": "🔥 종목별 옵션 플로우 (예: /flow TSLA)"},
+        {"command": "oi", "description": "🎯 전일 대비 조용한 OI 급증 TOP 10"},
+        {"command": "vol", "description": "⚡ 장중 실시간 Vol > OI 신규 매집 스캔"},
+        {"command": "em", "description": "📅 실적 발표 D-10 예상 변동폭 · Wall"},
     ]
     try:
         url = f"https://api.telegram.org/bot{token}/setMyCommands"
@@ -204,6 +214,152 @@ def send_ticker_gex_with_chart(token, chat_id, raw_tk):
     send_msg(token, chat_id, format_gex_summary(tk))
 
 
+def format_stealth_oi():
+    if not os.path.exists(OI_PATH):
+        return "저장된 OI 히스토리가 아직 없습니다."
+    hist = json.load(open(OI_PATH, "r", encoding="utf-8"))
+    hits = []
+    for tk, snaps in hist.items():
+        if len(snaps) < 2:
+            continue
+        prev = {(x["만기"], x["구분"], x["행사가"]): x["OI"] for x in snaps[-2].get("상세", [])}
+        for x in snaps[-1].get("상세", []):
+            p_oi = prev.get((x["만기"], x["구분"], x["행사가"]), 0)
+            if p_oi >= 10 and x["OI"] >= 10:
+                diff = x["OI"] - p_oi
+                if abs(diff) >= 300:
+                    hits.append((abs(diff), diff, tk, snaps[-1].get("Spot", 0), x["만기"], x["구분"], x["행사가"], p_oi, x["OI"]))
+    if not hits:
+        return "🕵️ 아직 2일치 이상 누적된 OI 비교 데이터가 부족합니다. 내일 오전 6:30 수집 후부터 자동 포착됩니다!"
+    hits.sort(reverse=True)
+    lines = ["🕵️ [전일 대비 OI 신규 오픈(+) · 대량 청산(-) TOP 12]\n"]
+    for _, diff, tk, sp, exp, cp, k, p0, p1 in hits[:12]:
+        tag = "🟢[신규]" if diff > 0 else "🔴[청산]"
+        lines.append(f"{tag} {tk} (${sp}) {k:g}{cp[0]} ({exp}): {p0:,} → {p1:,} ({diff:+,})")
+    return "\n".join(lines)
+
+
+def format_live_vol_oi():
+    from datetime import datetime
+    data = {}
+    if os.path.exists(LIVE_PATH):
+        try:
+            data = json.load(open(LIVE_PATH, "r", encoding="utf-8"))
+        except Exception:
+            data = {}
+    fresh = False
+    if data.get("updated"):
+        try:
+            dt = datetime.strptime(data["updated"], "%Y-%m-%d %H:%M")
+            fresh = (datetime.now() - dt).total_seconds() <= 600
+        except Exception:
+            pass
+    if not fresh:
+        try:
+            import sys
+            sys.path.insert(0, os.path.expanduser("~"))
+            import intraday_vol_oi as ivo
+            hits, _ = ivo.scan_vol_gt_oi(ivo.get_target_tickers(), check_levels=False)
+            data = {"updated": datetime.now().strftime("%Y-%m-%d %H:%M"), "items": hits[:30]}
+            with open(LIVE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            return f"장중 스캔 오류: {e}"
+    items = data.get("items", [])
+    if not items:
+        upd = data.get('updated', '-')
+        return f"⚡ [장중 Vol > OI 스캔] ({upd})\n현재 조건(Vol > OI & +500계약)에 해당하는 종목이 없습니다."
+    upd = data.get('updated', '')
+    lines = [f"⚡ [장중 실시간 Vol > OI TOP {min(12, len(items))}] ({upd})\n"]
+    for h in items[:12]:
+        prem_s = h.get('prem_str', '')
+        hint_s = h.get('hint', '')
+        lines.append(
+            f"• {h['tk']} (${h['spot']}) {h['k']:g}{h['cp'][0]} ({h['exp']}) | {prem_s}\n"
+            f"  Vol {h['vol']:,} > OI {h['oi']:,} ({h['ratio']}x) → +{h['min_new']:,} | {hint_s}"
+        )
+    return "\n".join(lines)
+
+
+def format_earnings_em():
+    if not os.path.exists(EARN_PATH):
+        return "📅 저장된 실적 발표 스캔 데이터가 없습니다. (`auto_oi.py` 실행 후 자동 생성)"
+    data = json.load(open(EARN_PATH, "r", encoding="utf-8"))
+    items = data.get("items", [])
+    if not items:
+        upd = data.get('updated', '-')
+        return f"📅 [실적 발표 D-10 스캔] ({upd})\n10일 이내 실적 발표 예정 종목이 없습니다."
+    upd = data.get('updated', '')
+    lines = [f"📅 [실적 발표 D-10 예상 변동폭 · Wall] ({upd})\n"]
+    for it in items[:15]:
+        tk_i = it.get('티커', '')
+        sp_i = it.get('현재가($)', '-')
+        ed_i = it.get('실발일', '')
+        dd_i = it.get('D-Day', '')
+        em_i = it.get('예상변동폭(±)', '-')
+        cw_i = it.get('Call Wall', '-')
+        pw_i = it.get('Put Wall', '-')
+        lines.append(
+            f"• {tk_i} (${sp_i}) | {ed_i} ({dd_i})\n"
+            f"  예상변동폭: {em_i} | CW {cw_i} / PW {pw_i}"
+        )
+    return "\n".join(lines)
+
+
+def parse_and_save_tide_brief(text):
+    from datetime import datetime
+    data = {}
+    if os.path.exists(TIDE_PATH):
+        try:
+            data = json.load(open(TIDE_PATH, "r", encoding="utf-8"))
+        except Exception:
+            data = {}
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if data.get("date") != today_str:
+        data = {"date": today_str, "updated": "", "tide": "", "flows": [], "warnings": []}
+    data["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # 1. Market Tide
+    m_cum = re.search(r"누적\s*([+\-]?\+?\$[\d.,]+[MBK]?|\$[+\-][\d.,]+[MBK]?)", text)
+    m_30 = re.search(r"(?:후반)?30분\s*([+\-]?\+?\$[\d.,]+[MBK]?|\$[+\-][\d.,]+[MBK]?)", text)
+    m_tr = re.search(r"추세\s*([A-Za-z_]+)", text)
+    if m_cum or m_30:
+        parts = []
+        if m_cum:
+            parts.append(f"누적 {m_cum.group(1)}")
+        if m_30:
+            parts.append(f"후반30분 {m_30.group(1)}")
+        if m_tr:
+            parts.append(f"추세 {m_tr.group(1)}")
+        data["tide"] = " · ".join(parts)
+
+    # 2. 시장 자금 순포지션
+    flows = []
+    for line in text.splitlines():
+        m_f = re.search(r"^\s*([A-Z]{1,5})\s+[█░]+\s+([+\-]?[\d.,]+[MBK]?)\s*\[(콜\s*순매수|풋\s*순매수)\]", line.strip())
+        if m_f:
+            flows.append({"tk": m_f.group(1), "net": m_f.group(2), "dir": m_f.group(3)})
+    if flows:
+        data["flows"] = flows[:10]
+
+    # 3. 커버드콜 / OI역행 경고 태그 (Conviction Scores)
+    warns = list(data.get("warnings", []))
+    seen_w = {w["tk"] for w in warns}
+    for line in text.splitlines():
+        m_w = re.search(r"^\s*\d+\.\s*([A-Z]{1,5})\s+.*?\[(.*?(?:커버드콜|OI역행|진짜매수).*?)\]", line.strip())
+        if m_w and m_w.group(1) not in seen_w:
+            warns.append({"tk": m_w.group(1), "tag": m_w.group(2)})
+            seen_w.add(m_w.group(1))
+    m_dir_sec = re.search(r"🆕\s*신규 포지션 방향.*?\n\s*이 데이터가 의미하는 것:\s*(.+)", text)
+    if m_dir_sec:
+        data["dir_note"] = m_dir_sec.group(1).strip()
+    data["warnings"] = warns[:15]
+
+    with open(TIDE_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return data
+
+
 def handle_command(token, chat_id, text):
     cmd = text.strip()
     low = cmd.lower()
@@ -217,6 +373,16 @@ def handle_command(token, chat_id, text):
             "🤖 [OptionHub 메뉴] 원하는 기능을 눌러주세요!\n(종목명 예: NVDA, SOXL 입력 시 차트+GEX 즉시 전송)\n🌐 http://132.226.3.145:8501",
             reply_markup=INLINE_MENU,
         )
+
+    elif low.startswith("/oi") or cmd == "cmd:oi":
+        send_msg(token, chat_id, format_stealth_oi())
+
+    elif low.startswith("/vol") or low.startswith("/scan") or cmd == "cmd:live":
+        send_msg(token, chat_id, "⚡ 장중 실시간 Vol > OI 데이터를 조회 중입니다...")
+        send_msg(token, chat_id, format_live_vol_oi())
+
+    elif low.startswith("/em") or cmd == "cmd:em":
+        send_msg(token, chat_id, format_earnings_em())
 
     elif low in ("/종합평", "/summary") or cmd == "cmd:summary":
         send_msg(token, chat_id, get_app_review())
@@ -300,6 +466,17 @@ def handle_command(token, chat_id, text):
         for r in hits[:20]:
             lines.append(f"• [{r[0]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} [{r[13]}]")
         send_msg(token, chat_id, "\n".join(lines))
+
+    elif any(k in text for k in ("시장 브리핑", "프리미엄 흐름", "시장 자금 순포지션", "Conviction Scores")):
+        d = parse_and_save_tide_brief(text)
+        msg = (
+            f"✅ [OptionHub 반영 완료] ({d.get('updated', '')})\n"
+            f"• Market Tide: {d.get('tide') or '-'}\n"
+            f"• 자금 순포지션: {len(d.get('flows', []))}종목\n"
+            f"• OI/커버드콜 경고: {len(d.get('warnings', []))}건\n"
+            f"🌐 http://132.226.3.145:8501"
+        )
+        send_msg(token, chat_id, msg)
 
     elif re.fullmatch(r"[A-Za-z]{1,5}", cmd):
         send_ticker_gex_with_chart(token, chat_id, cmd)
