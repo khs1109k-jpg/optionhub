@@ -311,6 +311,11 @@ if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings
     m_bull = " · ".join([f"<span style='color:#34d399; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bull", [])])
     m_bear = " · ".join([f"<span style='color:#f87171; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bear", [])])
     dp_note = tide_cache.get("darkpool_note", "")
+    tk_items = tide_cache.get("tickers", {})
+    tk_html = " · ".join([
+        f"<span style='background:rgba(56,189,248,0.12); padding:1px 6px; border-radius:4px; font-size:12px;'><strong>{k}</strong>({v.get('spot','')}) {v.get('summary','')}</span>"
+        for k, v in list(tk_items.items())[:8]
+    ])
     st.markdown(f"""
 <div style='background:#131722; border:1px solid #2a2e39; border-left:4px solid #38bdf8; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#e2e8f0;'>
   <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
@@ -323,6 +328,7 @@ if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings
   {f"<div style='margin-bottom:4px;'><strong>🔴 약세 주목:</strong> {m_bear}</div>" if m_bear else ""}
   {f"<div style='margin-bottom:4px; color:#cbd5e1; font-size:12px;'>🌅 <strong>아침 요약:</strong> {m_head}</div>" if m_head else ""}
   {f"<div style='margin-bottom:4px; color:#94a3b8; font-size:12px;'>🌑 <strong>다크풀:</strong> {dp_note}</div>" if dp_note else ""}
+  {f"<div style='margin-bottom:4px;'><strong>📌 개별 종목 요약:</strong> {tk_html}</div>" if tk_html else ""}
   {f"<div style='color:#cbd5e1; font-size:12px;'>💡 {dir_note}</div>" if dir_note else ""}
 </div>
 """, unsafe_allow_html=True)

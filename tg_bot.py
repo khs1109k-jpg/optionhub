@@ -316,7 +316,11 @@ def parse_and_save_tide_brief(text):
             data = {}
     today_str = datetime.now().strftime("%Y-%m-%d")
     if data.get("date") != today_str:
-        data = {"date": today_str, "updated": "", "tide": "", "flows": [], "warnings": []}
+        data = {
+            "date": today_str, "updated": "", "tide": "",
+            "flows": [], "warnings": [],
+            "morning_head": "", "morning_bull": [], "morning_bear": [], "darkpool_note": ""
+        }
     data["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 1. Market Tide
@@ -354,6 +358,65 @@ def parse_and_save_tide_brief(text):
     if m_dir_sec:
         data["dir_note"] = m_dir_sec.group(1).strip()
     data["warnings"] = warns[:15]
+
+    # 4. 아침 종합 브리핑 (반등 주목 / 약세 주목)
+    if "아침 종합 브리핑" in text:
+        if "──" in text:
+            after_sep = text.split("──", 1)[1].lstrip("─\n ")
+            head_block = after_sep.split("🟢", 1)[0].strip()
+            data["morning_head"] = " ".join([x.strip() for x in head_block.splitlines() if x.strip()])[:260]
+        bull_part = ""
+        bear_part = ""
+        if "🟢 반등 주목" in text:
+            tmp = text.split("🟢 반등 주목", 1)[1]
+            if "🔴 약세 주목" in tmp:
+                bull_part, bear_part = tmp.split("🔴 약세 주목", 1)
+            else:
+                bull_part = tmp
+        elif "🔴 약세 주목" in text:
+            bear_part = text.split("🔴 약세 주목", 1)[1]
+
+        def _extract_picks(sec_txt):
+            picks = []
+            for ln in sec_txt.splitlines():
+                m_p = re.match(r"^\s*([A-Z]{1,5})\s*\(([^)]+)\)\s*—\s*(.+)", ln.strip())
+                if m_p:
+                    picks.append({"tk": m_p.group(1), "desc": m_p.group(2)})
+            return picks[:6]
+
+        mb = _extract_picks(bull_part)
+        mr = _extract_picks(bear_part)
+        if mb:
+            data["morning_bull"] = mb
+        if mr:
+            data["morning_bear"] = mr
+
+    # 5. 다크풀 하루 정리
+    if "다크풀 하루 정리" in text:
+        m_dp = re.search(r"정리하면\s*(.+)", text)
+        if m_dp:
+            data["darkpool_note"] = m_dp.group(1).strip()[:280]
+        else:
+            lines_dp = [ln.strip() for ln in text.splitlines() if " — " in ln]
+            if lines_dp:
+                data["darkpool_note"] = " | ".join([x.split(".")[0] for x in lines_dp[:4]])[:280]
+
+    # 6. 개별 종목 브리핑 (예: TSLA  55.0/100  $390.8)
+    m_tk_hdr = re.match(r"^\s*([A-Z]{1,5})\s+([\d.]+/100)\s+(\$[\d.,]+)", text.strip())
+    if m_tk_hdr and "핵심 레벨" in text:
+        tk_name = m_tk_hdr.group(1)
+        tks_dict = data.get("tickers", {})
+        m_dl = re.search(r"🎚️\s*딜러:\s*(.+)", text)
+        m_oi = re.search(r"강세 베팅\s*(\d+%)\s*\|\s*약세 베팅\s*(\d+%)", text)
+        m_sum = re.search(r"💡\s*한 줄 요약:\s*(.+)", text)
+        tks_dict[tk_name] = {
+            "score": m_tk_hdr.group(2),
+            "spot": m_tk_hdr.group(3),
+            "dealer": m_dl.group(1).strip() if m_dl else "",
+            "oi": f"강세 {m_oi.group(1)} / 약세 {m_oi.group(2)}" if m_oi else "",
+            "summary": m_sum.group(1).strip() if m_sum else "",
+        }
+        data["tickers"] = tks_dict
 
     with open(TIDE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -467,13 +530,14 @@ def handle_command(token, chat_id, text):
             lines.append(f"• [{r[0]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} [{r[13]}]")
         send_msg(token, chat_id, "\n".join(lines))
 
-    elif any(k in text for k in ("시장 브리핑", "프리미엄 흐름", "시장 자금 순포지션", "Conviction Scores")):
+    elif any(k in text for k in ("시장 브리핑", "프리미엄 흐름", "시장 자금 순포지션", "Conviction Scores", "아침 종합 브리핑", "다크풀 하루 정리", "핵심 레벨", "스마트머니")):
         d = parse_and_save_tide_brief(text)
         msg = (
             f"✅ [OptionHub 반영 완료] ({d.get('updated', '')})\n"
             f"• Market Tide: {d.get('tide') or '-'}\n"
             f"• 자금 순포지션: {len(d.get('flows', []))}종목\n"
             f"• OI/커버드콜 경고: {len(d.get('warnings', []))}건\n"
+            f"• 개별 종목 브리핑: {len(d.get('tickers', {}))}종목\n"
             f"🌐 http://132.226.3.145:8501"
         )
         send_msg(token, chat_id, msg)
