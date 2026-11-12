@@ -264,7 +264,30 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tide_cache = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), {})
+DEFAULT_TIDE_BRIEF = {
+    "updated": "2026-11-12 06:06 (텔레그램 브리핑)",
+    "tide": "누적 $+482M · 후반30분 $-42M · 추세 bearish_steady",
+    "flows": [
+        {"tk": "MU", "net": "+85.6M", "dir": "콜 순매수"},
+        {"tk": "NVDA", "net": "+37.0M", "dir": "콜 순매수"},
+        {"tk": "TSLA", "net": "+34.3M", "dir": "콜 순매수"},
+        {"tk": "SNDK", "net": "+34.3M", "dir": "콜 순매수"},
+        {"tk": "CRWV", "net": "+29.5M", "dir": "콜 순매수"},
+        {"tk": "SOXL", "net": "+25.3M", "dir": "콜 순매수"},
+        {"tk": "NBIS", "net": "-23.1M", "dir": "풋 순매수"},
+        {"tk": "AAPL", "net": "+22.1M", "dir": "콜 순매수"},
+    ],
+    "warnings": [
+        {"tk": "NVDA", "tag": "커버드콜(콜ask45%)"},
+        {"tk": "AAPL", "tag": "OI역행⚠(풋ask56%)"},
+        {"tk": "INTC", "tag": "신규하방(풋ask99%)"},
+        {"tk": "MSFT", "tag": "진짜매수(콜ask99%)"},
+    ],
+    "dir_note": "겉은 콜 순유입(+$482M)이나 후반 30분 풋 역전(-$42M)·전원 Short Gamma(QQQ $690 / SPY $758 / SOXX $155 방어선)로 하방 가속 리스크 경계",
+}
+tide_cache = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), DEFAULT_TIDE_BRIEF)
+if not (tide_cache.get("tide") or tide_cache.get("flows")):
+    tide_cache = DEFAULT_TIDE_BRIEF
 if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings"):
     tide_str = tide_cache.get("tide", "-")
     flows_html = " · ".join([f"<span style='color:{'#34d399' if '콜' in x.get('dir','') else '#f87171'}; font-weight:700;'>{x['tk']} {x['net']}</span>" for x in tide_cache.get("flows", [])[:8]])
