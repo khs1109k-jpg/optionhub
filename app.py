@@ -42,6 +42,36 @@ def load_multisource_sheet():
 WL_PATH = os.path.expanduser("~/.optionhub_watchlist.json")
 JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
 
+
+OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
+
+def fetch_yahoo_oi(ticker):
+    """yfinance가 설치되어 있으면 실시간 옵션 체인(OI)을 수집하고, 없으면 빈 리스트 반환"""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        exps = t.options
+        if not exps:
+            return [], "만기 데이터를 찾을 수 없습니다."
+        rows = []
+        for exp in exps[:3]:  # 가장 가까운 3개 만기일 수집
+            chain = t.option_chain(exp)
+            for _, r in chain.calls.iterrows():
+                oi = int(r.get("openInterest", 0) or 0)
+                vol = int(r.get("volume", 0) or 0)
+                if oi > 0 or vol > 0:
+                    rows.append({"만기": exp, "구분": "Call", "행사가": float(r["strike"]), "OI": oi, "거래량": vol, "IV(%)": round(float(r.get("impliedVolatility", 0) or 0)*100, 1)})
+            for _, r in chain.puts.iterrows():
+                oi = int(r.get("openInterest", 0) or 0)
+                vol = int(r.get("volume", 0) or 0)
+                if oi > 0 or vol > 0:
+                    rows.append({"만기": exp, "구분": "Put", "행사가": float(r["strike"]), "OI": oi, "거래량": vol, "IV(%)": round(float(r.get("impliedVolatility", 0) or 0)*100, 1)})
+        return rows, "OK"
+    except ImportError:
+        return [], "NO_YFINANCE"
+    except Exception as e:
+        return [], str(e)
+
 def load_json_file(p, default):
     if os.path.exists(p):
         try:
@@ -176,9 +206,10 @@ DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (�
 
 🌐 대시보드 바로가기: http://132.226.3.145:8501"""
 
-tab0, tab1, tab_watch, tab_scan, tab_opex, tab_cal, tab_track, tab_multi, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab0, tab1, tab_oi, tab_watch, tab_scan, tab_opex, tab_cal, tab_track, tab_multi, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📝 오늘의 종합평",
     "🔥 Top Ticker + 차트/P&L",
+    "📊 OI(미결제약정) 수집",
     "⭐ 내 관심종목",
     "🔍 조건별 스캐너",
     "📆 만기 집중도(OPEX)",
@@ -567,6 +598,111 @@ with tab1:
         fig_pnl.add_vline(x=bep, line_dash="dot", line_color="#fbbf24")
         fig_pnl.update_layout(height=210, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10), xaxis_title="만기 주가 ($)", yaxis_title="손익 ($)")
         st.plotly_chart(fig_pnl, use_container_width=True)
+
+# ================= TAB OI: OPEN INTEREST COLLECTOR & TRACKER =================
+with tab_oi:
+    st.title("📊 OI (미결제약정) 실시간 수집 & 누적 변화 추적")
+    st.caption("종목별 행사가별 미결제약정(OI) 스냅샷을 수집·저장하고, 거래량 대비 OI(Vol/OI) 급증 포지션을 포착합니다.")
+
+    oi_c1, oi_c2 = st.columns([2, 1])
+    with oi_c1:
+        oi_tk = st.text_input("수집할 종목 티커 입력 (예: NVDA, SNDK, MU, TSLA)", value=sel_tk).strip().upper()
+    with oi_c2:
+        st.write("")
+        st.write("")
+        collect_btn = st.button("🔄 지금 OI 스냅샷 수집 & 저장", type="primary", use_container_width=True)
+
+    oi_history = load_json_file(OI_PATH, {})
+
+    if collect_btn and oi_tk:
+        with st.spinner(f"{oi_tk} 옵션 체인(OI) 수집 중..."):
+            oi_rows, status = fetch_yahoo_oi(oi_tk)
+        if status == "OK" and oi_rows:
+            from datetime import datetime
+            today_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            if oi_tk not in oi_history:
+                oi_history[oi_tk] = []
+            tot_call_oi = sum(x["OI"] for x in oi_rows if x["구분"] == "Call")
+            tot_put_oi = sum(x["OI"] for x in oi_rows if x["구분"] == "Put")
+            oi_history[oi_tk].append({
+                "수집시각": today_str,
+                "Call_OI": tot_call_oi,
+                "Put_OI": tot_put_oi,
+                "Put_Call_OI_Ratio": round(tot_put_oi / tot_call_oi, 2) if tot_call_oi > 0 else 0,
+                "상세": oi_rows[:120]
+            })
+            save_json_file(OI_PATH, oi_history)
+            st.success(f"✅ {oi_tk} OI 스냅샷 저장 완료! (Call OI: {tot_call_oi:,} / Put OI: {tot_put_oi:,})")
+        elif status == "NO_YFINANCE":
+            st.warning("⚠️ 서버에 `yfinance` 패키지가 아직 설치되어 있지 않습니다. 오라클 터미널에서 `pip install yfinance` 실행 후 다시 눌러주세요!")
+        else:
+            st.error(f"수집 중 오류: {status}")
+
+    # 저장된 스냅샷이 있으면 시각화
+    if oi_tk in oi_history and oi_history[oi_tk]:
+        snaps = oi_history[oi_tk]
+        latest = snaps[-1]
+        prev = snaps[-2] if len(snaps) >= 2 else None
+
+        m1, m2, m3 = st.columns(3)
+        d_call = latest["Call_OI"] - prev["Call_OI"] if prev else 0
+        d_put = latest["Put_OI"] - prev["Put_OI"] if prev else 0
+        m1.metric("최신 Call OI (최근 3만기)", f"{latest['Call_OI']:,}", f"{d_call:+,}" if prev else None)
+        m2.metric("최신 Put OI (최근 3만기)", f"{latest['Put_OI']:,}", f"{d_put:+,}" if prev else None)
+        m3.metric("Put/Call OI 비율", f"{latest['Put_Call_OI_Ratio']}")
+
+        # 행사가별 Call vs Put OI 막대그래프
+        df_det = pd.DataFrame(latest.get("상세", []))
+        if not df_det.empty:
+            exp_list = sorted(df_det["만기"].unique())
+            sel_oi_exp = st.selectbox("만기일별 OI 분포 보기", exp_list)
+            df_e = df_det[df_det["만기"] == sel_oi_exp]
+            fig_oi = px.bar(
+                df_e, x="행사가", y="OI", color="구분", barmode="group",
+                color_discrete_map={"Call": "#00e676", "Put": "#f23645"},
+                title=f"<b>{oi_tk} ({sel_oi_exp}) 행사가별 Call vs Put 미결제약정(OI)</b>"
+            )
+            fig_oi.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
+            st.plotly_chart(fig_oi, use_container_width=True)
+
+            # Vol/OI 급증 (신규 포지션 포착)
+            df_e = df_e.copy()
+            df_e["Vol/OI"] = (df_e["거래량"] / df_e["OI"].replace(0, 1)).round(2)
+            st.subheader("🔥 거래량 > 미결제약정 (Vol/OI 급증 Top 15 — 신규 기관 진입 신호)")
+            st.dataframe(df_e.sort_values("Vol/OI", ascending=False).head(15), use_container_width=True, hide_index=True)
+
+            # CSV 다운로드
+            csv_oi = df_det.to_csv(index=False).encode("utf-8-sig")
+            st.download_button("📥 수집된 OI 데이터 CSV 다운로드", csv_oi, f"{oi_tk}_oi_{latest['수집시각'][:10]}.csv", "text/csv")
+
+        # 누적 스냅샷 추이 테이블
+        if len(snaps) > 1:
+            st.subheader("📅 일자별 OI 누적 변화 기록")
+            df_hist = pd.DataFrame([{"수집시각": s["수집시각"], "Call OI": s["Call_OI"], "Put OI": s["Put_OI"], "P/C OI 비율": s["Put_Call_OI_Ratio"]} for s in snaps[::-1]])
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 저장된 OI 스냅샷이 없습니다. 위 [🔄 지금 OI 스냅샷 수집 & 저장] 버튼을 눌러 첫 데이터를 모아보세요!")
+
+    st.markdown("---")
+    st.subheader("✍️ 수동 OI 메모 추가 (뉴스레터·증권사 HTS 수치 직접 기록)")
+    with st.form("manual_oi_form", clear_on_submit=True):
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        m_tk = mc1.text_input("티커", oi_tk).upper()
+        m_call = mc2.number_input("Call OI 합계", min_value=0, value=10000, step=500)
+        m_put = mc3.number_input("Put OI 합계", min_value=0, value=8000, step=500)
+        m_note = mc4.text_input("메모 (예: LITE 39x OI)", "")
+        if st.form_submit_button("💾 수동 OI 스냅샷 저장"):
+            from datetime import datetime
+            if m_tk not in oi_history: oi_history[m_tk] = []
+            oi_history[m_tk].append({
+                "수집시각": datetime.now().strftime("%Y-%m-%d %H:%M") + (f" ({m_note})" if m_note else ""),
+                "Call_OI": int(m_call),
+                "Put_OI": int(m_put),
+                "Put_Call_OI_Ratio": round(m_put / m_call, 2) if m_call > 0 else 0,
+                "상세": []
+            })
+            save_json_file(OI_PATH, oi_history)
+            st.success(f"✅ {m_tk} 수동 OI 스냅샷 저장 완료!")
 
 # ================= TAB WATCH: PERSONAL WATCHLIST =================
 with tab_watch:
