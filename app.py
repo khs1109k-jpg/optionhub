@@ -284,6 +284,20 @@ DEFAULT_TIDE_BRIEF = {
         {"tk": "MSFT", "tag": "진짜매수(콜ask99%)"},
     ],
     "dir_note": "겉은 콜 순유입(+$482M)이나 후반 30분 풋 역전(-$42M)·전원 Short Gamma(QQQ $690 / SPY $758 / SOXX $155 방어선)로 하방 가속 리스크 경계",
+    "morning_head": "SPY·QQQ·SMH 주간 1σ 상단 초과 소진(추격 여지 제한) · Tide bullish(25) vs 추세 bearish_reversal",
+    "morning_bull": [
+        {"tk": "SMH", "desc": "반도체 ETF [중]"},
+        {"tk": "HOOD", "desc": "온라인 증권 [약]"},
+        {"tk": "IBIT", "desc": "비트코인 ETF [약]"},
+        {"tk": "CE", "desc": "특수화학 [약]"},
+    ],
+    "morning_bear": [
+        {"tk": "MSFT", "desc": "시장 역행★ [중]"},
+        {"tk": "GEV", "desc": "전력장비 [약]"},
+        {"tk": "AMKR", "desc": "반도체 패키징 [약]"},
+        {"tk": "QQQ", "desc": "콜유출·풋유입 [약]"},
+    ],
+    "darkpool_note": "정규장 섞인 MSFT($2.67억)와 거래량 비중 급증 SIX(167.9%)·EXEL(67.0%)·DKNG(34.4%)·XOM(24.0%)·WMT(15.9%)만 관찰 대상",
 }
 tide_cache = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), DEFAULT_TIDE_BRIEF)
 if not (tide_cache.get("tide") or tide_cache.get("flows")):
@@ -293,14 +307,22 @@ if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings
     flows_html = " · ".join([f"<span style='color:{'#34d399' if '콜' in x.get('dir','') else '#f87171'}; font-weight:700;'>{x['tk']} {x['net']}</span>" for x in tide_cache.get("flows", [])[:8]])
     warn_html = " · ".join([f"<span style='background:rgba(245,158,11,0.18); color:#fbbf24; padding:1px 6px; border-radius:4px; font-size:12px;'>{w['tk']}: {w['tag']}</span>" for w in tide_cache.get("warnings", [])[:6]])
     dir_note = tide_cache.get("dir_note", "")
+    m_head = tide_cache.get("morning_head", "")
+    m_bull = " · ".join([f"<span style='color:#34d399; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bull", [])])
+    m_bear = " · ".join([f"<span style='color:#f87171; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bear", [])])
+    dp_note = tide_cache.get("darkpool_note", "")
     st.markdown(f"""
 <div style='background:#131722; border:1px solid #2a2e39; border-left:4px solid #38bdf8; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#e2e8f0;'>
   <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
-    <span><strong style='color:#38bdf8;'>🌊 Market Tide & 순자금 흐름</strong> &nbsp;|&nbsp; {tide_str}</span>
+    <span><strong style='color:#38bdf8;'>🌊 Market Tide & 데일리 브리핑</strong> &nbsp;|&nbsp; {tide_str}</span>
     <span style='color:#94a3b8; font-size:11px;'>갱신: {tide_cache.get('updated', '-')}</span>
   </div>
   {f"<div style='margin-bottom:5px;'><strong>자금 TOP:</strong> {flows_html}</div>" if flows_html else ""}
-  {f"<div style='margin-bottom:4px;'><strong>⚠️ OI·커버드콜 검증:</strong> {warn_html}</div>" if warn_html else ""}
+  {f"<div style='margin-bottom:5px;'><strong>⚠️ OI·커버드콜 검증:</strong> {warn_html}</div>" if warn_html else ""}
+  {f"<div style='margin-bottom:4px;'><strong>🟢 반등 주목:</strong> {m_bull}</div>" if m_bull else ""}
+  {f"<div style='margin-bottom:4px;'><strong>🔴 약세 주목:</strong> {m_bear}</div>" if m_bear else ""}
+  {f"<div style='margin-bottom:4px; color:#cbd5e1; font-size:12px;'>🌅 <strong>아침 요약:</strong> {m_head}</div>" if m_head else ""}
+  {f"<div style='margin-bottom:4px; color:#94a3b8; font-size:12px;'>🌑 <strong>다크풀:</strong> {dp_note}</div>" if dp_note else ""}
   {f"<div style='color:#cbd5e1; font-size:12px;'>💡 {dir_note}</div>" if dir_note else ""}
 </div>
 """, unsafe_allow_html=True)
