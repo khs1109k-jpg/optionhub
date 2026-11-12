@@ -14,14 +14,21 @@ OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
 APP_PATH = os.path.expanduser("~/app.py")
 SHEET_ID = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
 
-MENU_KEYBOARD = {
-    "keyboard": [
-        [{"text": "📝 오늘의 종합평"}, {"text": "📊 주요 GEX 요약"}],
-        [{"text": "🖼️ 차트 지금 받기"}, {"text": "📐 Geeks·Menthor Q"}],
-        [{"text": "🔥 $10M+ 대형체결"}, {"text": "🚀 Top 10 문샷"}],
-    ],
-    "resize_keyboard": True,
-    "is_persistent": True,
+INLINE_MENU = {
+    "inline_keyboard": [
+        [
+            {"text": "📝 오늘의 종합평", "callback_data": "cmd:summary"},
+            {"text": "📊 주요 GEX 요약", "callback_data": "cmd:gex"},
+        ],
+        [
+            {"text": "🖼️ 차트 지금 받기", "callback_data": "cmd:chart"},
+            {"text": "📐 Geeks·Menthor Q", "callback_data": "cmd:geeks"},
+        ],
+        [
+            {"text": "🔥 $10M+ 대형체결", "callback_data": "cmd:scan"},
+            {"text": "🚀 Top 10 문샷", "callback_data": "cmd:moon"},
+        ],
+    ]
 }
 
 
@@ -33,7 +40,7 @@ def load_cfg():
 
 def set_bot_commands(token):
     cmds = [
-        {"command": "menu", "description": "📱 하단 버튼 메뉴 열기"},
+        {"command": "menu", "description": "📱 기능 메뉴 열기"},
         {"command": "summary", "description": "📝 오늘의 종합평"},
         {"command": "gex", "description": "📊 GEX·Zero Gamma 조회 (예: /gex NVDA)"},
         {"command": "chart", "description": "🖼️ 실시간 GEX 차트 받기"},
@@ -49,19 +56,29 @@ def set_bot_commands(token):
         pass
 
 
-def send_msg(token, chat_id, text, with_menu=True):
+def send_msg(token, chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     chunks = [text[i : i + 3800] for i in range(0, len(text), 3800)] or ["(내용 없음)"]
     for idx, chunk in enumerate(chunks):
         body = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
-        if with_menu and idx == len(chunks) - 1:
-            body["reply_markup"] = MENU_KEYBOARD
+        if reply_markup is not None and idx == len(chunks) - 1:
+            body["reply_markup"] = reply_markup
         payload = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             url, data=payload, headers={"Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             resp.read()
+
+
+def answer_callback(token, cb_id):
+    try:
+        url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
+        payload = json.dumps({"callback_query_id": cb_id}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
 
 
 def get_app_flows():
@@ -157,7 +174,7 @@ def format_gex_summary(target_tk=None):
         zg = calc_zero_gamma_from_rows(s.get("상세", []), float(s.get("Spot", 0)))
         zg_s = f" | ZG ${zg:g}" if zg else ""
         lines.append(f"• {tk} (${s.get('Spot', '-')}): GEX {s.get('Net_GEX_M', 0):+.2f}M{zg_s} | P/C {s.get('Put_Call_OI_Ratio', 0)}")
-    lines.append("\n💡 특정 종목 상세 조회: 티커만 입력 (예: NVDA)")
+    lines.append("\n💡 특정 종목 상세+차트: 티커만 입력 (예: NVDA)")
     return "\n".join(lines)
 
 
@@ -186,22 +203,25 @@ def send_ticker_gex_with_chart(token, chat_id, raw_tk):
         pass
     send_msg(token, chat_id, format_gex_summary(tk))
 
+
 def handle_command(token, chat_id, text):
     cmd = text.strip()
     low = cmd.lower()
 
     if low in ("/start", "/help", "/menu", "도움말", "메뉴"):
-        help_txt = (
-            "🤖 [OptionHub 텔레그램 메뉴 활성화 완료]\n\n"
-            "아래 버튼을 누르거나 티커(예: NVDA, TSLA)를 바로 입력해 보세요!\n"
-            "🌐 웹 대시보드: http://132.226.3.145:8501"
+        # 기존 하단 고정 키보드 제거 후 깔끔한 인라인 버튼 메뉴 표시
+        send_msg(token, chat_id, "📱 하단 고정 메뉴를 정리했습니다.", reply_markup={"remove_keyboard": True})
+        send_msg(
+            token,
+            chat_id,
+            "🤖 [OptionHub 메뉴] 원하는 기능을 눌러주세요!\n(종목명 예: NVDA, SOXL 입력 시 차트+GEX 즉시 전송)\n🌐 http://132.226.3.145:8501",
+            reply_markup=INLINE_MENU,
         )
-        send_msg(token, chat_id, help_txt, with_menu=True)
 
-    elif low in ("/종합평", "/summary") or cmd == "📝 오늘의 종합평":
+    elif low in ("/종합평", "/summary") or cmd == "cmd:summary":
         send_msg(token, chat_id, get_app_review())
 
-    elif low in ("/문샷",) or cmd == "🚀 Top 10 문샷":
+    elif low in ("/문샷",) or cmd == "cmd:moon":
         ms = (
             "🚀 [OptionHub] Top 10 Moonshot Flows\n\n"
             "• INTC 85C (2026-11-27) @ $55K / $42K (Unusual · Sweep)\n"
@@ -216,7 +236,7 @@ def handle_command(token, chat_id, text):
         )
         send_msg(token, chat_id, ms)
 
-    elif low.startswith("/gex") or cmd == "📊 주요 GEX 요약":
+    elif low.startswith("/gex") or cmd == "cmd:gex":
         parts = cmd.split()
         tk = parts[1] if (low.startswith("/gex") and len(parts) >= 2) else None
         if tk:
@@ -224,11 +244,11 @@ def handle_command(token, chat_id, text):
         else:
             send_msg(token, chat_id, format_gex_summary(None))
 
-    elif low.startswith("/chart") or cmd == "🖼️ 차트 지금 받기":
+    elif low.startswith("/chart") or cmd == "cmd:chart":
         send_msg(token, chat_id, "🖼️ 실시간 GEX·Zero Gamma 차트를 생성해 보내드리는 중입니다...")
         subprocess.Popen(["/home/ubuntu/venv/bin/python3", "/home/ubuntu/gex_chart_tg.py"])
 
-    elif low.startswith("/geeks") or cmd == "📐 Geeks·Menthor Q":
+    elif low.startswith("/geeks") or cmd == "cmd:geeks":
         try:
             rows = fetch_sheet_rows("AI노트_뉴스시황")
             sub = [r for r in rows if any(k in str(r.get("섹션", "")) for k in ("Geeks", "맨도큐", "Menthor", "SpotGamma"))][-5:][::-1]
@@ -266,7 +286,7 @@ def handle_command(token, chat_id, text):
             lines.append("해당 종목의 기록이 없습니다.")
         send_msg(token, chat_id, "\n".join(lines))
 
-    elif low.startswith("/스캔") or cmd == "🔥 $10M+ 대형체결":
+    elif low.startswith("/스캔") or cmd == "cmd:scan":
         parts = cmd.split()
         min_m = 10.0
         if low.startswith("/스캔") and len(parts) >= 2:
@@ -311,7 +331,7 @@ def main():
     set_bot_commands(token)
     offset = 0
     last_sheet_check = 0
-    print("🤖 OptionHub Telegram Bot & Menu started!")
+    print("🤖 OptionHub Telegram Bot & Inline Menu started!")
     while True:
         try:
             now = time.time()
@@ -323,6 +343,14 @@ def main():
             data = json.loads(urllib.request.urlopen(url, timeout=30).read().decode("utf-8"))
             for upd in data.get("result", []):
                 offset = upd["update_id"] + 1
+                if "callback_query" in upd:
+                    cb = upd["callback_query"]
+                    cid = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+                    cb_data = cb.get("data", "")
+                    answer_callback(token, cb.get("id", ""))
+                    if cid == my_chat_id and cb_data:
+                        handle_command(token, cid, cb_data)
+                    continue
                 msg = upd.get("message") or {}
                 txt = msg.get("text", "")
                 cid = str(msg.get("chat", {}).get("id", ""))
