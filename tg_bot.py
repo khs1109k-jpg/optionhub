@@ -597,7 +597,7 @@ def save_forwarded_photo(token, chat_id, msg):
         fp = info.get("result", {}).get("file_path")
         if not fp:
             return False
-        img_bytes = urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{fp}", timeout=20).read()
+        img_bytes = urllib.request.urlopen(f"https://api.telegram.org/file/bot{token}/{fp}", timeout=20).read()
         os.makedirs(PHOTO_DIR, exist_ok=True)
         fname = datetime.now().strftime("tg_%Y%m%d_%H%M%S_%f.jpg")
         with open(os.path.join(PHOTO_DIR, fname), "wb") as f:
