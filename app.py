@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import os, json, urllib.request, urllib.parse, re
+import os, json, math, urllib.request, urllib.parse, re
 import streamlit.components.v1 as components
 
 
@@ -39,38 +39,124 @@ def load_multisource_sheet():
     return pd.DataFrame(rows_out)
 
 
+@st.cache_data(ttl=60)
+def load_ai_notes_sheet():
+    sheet_id = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
+    try:
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=" + urllib.parse.quote("AI노트_뉴스시황")
+        df = pd.read_csv(url)
+        return df.fillna("")
+    except Exception:
+        return pd.DataFrame()
+
 WL_PATH = os.path.expanduser("~/.optionhub_watchlist.json")
 JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
 
 
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
 
+def calc_zero_gamma(df_gex, spot=0.0):
+    if df_gex.empty or len(df_gex) < 2:
+        return None
+    d = df_gex.sort_values("행사가").reset_index(drop=True)
+    flips = []
+    for i in range(len(d) - 1):
+        g1, g2 = float(d.loc[i, "GEX($M)"]), float(d.loc[i + 1, "GEX($M)"])
+        k1, k2 = float(d.loc[i, "행사가"]), float(d.loc[i + 1, "행사가"])
+        if (g1 < 0 and g2 > 0) or (g1 > 0 and g2 < 0):
+            zg = k1 + (0.0 - g1) * (k2 - k1) / (g2 - g1)
+            flips.append(round(zg, 2))
+    if not flips:
+        return None
+    if spot and spot > 0:
+        return min(flips, key=lambda x: abs(x - spot))
+    return flips[len(flips) // 2]
+
+def bs_greeks(S, K, T, r, sigma, is_call=True):
+    """Black-Scholes Delta & Gamma 계산"""
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+        return 0.0, 0.0
+    try:
+        sqrtT = math.sqrt(T)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT)
+        pdf = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+        cdf = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+        delta = cdf if is_call else (cdf - 1.0)
+        gamma = pdf / (S * sigma * sqrtT)
+        return delta, gamma
+    except Exception:
+        return 0.0, 0.0
+
 def fetch_yahoo_oi(ticker):
-    """yfinance가 설치되어 있으면 실시간 옵션 체인(OI)을 수집하고, 없으면 빈 리스트 반환"""
+    """yfinance로 실시간 옵션 체인(OI) + Spot + Black-Scholes Delta/Gamma/GEX/DEX 수집"""
     try:
         import yfinance as yf
-        t = yf.Ticker(ticker)
+        from datetime import datetime
+        t = yf.Ticker({"SPX":"^SPX","NDX":"^NDX","VIX":"^VIX","RUT":"^RUT"}.get(ticker.upper(), ticker))
         exps = t.options
         if not exps:
-            return [], "만기 데이터를 찾을 수 없습니다."
+            return [], 0.0, "만기 데이터를 찾을 수 없습니다."
+        spot = 0.0
+        try:
+            spot = float(t.fast_info.get("lastPrice", 0) or 0)
+        except Exception:
+            pass
+        if spot <= 0:
+            try:
+                hist = t.history(period="1d")
+                if not hist.empty:
+                    spot = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
+
+        now_dt = datetime.now()
         rows = []
-        for exp in exps[:3]:  # 가장 가까운 3개 만기일 수집
+        for exp in exps[:3]:
+            try:
+                exp_dt = datetime.strptime(exp, "%Y-%m-%d")
+                T = max((exp_dt - now_dt).days / 365.0, 1.0 / 365.0)
+            except Exception:
+                T = 7.0 / 365.0
             chain = t.option_chain(exp)
-            for _, r in chain.calls.iterrows():
-                oi = int(r.get("openInterest", 0) or 0)
-                vol = int(r.get("volume", 0) or 0)
-                if oi > 0 or vol > 0:
-                    rows.append({"만기": exp, "구분": "Call", "행사가": float(r["strike"]), "OI": oi, "거래량": vol, "IV(%)": round(float(r.get("impliedVolatility", 0) or 0)*100, 1)})
-            for _, r in chain.puts.iterrows():
-                oi = int(r.get("openInterest", 0) or 0)
-                vol = int(r.get("volume", 0) or 0)
-                if oi > 0 or vol > 0:
-                    rows.append({"만기": exp, "구분": "Put", "행사가": float(r["strike"]), "OI": oi, "거래량": vol, "IV(%)": round(float(r.get("impliedVolatility", 0) or 0)*100, 1)})
-        return rows, "OK"
+            def safe_int(v):
+                return 0 if pd.isna(v) else int(v)
+            def safe_iv(v):
+                return 0.30 if pd.isna(v) or float(v) <= 0.01 else float(v)
+            for is_c, df_side in [(True, chain.calls), (False, chain.puts)]:
+                for _, r in df_side.iterrows():
+                    oi = safe_int(r.get("openInterest"))
+                    vol = safe_int(r.get("volume"))
+                    if oi > 0 or vol > 0:
+                        K = float(r["strike"])
+                        iv = safe_iv(r.get("impliedVolatility"))
+                        s_ref = spot if spot > 0 else K
+                        delta, gamma = bs_greeks(s_ref, K, T, 0.045, iv, is_call=is_c)
+                        sign = 1.0 if is_c else -1.0
+                        gex_m = (sign * gamma * oi * 100.0 * (s_ref ** 2) * 0.01) / 1_000_000.0
+                        dex_m = (delta * oi * 100.0 * s_ref) / 1_000_000.0
+                        rows.append({
+                            "만기": exp,
+                            "구분": "Call" if is_c else "Put",
+                            "행사가": K,
+                            "OI": oi,
+                            "거래량": vol,
+                            "IV(%)": round(iv * 100, 1),
+                            "Delta": round(delta, 3),
+                            "Gamma": round(gamma, 4),
+                            "GEX($M)": round(gex_m, 3),
+                            "DEX($M)": round(dex_m, 3),
+                        })
+        return rows, round(spot, 2), "OK"
     except ImportError:
-        return [], "NO_YFINANCE"
+        return [], 0.0, "NO_YFINANCE"
     except Exception as e:
-        return [], str(e)
+        return [], 0.0, str(e)
+
+WL_PATH = os.path.expanduser("~/.optionhub_watchlist.json")
+JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
+
+
+OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
 
 def load_json_file(p, default):
     if os.path.exists(p):
@@ -206,7 +292,7 @@ DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (�
 
 🌐 대시보드 바로가기: http://132.226.3.145:8501"""
 
-tab0, tab1, tab_oi, tab_watch, tab_scan, tab_opex, tab_cal, tab_track, tab_multi, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -222,7 +308,93 @@ tab0, tab1, tab_oi, tab_watch, tab_scan, tab_opex, tab_cal, tab_track, tab_multi
     "📊 Options Top 차트",
     "🗺️ 히트맵 & 테마",
     "📰 뉴스 (7선)"
-])
+]
+st.sidebar.title("⚙️ OptionHub")
+st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
+nav_menu = st.sidebar.radio("📌 메뉴 이동", MENU_ITEMS, index=0)
+
+
+all_raw_flows = load_all_flows()
+available_dates = sorted(list(set([r[0] for r in all_raw_flows])), reverse=True)
+date_options = ["전체 날짜 (누적 전체)"] + available_dates
+
+st.sidebar.markdown("### 📅 필터 및 정렬")
+sel_date = st.sidebar.selectbox("📅 조회 날짜 선택", date_options, index=1 if len(date_options)>1 else 0)
+
+if sel_date.startswith("전체 날짜"):
+    date_filtered_flows = all_raw_flows
+else:
+    date_filtered_flows = [r for r in all_raw_flows if r[0] == sel_date]
+    
+available_tickers = sorted(list(set([r[1] for r in date_filtered_flows])))
+if not available_tickers:
+    available_tickers = sorted(list(set([r[1] for r in all_raw_flows])))
+    date_filtered_flows = all_raw_flows
+    
+default_tk_idx = available_tickers.index("SNDK") if "SNDK" in available_tickers else 0
+sel_tk = st.sidebar.selectbox("🎯 종목 선택", available_tickers, index=default_tk_idx)
+sort_dir = st.sidebar.radio("⏱️ 정렬 순서", ["최신 시간순 (Newest)", "과거 시간순 (Oldest)"], index=0)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📩 텔레그램 알림 연동")
+tg_token, tg_chat_id = load_tg_config()
+if tg_token and tg_chat_id:
+    st.sidebar.success(f"🟢 텔레그램 연결됨 (ID: {tg_chat_id})")
+else:
+    st.sidebar.warning("⚠️ 서버에 텔레그램 설정 파일이 없습니다.")
+    tg_token = st.sidebar.text_input("Bot Token", value=tg_token, type="password")
+    tg_chat_id = st.sidebar.text_input("Chat ID", value=tg_chat_id)
+
+if st.sidebar.button("📩 선택 날짜 전체 플로우 전송", use_container_width=True):
+    lines = [f"📊 [OptionHub] {sel_date} 전체 옵션 플로우 ({len(date_filtered_flows)}건)\n"]
+    for r in date_filtered_flows:
+        lines.append(f"• [{r[2]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} ({r[13]})")
+    lines.append("\n🌐 대시보드: http://132.226.3.145:8501")
+    ok, msg = send_telegram_msg(tg_token, tg_chat_id, "\n".join(lines))
+    if ok: st.sidebar.success(f"✅ {msg}")
+    else: st.sidebar.error(f"❌ 전송 실패: {msg}")
+
+if st.sidebar.button("📝 오늘 종합평 텔레그램 전송", use_container_width=True):
+    ok, msg = send_telegram_msg(tg_token, tg_chat_id, DAILY_REVIEW_2026_11_11)
+    if ok: st.sidebar.success(f"✅ 종합평 {msg}")
+    else: st.sidebar.error(f"❌ 전송 실패: {msg}")
+
+if st.sidebar.button("🚀 오늘의 대형체결·문샷·뉴스 전체 전송", use_container_width=True):
+    summary_msg = """⚡ [OptionHub] 2026-11-11 핵심 리포트 전체
+
+[1] 🔥 AI Noteworthy Trades (핵심 대형 체결 6선)
+• META 750 Call (2027-01-15) @ 1.0M (Sweep) - Positioning 5/5
+• MU 800 Put (2027-03-19) @ 4.3M (Sweep) - Hedge 5/5
+• AMD 600 Put (2026-11-20) @ .2M (Golden Sweep) - Hedge 5/5
+• TSLA 410 Call (2026-11-27) @ .2M (Sweep) - Short-Term 5/5
+• INTC 50 Call (2027-02-19) @ 1.0M (Block) - Stock Replacement 4/5
+• LITE 750 Put (2026-11-13) @ 2.6M (Golden Sweep) - Short-Term 4/5
+
+[2] 🚀 Top 10 Moonshot Flows
+• INTC 85C (2026-11-27) @ 5K / 2K
+• PDFS 50C (2026-11-20) @ 2K
+• BW 7C (2026-12-18) @ 4K / 7.5C (2027-01-15) @ 5K
+• CIFR 9C (2027-01-15) @ 70K
+• FRVO 21C (2027-01-15) @ 34K
+• AZTA 55C (2026-11-20) @ 1K
+• LSCC 160C (2027-01-15) @ 33K
+• ACHR 6C (2027-01-15) @ 1K
+
+[3] 📰 Trending News (7선)
+• Anthropic (ANT): 클래스A 8.25억주(0~8) IPO 로드쇼 개시
+• U.S. Macro: 10월 CPI·매파적 연준 여파로 AI 인프라 부채 검증 심화
+• Nvidia (NVDA): 이사회 조사 개시 및 Baird 목표가 하향(00→00)
+• Costco (COST): 주당 0 특별 현금 배당(33억 규모) 및 자사주 매입
+• Amazon (AMZN): AWS 매출 +39.3%(60억), 수주잔고 ,780억
+• Firefly Aerospace: Q3 매출 .107억, 수주잔고 7억 사상 최대
+• Adobe (ADBE): Adobe MAX에서 GenStudio 에이전틱 AI 업그레이드 발표
+
+🌐 대시보드 바로가기: http://132.226.3.145:8501"""
+    ok, msg = send_telegram_msg(tg_token, tg_chat_id, summary_msg)
+    if ok: st.sidebar.success(f"✅ {msg}")
+    else: st.sidebar.error(f"❌ 전송 실패: {msg}")
+
+
 
 DAILY_METRICS_BY_DATE = {
     "2026-11-11": {
@@ -348,7 +520,7 @@ def load_all_flows():
     return res
 
 # ================= TAB 0: TODAY COMPREHENSIVE REVIEW =================
-with tab0:
+if nav_menu == MENU_ITEMS[0]:
     st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
     st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
 
@@ -406,91 +578,39 @@ with tab0:
     </div>
     """, unsafe_allow_html=True)
 
+    st.markdown("---")
+    st.subheader("📊 Barchart 특이옵션 & Menthor Q 그릭스/GEX 리포트 (구글 시트 실시간 연동)")
+    df_bm = load_ai_notes_sheet()
+    if not df_bm.empty and "섹션" in df_bm.columns:
+        df_bm_sub = df_bm[df_bm["섹션"].astype(str).str.contains("바차트|맨도큐|Barchart|Menthor|GeeksOfFinance|SpotGamma|UnusualWhales", case=False, na=False)].iloc[::-1].head(12)
+        if not df_bm_sub.empty:
+            c_mq, c_bc = st.columns(2)
+            with c_mq:
+                st.markdown("#### 📐 Menthor Q 그릭스 · GEX · 옵션 매트릭스")
+                mq_rows = df_bm_sub[df_bm_sub["섹션"].astype(str).str.contains("맨도큐|Menthor|GeeksOfFinance|SpotGamma|UnusualWhales", case=False, na=False)]
+                if not mq_rows.empty:
+                    for _, r in mq_rows.iterrows():
+                        img_u = str(r.get('이미지URL', '')).strip()
+                        if img_u.startswith('http'):
+                            st.image(img_u, use_container_width=True)
+                        st.info(f"**[{r.get('날짜','')}] {r.get('종목','')}**\n\n{r.get('한글 번역/해석','')}")
+                else:
+                    st.caption("아직 저장된 Menthor Q 그릭스 내역이 없습니다.")
+            with c_bc:
+                st.markdown("#### 🚨 Barchart 특이옵션(Unusual Options)")
+                bc_rows = df_bm_sub[df_bm_sub["섹션"].astype(str).str.contains("바차트|Barchart", case=False, na=False)]
+                if not bc_rows.empty:
+                    for _, r in bc_rows.iterrows():
+                        st.warning(f"**[{r.get('날짜','')}] {r.get('종목','')}**\n\n{r.get('한글 번역/해석','')}")
+                else:
+                    st.caption("아직 저장된 Barchart 특이옵션 내역이 없습니다.")
+        else:
+            st.caption("구글 시트 AI노트_뉴스시황 탭에 바차트/맨도큐 데이터가 추가되면 여기에 자동 표시됩니다.")
+    else:
+        st.caption("구글 시트 AI노트_뉴스시황 탭을 불러오는 중입니다.")
+
 # ================= TAB 1: TOP TICKER =================
-with tab1:
-    st.sidebar.title("⚙️ OptionHub")
-    st.sidebar.success("🟢 실시간 데이터 연동 중 (11/11 반영)")
-    
-    all_raw_flows = load_all_flows()
-    available_dates = sorted(list(set([r[0] for r in all_raw_flows])), reverse=True)
-    date_options = ["전체 날짜 (누적 전체)"] + available_dates
-    
-    st.sidebar.markdown("### 📅 필터 및 정렬")
-    sel_date = st.sidebar.selectbox("📅 조회 날짜 선택", date_options, index=1 if len(date_options)>1 else 0)
-    
-    if sel_date.startswith("전체 날짜"):
-        date_filtered_flows = all_raw_flows
-    else:
-        date_filtered_flows = [r for r in all_raw_flows if r[0] == sel_date]
-        
-    available_tickers = sorted(list(set([r[1] for r in date_filtered_flows])))
-    if not available_tickers:
-        available_tickers = sorted(list(set([r[1] for r in all_raw_flows])))
-        date_filtered_flows = all_raw_flows
-        
-    default_tk_idx = available_tickers.index("SNDK") if "SNDK" in available_tickers else 0
-    sel_tk = st.sidebar.selectbox("🎯 종목 선택", available_tickers, index=default_tk_idx)
-    sort_dir = st.sidebar.radio("⏱️ 정렬 순서", ["최신 시간순 (Newest)", "과거 시간순 (Oldest)"], index=0)
-
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📩 텔레그램 알림 연동")
-    tg_token, tg_chat_id = load_tg_config()
-    if tg_token and tg_chat_id:
-        st.sidebar.success(f"🟢 텔레그램 연결됨 (ID: {tg_chat_id})")
-    else:
-        st.sidebar.warning("⚠️ 서버에 텔레그램 설정 파일이 없습니다.")
-        tg_token = st.sidebar.text_input("Bot Token", value=tg_token, type="password")
-        tg_chat_id = st.sidebar.text_input("Chat ID", value=tg_chat_id)
-
-    if st.sidebar.button("📩 선택 날짜 전체 플로우 전송", use_container_width=True):
-        lines = [f"📊 [OptionHub] {sel_date} 전체 옵션 플로우 ({len(date_filtered_flows)}건)\n"]
-        for r in date_filtered_flows:
-            lines.append(f"• [{r[2]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} ({r[13]})")
-        lines.append("\n🌐 대시보드: http://132.226.3.145:8501")
-        ok, msg = send_telegram_msg(tg_token, tg_chat_id, "\n".join(lines))
-        if ok: st.sidebar.success(f"✅ {msg}")
-        else: st.sidebar.error(f"❌ 전송 실패: {msg}")
-
-    if st.sidebar.button("📝 오늘 종합평 텔레그램 전송", use_container_width=True):
-        ok, msg = send_telegram_msg(tg_token, tg_chat_id, DAILY_REVIEW_2026_11_11)
-        if ok: st.sidebar.success(f"✅ 종합평 {msg}")
-        else: st.sidebar.error(f"❌ 전송 실패: {msg}")
-
-    if st.sidebar.button("🚀 오늘의 대형체결·문샷·뉴스 전체 전송", use_container_width=True):
-        summary_msg = """⚡ [OptionHub] 2026-11-11 핵심 리포트 전체
-
-[1] 🔥 AI Noteworthy Trades (핵심 대형 체결 6선)
-• META 750 Call (2027-01-15) @ 1.0M (Sweep) - Positioning 5/5
-• MU 800 Put (2027-03-19) @ 4.3M (Sweep) - Hedge 5/5
-• AMD 600 Put (2026-11-20) @ .2M (Golden Sweep) - Hedge 5/5
-• TSLA 410 Call (2026-11-27) @ .2M (Sweep) - Short-Term 5/5
-• INTC 50 Call (2027-02-19) @ 1.0M (Block) - Stock Replacement 4/5
-• LITE 750 Put (2026-11-13) @ 2.6M (Golden Sweep) - Short-Term 4/5
-
-[2] 🚀 Top 10 Moonshot Flows
-• INTC 85C (2026-11-27) @ 5K / 2K
-• PDFS 50C (2026-11-20) @ 2K
-• BW 7C (2026-12-18) @ 4K / 7.5C (2027-01-15) @ 5K
-• CIFR 9C (2027-01-15) @ 70K
-• FRVO 21C (2027-01-15) @ 34K
-• AZTA 55C (2026-11-20) @ 1K
-• LSCC 160C (2027-01-15) @ 33K
-• ACHR 6C (2027-01-15) @ 1K
-
-[3] 📰 Trending News (7선)
-• Anthropic (ANT): 클래스A 8.25억주(0~8) IPO 로드쇼 개시
-• U.S. Macro: 10월 CPI·매파적 연준 여파로 AI 인프라 부채 검증 심화
-• Nvidia (NVDA): 이사회 조사 개시 및 Baird 목표가 하향(00→00)
-• Costco (COST): 주당 0 특별 현금 배당(33억 규모) 및 자사주 매입
-• Amazon (AMZN): AWS 매출 +39.3%(60억), 수주잔고 ,780억
-• Firefly Aerospace: Q3 매출 .107억, 수주잔고 7억 사상 최대
-• Adobe (ADBE): Adobe MAX에서 GenStudio 에이전틱 AI 업그레이드 발표
-
-🌐 대시보드 바로가기: http://132.226.3.145:8501"""
-        ok, msg = send_telegram_msg(tg_token, tg_chat_id, summary_msg)
-        if ok: st.sidebar.success(f"✅ {msg}")
-        else: st.sidebar.error(f"❌ 전송 실패: {msg}")
-
+if nav_menu == MENU_ITEMS[1]:
     rows = [r for r in date_filtered_flows if r[1] == sel_tk]
     if sort_dir.startswith("과거"):
         rows = rows[::-1]
@@ -600,23 +720,23 @@ with tab1:
         st.plotly_chart(fig_pnl, use_container_width=True)
 
 # ================= TAB OI: OPEN INTEREST COLLECTOR & TRACKER =================
-with tab_oi:
-    st.title("📊 OI (미결제약정) 실시간 수집 & 누적 변화 추적")
-    st.caption("종목별 행사가별 미결제약정(OI) 스냅샷을 수집·저장하고, 거래량 대비 OI(Vol/OI) 급증 포지션을 포착합니다.")
+if nav_menu == MENU_ITEMS[2]:
+    st.title("📊 OI · GEX(감마 익스포저) · Delta/Gamma 실시간 수집기")
+    st.caption("종목별 행사가별 미결제약정(OI)과 Black-Scholes 기반 감마(Gamma)·델타(Delta)·GEX·DEX를 실시간 산출하고 누적 저장합니다.")
 
     oi_c1, oi_c2 = st.columns([2, 1])
     with oi_c1:
-        oi_tk = st.text_input("수집할 종목 티커 입력 (예: NVDA, SNDK, MU, TSLA)", value=sel_tk).strip().upper()
+        oi_tk = st.text_input("수집할 종목 티커 입력 (예: NVDA, TSLA, SNDK, MU)", value=sel_tk).strip().upper()
     with oi_c2:
         st.write("")
         st.write("")
-        collect_btn = st.button("🔄 지금 OI 스냅샷 수집 & 저장", type="primary", use_container_width=True)
+        collect_btn = st.button("🔄 지금 OI·GEX 스냅샷 수집 & 저장", type="primary", use_container_width=True)
 
     oi_history = load_json_file(OI_PATH, {})
 
     if collect_btn and oi_tk:
-        with st.spinner(f"{oi_tk} 옵션 체인(OI) 수집 중..."):
-            oi_rows, status = fetch_yahoo_oi(oi_tk)
+        with st.spinner(f"{oi_tk} 옵션 체인(OI · GEX · Delta · Gamma) 수집 중..."):
+            oi_rows, spot_px, status = fetch_yahoo_oi(oi_tk)
         if status == "OK" and oi_rows:
             from datetime import datetime
             today_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -624,64 +744,129 @@ with tab_oi:
                 oi_history[oi_tk] = []
             tot_call_oi = sum(x["OI"] for x in oi_rows if x["구분"] == "Call")
             tot_put_oi = sum(x["OI"] for x in oi_rows if x["구분"] == "Put")
+            net_gex_m = round(sum(x["GEX($M)"] for x in oi_rows), 2)
+            net_dex_m = round(sum(x["DEX($M)"] for x in oi_rows), 2)
             oi_history[oi_tk].append({
                 "수집시각": today_str,
+                "Spot": spot_px,
                 "Call_OI": tot_call_oi,
                 "Put_OI": tot_put_oi,
                 "Put_Call_OI_Ratio": round(tot_put_oi / tot_call_oi, 2) if tot_call_oi > 0 else 0,
-                "상세": oi_rows[:120]
+                "Net_GEX_M": net_gex_m,
+                "Net_DEX_M": net_dex_m,
+                "상세": oi_rows
             })
             save_json_file(OI_PATH, oi_history)
-            st.success(f"✅ {oi_tk} OI 스냅샷 저장 완료! (Call OI: {tot_call_oi:,} / Put OI: {tot_put_oi:,})")
+            st.success(f"✅ {oi_tk} (현재가 ${spot_px}) OI·GEX 스냅샷 저장 완료! (Net GEX: {net_gex_m:+.2f}M / Net DEX: {net_dex_m:+.2f}M)")
         elif status == "NO_YFINANCE":
-            st.warning("⚠️ 서버에 `yfinance` 패키지가 아직 설치되어 있지 않습니다. 오라클 터미널에서 `pip install yfinance` 실행 후 다시 눌러주세요!")
+            st.warning("⚠️ 서버에 `yfinance` 패키지가 아직 설치되어 있지 않습니다.")
         else:
             st.error(f"수집 중 오류: {status}")
 
-    # 저장된 스냅샷이 있으면 시각화
     if oi_tk in oi_history and oi_history[oi_tk]:
         snaps = oi_history[oi_tk]
         latest = snaps[-1]
         prev = snaps[-2] if len(snaps) >= 2 else None
 
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4, m5 = st.columns(5)
         d_call = latest["Call_OI"] - prev["Call_OI"] if prev else 0
         d_put = latest["Put_OI"] - prev["Put_OI"] if prev else 0
-        m1.metric("최신 Call OI (최근 3만기)", f"{latest['Call_OI']:,}", f"{d_call:+,}" if prev else None)
-        m2.metric("최신 Put OI (최근 3만기)", f"{latest['Put_OI']:,}", f"{d_put:+,}" if prev else None)
-        m3.metric("Put/Call OI 비율", f"{latest['Put_Call_OI_Ratio']}")
+        net_gex_val = latest.get("Net_GEX_M", 0.0)
+        net_dex_val = latest.get("Net_DEX_M", 0.0)
+        spot_val = latest.get("Spot", 0.0)
+        m1.metric("현재가 (Spot)", f"${spot_val:,.2f}" if spot_val else "-")
+        m2.metric("Call OI (3만기)", f"{latest['Call_OI']:,}", f"{d_call:+,}" if prev else None)
+        m3.metric("Put OI (3만기)", f"{latest['Put_OI']:,}", f"{d_put:+,}" if prev else None)
+        m4.metric("Net GEX ($M)", f"{net_gex_val:+.2f}M", "양(+)감마 안정" if net_gex_val >= 0 else "음(-)감마 변동성")
+        m5.metric("Net DEX ($M)", f"{net_dex_val:+.2f}M")
 
-        # 행사가별 Call vs Put OI 막대그래프
         df_det = pd.DataFrame(latest.get("상세", []))
         if not df_det.empty:
-            exp_list = sorted(df_det["만기"].unique())
-            sel_oi_exp = st.selectbox("만기일별 OI 분포 보기", exp_list)
-            df_e = df_det[df_det["만기"] == sel_oi_exp]
-            fig_oi = px.bar(
-                df_e, x="행사가", y="OI", color="구분", barmode="group",
-                color_discrete_map={"Call": "#00e676", "Put": "#f23645"},
-                title=f"<b>{oi_tk} ({sel_oi_exp}) 행사가별 Call vs Put 미결제약정(OI)</b>"
+            exp_list = ["전체 3만기 합산"] + sorted(df_det["만기"].unique())
+            sel_oi_exp = st.selectbox("만기일별 OI · GEX · 델타 분포 보기", exp_list)
+            df_e = df_det if sel_oi_exp == "전체 3만기 합산" else df_det[df_det["만기"] == sel_oi_exp]
+
+            # GEX 차트 (행사가별 Net GEX)
+            if "GEX($M)" in df_e.columns:
+                gex_by_k = df_e.groupby("행사가")["GEX($M)"].sum().reset_index()
+                call_wall = gex_by_k.loc[gex_by_k["GEX($M)"].idxmax(), "행사가"] if not gex_by_k.empty else 0
+                put_wall = gex_by_k.loc[gex_by_k["GEX($M)"].idxmin(), "행사가"] if not gex_by_k.empty else 0
+                zero_g = calc_zero_gamma(gex_by_k, spot_val)
+                zg_txt = f"**${zero_g:g}**" if zero_g else "없음(단일 부호)"
+                st.info(f"🧱 **핵심 감마 레벨** — Zero Gamma(감마 플립): {zg_txt} | Call Wall(저항): **${call_wall:g}** | Put Wall(지지): **${put_wall:g}**")
+
+                gex_by_k["색상"] = gex_by_k["GEX($M)"].apply(lambda x: "Positive (+GEX)" if x >= 0 else "Negative (-GEX)")
+                fig_gex = px.bar(
+                    gex_by_k, x="행사가", y="GEX($M)", color="색상",
+                    color_discrete_map={"Positive (+GEX)": "#00e676", "Negative (-GEX)": "#f23645"},
+                    title=f"<b>{oi_tk} ({sel_oi_exp}) 행사가별 Net GEX (감마 익스포저, $M)</b>"
+                )
+                if spot_val and spot_val > 0:
+                    fig_gex.add_vline(x=spot_val, line_dash="dash", line_color="#fbbf24", annotation_text=f"Spot ${spot_val}")
+                if zero_g:
+                    fig_gex.add_vline(x=zero_g, line_dash="dot", line_color="#38bdf8", annotation_text=f"Zero Gamma ${zero_g:g}")
+                fig_gex.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
+                st.plotly_chart(fig_gex, use_container_width=True)
+
+            # Call vs Put OI 막대그래프 + DEX 차트 나란히 배치
+            ch1, ch2 = st.columns(2)
+            with ch1:
+                oi_grp = df_e.groupby(["행사가", "구분"])["OI"].sum().reset_index()
+                fig_oi = px.bar(
+                    oi_grp, x="행사가", y="OI", color="구분", barmode="group",
+                    color_discrete_map={"Call": "#00e676", "Put": "#f23645"},
+                    title=f"<b>{oi_tk} 행사가별 Call vs Put OI</b>"
+                )
+                fig_oi.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
+                st.plotly_chart(fig_oi, use_container_width=True)
+
+            with ch2:
+                if "DEX($M)" in df_e.columns:
+                    dex_by_k = df_e.groupby("행사가")["DEX($M)"].sum().reset_index()
+                    dex_by_k["방향"] = dex_by_k["DEX($M)"].apply(lambda x: "Call DEX (+)" if x >= 0 else "Put DEX (-)")
+                    fig_dex = px.bar(
+                        dex_by_k, x="행사가", y="DEX($M)", color="방향",
+                        color_discrete_map={"Call DEX (+)": "#3b82f6", "Put DEX (-)": "#f97316"},
+                        title=f"<b>{oi_tk} 행사가별 Delta Exposure (DEX, $M)</b>"
+                    )
+                    fig_dex.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
+                    st.plotly_chart(fig_dex, use_container_width=True)
+
+            # Vol/OI 급증 & Greeks 전체 테이블 (OI > 0 필터로 0 도배 방지)
+            df_vo = df_e[df_e["OI"] > 0].copy()
+            if df_vo.empty:
+                df_vo = df_e.copy()
+            df_vo["Vol/OI"] = (df_vo["거래량"] / df_vo["OI"].replace(0, 1)).round(2)
+            st.subheader("🔥 거래량 > 미결제약정 (Vol/OI 급증 & Delta · Gamma · GEX 상세)")
+            st.dataframe(
+                df_vo.sort_values(["Vol/OI", "거래량"], ascending=False).head(25),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
+                    "Gamma": st.column_config.NumberColumn("Gamma", format="%.4f"),
+                    "GEX($M)": st.column_config.NumberColumn("GEX($M)", format="%.3f"),
+                    "DEX($M)": st.column_config.NumberColumn("DEX($M)", format="%.3f"),
+                }
             )
-            fig_oi.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
-            st.plotly_chart(fig_oi, use_container_width=True)
 
-            # Vol/OI 급증 (신규 포지션 포착)
-            df_e = df_e.copy()
-            df_e["Vol/OI"] = (df_e["거래량"] / df_e["OI"].replace(0, 1)).round(2)
-            st.subheader("🔥 거래량 > 미결제약정 (Vol/OI 급증 Top 15 — 신규 기관 진입 신호)")
-            st.dataframe(df_e.sort_values("Vol/OI", ascending=False).head(15), use_container_width=True, hide_index=True)
-
-            # CSV 다운로드
             csv_oi = df_det.to_csv(index=False).encode("utf-8-sig")
-            st.download_button("📥 수집된 OI 데이터 CSV 다운로드", csv_oi, f"{oi_tk}_oi_{latest['수집시각'][:10]}.csv", "text/csv")
+            st.download_button("📥 수집된 OI·GEX·Greeks 데이터 CSV 다운로드", csv_oi, f"{oi_tk}_oi_gex_{latest['수집시각'][:10]}.csv", "text/csv")
 
-        # 누적 스냅샷 추이 테이블
         if len(snaps) > 1:
-            st.subheader("📅 일자별 OI 누적 변화 기록")
-            df_hist = pd.DataFrame([{"수집시각": s["수집시각"], "Call OI": s["Call_OI"], "Put OI": s["Put_OI"], "P/C OI 비율": s["Put_Call_OI_Ratio"]} for s in snaps[::-1]])
+            st.subheader("📅 일자별 OI · Net GEX 누적 변화 기록")
+            df_hist = pd.DataFrame([{
+                "수집시각": s["수집시각"],
+                "Spot($)": s.get("Spot", "-"),
+                "Call OI": s["Call_OI"],
+                "Put OI": s["Put_OI"],
+                "P/C 비율": s["Put_Call_OI_Ratio"],
+                "Net GEX($M)": s.get("Net_GEX_M", "-"),
+                "Net DEX($M)": s.get("Net_DEX_M", "-")
+            } for s in snaps[::-1]])
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
     else:
-        st.info("아직 저장된 OI 스냅샷이 없습니다. 위 [🔄 지금 OI 스냅샷 수집 & 저장] 버튼을 눌러 첫 데이터를 모아보세요!")
+        st.info("아직 저장된 스냅샷이 없습니다. 위 [🔄 지금 OI·GEX 스냅샷 수집 & 저장] 버튼을 눌러 첫 데이터를 모아보세요!")
 
     st.markdown("---")
     st.subheader("✍️ 수동 OI 메모 추가 (뉴스레터·증권사 HTS 수치 직접 기록)")
@@ -705,7 +890,7 @@ with tab_oi:
             st.success(f"✅ {m_tk} 수동 OI 스냅샷 저장 완료!")
 
 # ================= TAB WATCH: PERSONAL WATCHLIST =================
-with tab_watch:
+if nav_menu == MENU_ITEMS[3]:
     st.title("⭐ 내 관심종목 (Watchlist) 전용 모아보기")
     st.caption("보유 중이거나 주시하는 종목만 골라 수급과 뉴스를 한눈에 확인하고 텔레그램으로 바로 받아보세요.")
 
@@ -743,7 +928,7 @@ with tab_watch:
         st.info(f"선택하신 날짜({sel_date})에는 등록된 관심종목 체결이 없습니다.")
 
 # ================= TAB OPEX: EXPIRATION CONCENTRATION =================
-with tab_opex:
+if nav_menu == MENU_ITEMS[5]:
     st.title("📆 옵션 만기일별 물량 집중도 (OPEX 캘린더)")
     st.caption(f"선택된 날짜({sel_date}) 기준 어느 만기일에 콜/풋 자금이 가장 많이 몰려 있는지 확인합니다.")
 
@@ -788,7 +973,7 @@ with tab_opex:
         st.info("표시할 만기 데이터가 없습니다.")
 
 # ================= TAB CAL: MACRO & EARNINGS CALENDAR =================
-with tab_cal:
+if nav_menu == MENU_ITEMS[6]:
     st.title("🗓️ 주요 거시경제(FOMC·CPI) & 실적·IPO 촉매 캘린더")
     st.caption("TradingView 실시간 경제 지표 캘린더와 InsiderFinance 주요 이벤트 일정을 함께 확인하세요.")
 
@@ -835,7 +1020,7 @@ with tab_cal:
             """, unsafe_allow_html=True)
 
 # ================= TAB TRACK: PERFORMANCE & JOURNAL =================
-with tab_track:
+if nav_menu == MENU_ITEMS[7]:
     st.title("📈 포착 종목 사후 추적 & 내 매매 복기 트래커")
     st.caption("이전 일자(11/10) AI 포착 종목들의 익일(11/11) 후속 흐름 추적 및 개인 매매 일지 기록")
 
@@ -877,7 +1062,7 @@ with tab_track:
         st.info("아직 기록된 매매 일지가 없습니다. 위 폼에서 첫 거래를 기록해 보세요!")
 
 # ================= TAB SCAN: SMART SCANNER =================
-with tab_scan:
+if nav_menu == MENU_ITEMS[4]:
     st.title("🔍 전종목 조건별 스마트 스캐너")
     st.caption(f"현재 선택된 날짜({sel_date})의 전체 거래 중 원하는 조건만 3초 만에 필터링합니다.")
 
@@ -924,7 +1109,7 @@ with tab_scan:
         st.info("조건에 일치하는 옵션 체결 내역이 없습니다.")
 
 # ================= TAB MULTI: MULTI-SOURCE CONSENSUS =================
-with tab_multi:
+if nav_menu == MENU_ITEMS[8]:
     st.title("🔗 멀티 소스 교차 검증 (구글 시트 실시간 통합)")
     st.caption("InsiderFinance · Menthor Q · Unusual Options · Sweep · Momentum 등 구글 시트에 누적된 전체 소스를 교차 분석합니다.")
 
@@ -950,7 +1135,7 @@ with tab_multi:
         st.warning("구글 시트 멀티 소스 데이터를 불러오는 중입니다.")
 
 # ================= TAB 2: TOP 10 MOONSHOT FLOWS =================
-with tab2:
+if nav_menu == MENU_ITEMS[9]:
     st.title("🚀 Top 10 Moonshot & Momentum 급등주 포착")
     st.caption("출처: InsiderFinance Top 10 Moonshot Flows & Momentum Options Activity (2026-11-11)")
 
@@ -1007,7 +1192,7 @@ with tab2:
         st.info("💡 **트레이딩 팁:** KGC(킨로스 골드, 11.2배)와 BW(6.0배), ACHR(5.3배) 모두 0% Put Flow로 전량 콜옵션 매집이 포착되었습니다.")
 
 # ================= TAB 3: 5-DAY FLOW & GEX SUPPORT/RESISTANCE =================
-with tab3:
+if nav_menu == MENU_ITEMS[10]:
     st.title("📅 5일 누적 기관 수급 추세 & 핵심 지지·저항선 (GEX)")
     st.caption("출처: InsiderFinance Equities 5-Day Flow & Gamma Exposure Analysis (2026-11-11)")
 
@@ -1090,7 +1275,7 @@ with tab3:
         """, unsafe_allow_html=True)
 
 # ================= TAB 4: AI OPTIONS PLAYS & NOTEWORTHY =================
-with tab4:
+if nav_menu == MENU_ITEMS[11]:
     st.title("⚡ AI Options Plays & Noteworthy Trades")
     st.caption("출처: InsiderFinance AI Options Plays BETA & AI Noteworthy Trades (2026-11-11)")
 
@@ -1188,7 +1373,7 @@ with tab4:
         """, unsafe_allow_html=True)
 
 # ================= TAB 5: OPTIONS TOP TICKERS CHARTS =================
-with tab5:
+if nav_menu == MENU_ITEMS[12]:
     st.title("📊 Options Top Tickers 차트 및 데이터 해석")
     st.caption("출처: InsiderFinance Evening Edge Options Top Tickers (2026-11-11)")
     
@@ -1255,7 +1440,7 @@ with tab5:
         """, unsafe_allow_html=True)
 
 # ================= TAB 6: TREEMAP & THEMES =================
-with tab6:
+if nav_menu == MENU_ITEMS[13]:
     st.title("🗺️ 섹터별 기관 수급 히트맵 & 핵심 테마 분석")
     st.caption("출처: InsiderFinance AI Market Insights BETA (2026-11-11)")
 
@@ -1327,7 +1512,7 @@ with tab6:
         """, unsafe_allow_html=True)
 
 # ================= TAB 7: TRENDING NEWS =================
-with tab7:
+if nav_menu == MENU_ITEMS[14]:
     st.title("📰 Evening Edge 트레이딩 뉴스 전문 (7선 전체)")
     st.caption("출처: InsiderFinance Trending News (2026-11-11 발행)")
 

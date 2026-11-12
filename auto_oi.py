@@ -18,6 +18,21 @@ APP_PATH = os.path.expanduser("~/app.py")
 SHEET_ID = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
 
 
+def calc_zero_gamma(oi_rows, spot=0.0):
+    df = pd.DataFrame(oi_rows)
+    if df.empty or "행사가" not in df.columns or "GEX($M)" not in df.columns:
+        return None
+    d = df.groupby("행사가", as_index=False)["GEX($M)"].sum().sort_values("행사가").reset_index(drop=True)
+    flips = []
+    for i in range(len(d) - 1):
+        g1, g2 = float(d.loc[i, "GEX($M)"]), float(d.loc[i + 1, "GEX($M)"])
+        k1, k2 = float(d.loc[i, "행사가"]), float(d.loc[i + 1, "행사가"])
+        if (g1 < 0 and g2 > 0) or (g1 > 0 and g2 < 0):
+            flips.append(round(k1 + (0.0 - g1) * (k2 - k1) / (g2 - g1), 2))
+    if not flips:
+        return None
+    return min(flips, key=lambda x: abs(x - spot)) if spot > 0 else flips[len(flips) // 2]
+
 def bs_greeks(S, K, T, r, sigma, is_call=True):
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
         return 0.0, 0.0
@@ -135,7 +150,9 @@ def main():
             history = {}
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    summary_lines = [f"📊 [OptionHub 자동 OI·GEX 수집 완료] ({now_str})\n"]
+    summary_lines = []
+    flip_alerts = []
+    pc_spikes = []
     ok_cnt = 0
 
     for tk in tickers:
@@ -151,6 +168,18 @@ def main():
 
             if tk not in history:
                 history[tk] = []
+            prev_snap = history[tk][-1] if history[tk] else None
+            zg = calc_zero_gamma(oi_rows, spot_px)
+            pc_ratio = round(tot_p / tot_c, 2) if tot_c > 0 else 0
+            if prev_snap:
+                prev_gex = float(prev_snap.get("Net_GEX_M", 0))
+                if (prev_gex >= 0 and net_gex < 0):
+                    flip_alerts.append(f"🔻 {tk} (${spot_px}): 양(+)→음(-) 감마 플립! ({prev_gex:+.2f}M → {net_gex:+.2f}M)")
+                elif (prev_gex < 0 and net_gex >= 0):
+                    flip_alerts.append(f"🔺 {tk} (${spot_px}): 음(-)→양(+) 감마 플립! ({prev_gex:+.2f}M → {net_gex:+.2f}M)")
+                prev_pc = float(prev_snap.get("Put_Call_OI_Ratio", 0))
+                if prev_pc > 0 and pc_ratio > 0:
+                    pc_spikes.append((pc_ratio - prev_pc, tk, prev_pc, pc_ratio, spot_px))
             history[tk].append({
                 "수집시각": now_str,
                 "Spot": spot_px,
@@ -177,7 +206,18 @@ def main():
     if os.path.exists(CFG_PATH) and ok_cnt > 0:
         try:
             cfg = json.load(open(CFG_PATH, encoding="utf-8"))
-            msg = "\n".join(summary_lines[:25]) + f"\n\n✅ 총 {ok_cnt}개 종목 저장 완료!\n🌐 http://132.226.3.145:8501"
+            header = [f"📊 [OptionHub 자동 OI·GEX 수집 완료] ({now_str})", ""]
+            if flip_alerts:
+                header.append("🚨 [감마 플립(부호 반전) 경보]")
+                header.extend(flip_alerts[:8])
+                header.append("")
+            pc_top = sorted([x for x in pc_spikes if abs(x[0]) >= 0.1], reverse=True)[:5]
+            if pc_top:
+                header.append("⚡ [전일 대비 P/C 비율 급변 TOP 5]")
+                for d_pc, tk_p, p0, p1, sp_p in pc_top:
+                    header.append(f"• {tk_p} (${sp_p}): P/C {p0:.2f} → {p1:.2f} ({d_pc:+.2f})")
+                header.append("")
+            msg = "\n".join(header + summary_lines[:20]) + f"\n\n✅ 총 {ok_cnt}개 종목 저장 완료!\n🌐 http://132.226.3.145:8501"
             for i in range(0, len(msg), 3800):
                 p = json.dumps({"chat_id": cfg["chat_id"], "text": msg[i:i+3800], "disable_web_page_preview": True}).encode("utf-8")
                 req = urllib.request.Request(f"https://api.telegram.org/bot{cfg['token']}/sendMessage", data=p, headers={"Content-Type": "application/json"})
