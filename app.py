@@ -2,7 +2,41 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import os, json, urllib.request
+import os, json, urllib.request, urllib.parse, re
+import streamlit.components.v1 as components
+
+
+def parse_prem_usd(p_str):
+    s = str(p_str).replace("$", "").replace(",", "").strip().upper()
+    try:
+        if s.endswith("M"): return float(s[:-1]) * 1_000_000
+        if s.endswith("K"): return float(s[:-1]) * 1_000
+        return float(s)
+    except Exception:
+        return 0.0
+
+@st.cache_data(ttl=60)
+def load_multisource_sheet():
+    sheet_id = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
+    rows_out = []
+    for sh in ["전체", "ES"]:
+        try:
+            url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=" + urllib.parse.quote(sh)
+            df = pd.read_csv(url)
+            for _, r in df.iterrows():
+                sec = str(r.get("Section (섹션)", sh)).strip()
+                tk = str(r.get("Ticker (티커)", "")).strip().upper()
+                if not tk or tk == "NAN": continue
+                tm = str(r.get("Time (시각)", "")).strip()
+                stk = str(r.get("Strike Price (행사가)", "")).strip()
+                cp = str(r.get("Option Type (구분)", "")).strip()
+                exp = str(r.get("Expiration Date (만기일)", "")).strip()
+                pr = str(r.get("Premium (프리미엄)", "")).strip()
+                ch = str(r.get("Characteristics (주문유형/특징)", "")).strip()
+                rows_out.append({"섹션/소스": sec, "티커": tk, "시각": tm, "구분": cp, "행사가": stk, "만기일": exp, "프리미엄": pr, "특징": ch})
+        except Exception:
+            pass
+    return pd.DataFrame(rows_out)
 
 def load_tg_config():
     cfg_path = os.path.expanduser('~/.telegram_config.json')
@@ -122,15 +156,17 @@ DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (�
 
 🌐 대시보드 바로가기: http://132.226.3.145:8501"""
 
-tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab0, tab1, tab_scan, tab_multi, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📝 오늘의 종합평",
-    "🔥 Top Ticker 전종목 플로우",
-    "🚀 Top 10 문샷(Moonshot) 급등주",
-    "📅 5일 누적 기관 수급 & GEX",
-    "⚡ AI Options Plays & Noteworthy",
-    "📊 Options Top Tickers 차트",
-    "🗺️ 기관 수급 히트맵 & 테마 분석",
-    "📰 트레이딩 뉴스 전문 (7선)"
+    "🔥 Top Ticker + 차트/손익계산",
+    "🔍 조건별 스마트 스캐너",
+    "🔗 멀티 소스 교차 검증",
+    "🚀 Top 10 문샷 급등주",
+    "📅 5일 누적 수급 & GEX",
+    "⚡ AI Plays & Noteworthy",
+    "📊 Options Top 차트",
+    "🗺️ 히트맵 & 테마 분석",
+    "📰 트레이딩 뉴스 (7선)"
 ])
 
 DAILY_METRICS_BY_DATE = {
@@ -438,6 +474,148 @@ with tab1:
     tb = "".join([f"<tr><td><strong>{d[0]}</strong></td><td>{d[2]}</td><td class='{'badge-call' if d[3]=='Call' else 'badge-put'}'>{d[3]}</td><td>{d[4]}</td><td>{d[5]}</td><td>{d[6]}</td><td><strong>{d[7]}</strong></td><td>{d[8]}</td><td>{d[9]}</td><td>{d[10]}</td><td>{d[11]}</td><td>{d[12]}</td><td>{d[13]}</td><td class='kpi-green'><strong>{d[14]}</strong></td><td><span class='heat-bar'>{d[15]}</span></td></tr>" for d in rows])
     st.markdown(f"<table class='flow-table'><thead><tr><th>DATE</th><th>TIME</th><th>C/P</th><th>SIDE</th><th>EXPIRY</th><th>SPOT</th><th>STRIKE</th><th>OTM</th><th>PRICE</th><th>SIZE</th><th>OI</th><th>IV</th><th>TYPE</th><th>PREMIUM</th><th>HEAT</th></tr></thead><tbody>{tb}</tbody></table>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+    st.markdown("---")
+    st.subheader(f"📈 {sel_tk} 실시간 TradingView 차트 & 옵션 손익(P&L) 시뮬레이터")
+    col_tv, col_pnl = st.columns([3, 2])
+    with col_tv:
+        tv_html = f"""
+        <div class="tradingview-widget-container" style="height:460px;width:100%;">
+          <div id="tv_chart" style="height:460px;width:100%;"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+          <script type="text/javascript">
+          new TradingView.widget({{
+            "autosize": true,
+            "symbol": "{sel_tk}",
+            "interval": "D",
+            "timezone": "Asia/Seoul",
+            "theme": "dark",
+            "style": "1",
+            "locale": "kr",
+            "toolbar_bg": "#0b0e14",
+            "enable_publishing": false,
+            "allow_symbol_change": true,
+            "container_id": "tv_chart"
+          }});
+          </script>
+        </div>
+        """
+        components.html(tv_html, height=470)
+
+    with col_pnl:
+        st.markdown("#### 🧮 옵션 만기 손익 시뮬레이터")
+        def_strike = 100.0
+        try:
+            def_strike = float(str(stk_d).replace("$", "").replace(",", ""))
+        except Exception:
+            def_strike = 100.0
+        sim_cp = st.radio("옵션 유형", ["Call (상승)", "Put (하락)"], horizontal=True, index=0 if (n_t==0 or rows[0][3]=="Call") else 1)
+        sim_stk = st.number_input("행사가 ($)", min_value=0.5, value=def_strike, step=1.0)
+        sim_prem = st.number_input("주당 프리미엄 ($)", min_value=0.05, value=5.0, step=0.5)
+        sim_qty = st.number_input("계약 수 (1계약=100주)", min_value=1, value=1, step=1)
+        sim_target = st.number_input("만기 시 예상 주가 ($)", min_value=0.5, value=round(def_strike * (1.1 if "Call" in sim_cp else 0.9), 2), step=1.0)
+
+        cost = sim_prem * 100 * sim_qty
+        if "Call" in sim_cp:
+            bep = sim_stk + sim_prem
+            intrinsic = max(0.0, sim_target - sim_stk)
+        else:
+            bep = sim_stk - sim_prem
+            intrinsic = max(0.0, sim_stk - sim_target)
+        pnl = (intrinsic * 100 * sim_qty) - cost
+        roi = (pnl / cost * 100) if cost > 0 else 0.0
+
+        st.markdown(f"""
+        <div class='flow-card' style='padding:12px; margin-top:8px;'>
+            <div style='font-size:13px; color:#94a3b8;'>총 투자금: <strong style='color:white;'>${cost:,.0f}</strong> | 손익분기점(BEP): <strong style='color:#fbbf24;'>${bep:,.2f}</strong></div>
+            <div style='font-size:18px; font-weight:800; margin-top:6px; color:{"#00e676" if pnl>=0 else "#f23645"};'>
+                예상 순손익: ${pnl:+,.0f} ({roi:+.1f}%)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        prices = [sim_stk * (0.7 + 0.03 * i) for i in range(21)]
+        pnls = [((max(0.0, p - sim_stk) if "Call" in sim_cp else max(0.0, sim_stk - p)) * 100 * sim_qty) - cost for p in prices]
+        fig_pnl = go.Figure()
+        fig_pnl.add_trace(go.Scatter(x=prices, y=pnls, mode='lines', line=dict(color='#00e676' if pnl>=0 else '#f23645', width=3), name='만기 손익'))
+        fig_pnl.add_hline(y=0, line_dash="dash", line_color="#64748b")
+        fig_pnl.add_vline(x=bep, line_dash="dot", line_color="#fbbf24")
+        fig_pnl.update_layout(height=210, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10), xaxis_title="만기 주가 ($)", yaxis_title="손익 ($)")
+        st.plotly_chart(fig_pnl, use_container_width=True)
+
+# ================= TAB SCAN: SMART SCANNER =================
+with tab_scan:
+    st.title("🔍 전종목 조건별 스마트 스캐너")
+    st.caption(f"현재 선택된 날짜({sel_date})의 전체 거래 중 원하는 조건만 3초 만에 필터링합니다.")
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    with sc1:
+        f_cp = st.selectbox("콜/풋 구분", ["전체", "Call만 보기", "Put만 보기"])
+    with sc2:
+        f_typ = st.selectbox("주문 유형", ["전체", "SWEEP", "GOLDEN SWEEP", "BLOCK", "SPLIT"])
+    with sc3:
+        f_min_p = st.selectbox("최소 프리미엄", ["전체", "$100K 이상", "$500K 이상", "$1M 이상", "$10M 이상", "$30M 이상"])
+    with sc4:
+        f_kw = st.text_input("티커 검색 (예: NVDA, SNDK)", "").strip().upper()
+
+    min_map = {"전체": 0, "$100K 이상": 100_000, "$500K 이상": 500_000, "$1M 이상": 1_000_000, "$10M 이상": 10_000_000, "$30M 이상": 30_000_000}
+    min_val = min_map[f_min_p]
+
+    scanned = []
+    for r in date_filtered_flows:
+        if f_cp == "Call만 보기" and r[3] != "Call": continue
+        if f_cp == "Put만 보기" and r[3] != "Put": continue
+        if f_typ != "전체" and f_typ not in r[13].upper(): continue
+        if parse_prem_usd(r[14]) < min_val: continue
+        if f_kw and f_kw not in r[1]: continue
+        scanned.append(r)
+
+    sc_tot = len(scanned)
+    sc_calls = sum(1 for r in scanned if r[3] == "Call")
+    sc_puts = sc_tot - sc_calls
+    st.markdown(f"**검색 결과: 총 {sc_tot}건** (Call {sc_calls}건 / Put {sc_puts}건)")
+
+    if sc_tot > 0:
+        if st.button("📩 검색 결과 텔레그램으로 보내기"):
+            t_tok, t_cid = load_tg_config()
+            lines = [f"🔍 [OptionHub 스캐너] {sel_date} ({f_cp}, {f_typ}, {f_min_p}) - {sc_tot}건\n"]
+            for r in scanned:
+                lines.append(f"• {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} [{r[13]}]")
+            ok, msg = send_telegram_msg(t_tok, t_cid, "\n".join(lines))
+            if ok: st.success(f"✅ {msg}")
+            else: st.error(f"❌ {msg}")
+
+        tb_sc = "".join([f"<tr><td><strong>{d[0]}</strong></td><td><strong>{d[1]}</strong></td><td>{d[2]}</td><td class='{'badge-call' if d[3]=='Call' else 'badge-put'}'>{d[3]}</td><td>{d[5]}</td><td><strong>{d[7]}</strong></td><td>{d[13]}</td><td class='kpi-green'><strong>{d[14]}</strong></td></tr>" for d in scanned])
+        st.markdown(f"<table class='flow-table'><thead><tr><th>DATE</th><th>TICKER</th><th>TIME</th><th>C/P</th><th>EXPIRY</th><th>STRIKE</th><th>TYPE</th><th>PREMIUM</th></tr></thead><tbody>{tb_sc}</tbody></table>", unsafe_allow_html=True)
+    else:
+        st.info("조건에 일치하는 옵션 체결 내역이 없습니다.")
+
+# ================= TAB MULTI: MULTI-SOURCE CONSENSUS =================
+with tab_multi:
+    st.title("🔗 멀티 소스 교차 검증 (구글 시트 실시간 통합)")
+    st.caption("InsiderFinance · Menthor Q · Unusual Options · Sweep · Momentum 등 구글 시트에 누적된 전체 소스를 교차 분석합니다.")
+
+    df_ms = load_multisource_sheet()
+    if not df_ms.empty:
+        col_ms1, col_ms2 = st.columns(2)
+        with col_ms1:
+            st.subheader("📡 소스/섹션별 누적 데이터 건수")
+            sec_counts = df_ms["섹션/소스"].value_counts().reset_index()
+            sec_counts.columns = ["섹션/소스", "건수"]
+            st.dataframe(sec_counts, use_container_width=True, hide_index=True)
+        with col_ms2:
+            st.subheader("🎯 다중 소스 교차 포착 TOP 종목")
+            tk_sec = df_ms.groupby("티커").agg(총체결건수=("섹션/소스", "count"), 포착섹션=("섹션/소스", lambda x: ", ".join(sorted(set(x))))).reset_index().sort_values("총체결건수", ascending=False).head(15)
+            st.dataframe(tk_sec, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("📋 전체 멀티 소스 원장 검색")
+        ms_kw = st.text_input("멀티 소스 내 티커 또는 키워드 검색 (예: MU, ES, Menthor)", "").strip().upper()
+        df_show = df_ms[df_ms.apply(lambda r: ms_kw in str(r).upper(), axis=1)] if ms_kw else df_ms.head(100)
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+    else:
+        st.warning("구글 시트 멀티 소스 데이터를 불러오는 중입니다.")
 
 # ================= TAB 2: TOP 10 MOONSHOT FLOWS =================
 with tab2:
