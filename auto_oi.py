@@ -12,6 +12,7 @@ import pandas as pd
 import yfinance as yf
 
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
+EARN_PATH = os.path.expanduser("~/.optionhub_earnings_scan.json")
 WL_PATH = os.path.expanduser("~/.optionhub_watchlist.json")
 CFG_PATH = os.path.expanduser("~/.telegram_config.json")
 APP_PATH = os.path.expanduser("~/app.py")
@@ -140,6 +141,42 @@ def fetch_oi_gex(ticker):
     return rows, round(spot, 2)
 
 
+def scan_earnings_info(tk, spot_px, oi_rows):
+    import yfinance as yf
+    try:
+        t_obj = yf.Ticker(tk)
+        cal = t_obj.calendar
+        if not isinstance(cal, dict) or not cal.get("Earnings Date"):
+            return None
+        ed_raw = cal["Earnings Date"][0]
+        ed_dt = datetime.strptime(str(ed_raw)[:10], "%Y-%m-%d").date()
+        d_day = (ed_dt - datetime.now().date()).days
+        if d_day < -1 or d_day > 10:
+            return None
+        exps_q = t_obj.options
+        em_pct, cw_q, pw_q = "-", "-", "-"
+        if exps_q and spot_px > 0:
+            ch = t_obj.option_chain(exps_q[0])
+            calls_q, puts_q = ch.calls, ch.puts
+            if not calls_q.empty and not puts_q.empty:
+                cw_q = float(calls_q.loc[calls_q["openInterest"].fillna(0).idxmax(), "strike"])
+                pw_q = float(puts_q.loc[puts_q["openInterest"].fillna(0).idxmax(), "strike"])
+                atm_c = calls_q.iloc[(calls_q["strike"] - spot_px).abs().argsort()[:1]]["lastPrice"].values[0]
+                atm_p = puts_q.iloc[(puts_q["strike"] - spot_px).abs().argsort()[:1]]["lastPrice"].values[0]
+                if not pd.isna(atm_c) and not pd.isna(atm_p):
+                    em_pct = f"±{round((float(atm_c) + float(atm_p)) / spot_px * 100, 1)}%"
+        return {
+            "티커": tk,
+            "현재가($)": spot_px,
+            "실적 발표일": str(ed_dt),
+            "D-Day": f"D-{d_day}" if d_day > 0 else ("D-Day" if d_day == 0 else f"D+{abs(d_day)}"),
+            "예상 변동폭": em_pct,
+            "Call Wall($)": cw_q,
+            "Put Wall($)": pw_q,
+        }
+    except Exception:
+        return None
+
 def main():
     tickers = collect_active_tickers()
     history = {}
@@ -153,6 +190,7 @@ def main():
     summary_lines = []
     flip_alerts = []
     pc_spikes = []
+    earn_list = []
     ok_cnt = 0
 
     for tk in tickers:
@@ -193,6 +231,9 @@ def main():
             # 최근 14일치만 유지해 파일 크기 최적화
             history[tk] = history[tk][-14:]
             ok_cnt += 1
+            e_info = scan_earnings_info(tk, spot_px, oi_rows)
+            if e_info:
+                earn_list.append(e_info)
             if tot_c + tot_p >= 5000:
                 summary_lines.append(f"• {tk} (${spot_px}): Call {tot_c:,} / Put {tot_p:,} | Net GEX {net_gex:+.2f}M")
             time.sleep(0.5)
@@ -201,12 +242,19 @@ def main():
 
     with open(OI_PATH, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False)
+    with open(EARN_PATH, "w", encoding="utf-8") as f:
+        json.dump({"updated": now_str, "items": earn_list}, f, ensure_ascii=False, indent=2)
     print(f"Collected {ok_cnt}/{len(tickers)} tickers.")
 
     if os.path.exists(CFG_PATH) and ok_cnt > 0:
         try:
             cfg = json.load(open(CFG_PATH, encoding="utf-8"))
             header = [f"📊 [OptionHub 자동 OI·GEX 수집 완료] ({now_str})", ""]
+            if earn_list:
+                header.append("📅 [실발 임박 종목 (D-10 이내) · 예상 변동폭 · Wall]")
+                for ei in earn_list[:8]:
+                    header.append(f"• {ei['티커']} ({ei['D-Day']}, {ei['실적 발표일']}): ${ei['현재가($)']} | 변동폭 {ei['예상 변동폭']} | CW ${ei['Call Wall($)']} / PW ${ei['Put Wall($)']}")
+                header.append("")
             if flip_alerts:
                 header.append("🚨 [감마 플립(부호 반전) 경보]")
                 header.extend(flip_alerts[:8])

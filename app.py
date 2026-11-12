@@ -756,7 +756,15 @@ if nav_menu == MENU_ITEMS[2]:
         st.info("아직 2일치 이상 누적된 OI 비교 데이터가 부족합니다. 내일 오전 6:30 `auto_oi.py` 수집 후부터 전일 대비 OI 순증이 자동 표시됩니다!")
 
     st.markdown("---")
-    st.subheader("📅 실적 발표일 + 예상 변동폭(Expected Move) & Call/Put Wall 스캔")
+    st.subheader("📅 실적 발표 임박(D-10 이내) 자동 스캔 결과")
+    earn_cache = load_json_file(os.path.expanduser("~/.optionhub_earnings_scan.json"), {})
+    if earn_cache.get("items"):
+        st.caption(f"자동 수집 기준 시각: {earn_cache.get('updated', '-')}")
+        st.dataframe(pd.DataFrame(earn_cache["items"]), use_container_width=True, hide_index=True)
+    else:
+        st.caption("매일 오전 6:30 자동 스캔 시 실발 10일 이내 종목이 여기에 자동 표시됩니다.")
+
+    st.subheader("🔍 원하는 종목 수동 실시간 스캔")
     default_scan_tks = ", ".join(sorted(list(oi_hist_s.keys()))[:12]) if oi_hist_s else "NVDA, TSLA, MU, AMD, OKTA, WMT, LUNR, INTC"
     scan_in = st.text_input("스캔할 종목 티커 (쉼표 구분)", value=default_scan_tks).strip().upper()
     if st.button("🔍 실발일 · 예상 변동폭 · Wall 실시간 스캔", type="primary"):
