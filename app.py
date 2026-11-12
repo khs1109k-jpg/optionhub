@@ -2,6 +2,36 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import os, json, urllib.request
+
+def load_tg_config():
+    cfg_path = os.path.expanduser('~/.telegram_config.json')
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                c = json.load(f)
+                return c.get('token', ''), c.get('chat_id', '')
+        except Exception:
+            pass
+    return os.environ.get('TG_BOT_TOKEN', ''), os.environ.get('TG_CHAT_ID', '')
+
+def send_telegram_msg(token, chat_id, text):
+    if not token or not chat_id:
+        return False, '토큰 또는 채팅 ID가 설정되지 않았습니다.'
+    url = f'https://api.telegram.org/bot{token}/sendMessage'
+    # 4000자 단위로 자동 분할 전송 (내용 누락 없이 전체 발송)
+    chunks = [text[i:i+3800] for i in range(0, len(text), 3800)]
+    for chunk in chunks:
+        payload = json.dumps({'chat_id': chat_id, 'text': chunk, 'disable_web_page_preview': True}).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status != 200:
+                    return False, f'HTTP {resp.status}'
+        except Exception as e:
+            return False, str(e)
+    return True, f'전송 완료 ({len(chunks)}건 메시지)'
+
 
 st.set_page_config(page_title="OptionHub - InsiderFinance All-in-One", page_icon="📈", layout="wide")
 
@@ -222,6 +252,60 @@ with tab1:
     default_tk_idx = available_tickers.index("SNDK") if "SNDK" in available_tickers else 0
     sel_tk = st.sidebar.selectbox("🎯 종목 선택", available_tickers, index=default_tk_idx)
     sort_dir = st.sidebar.radio("⏱️ 정렬 순서", ["최신 시간순 (Newest)", "과거 시간순 (Oldest)"], index=0)
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📩 텔레그램 알림 연동")
+    tg_token, tg_chat_id = load_tg_config()
+    if tg_token and tg_chat_id:
+        st.sidebar.success(f"🟢 텔레그램 연결됨 (ID: {tg_chat_id})")
+    else:
+        st.sidebar.warning("⚠️ 서버에 텔레그램 설정 파일이 없습니다.")
+        tg_token = st.sidebar.text_input("Bot Token", value=tg_token, type="password")
+        tg_chat_id = st.sidebar.text_input("Chat ID", value=tg_chat_id)
+
+    if st.sidebar.button("📩 선택 날짜 전체 플로우 전송", use_container_width=True):
+        lines = [f"📊 [OptionHub] {sel_date} 전체 옵션 플로우 ({len(date_filtered_flows)}건)\n"]
+        for r in date_filtered_flows:
+            lines.append(f"• [{r[2]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} ({r[13]})")
+        lines.append("\n🌐 대시보드: http://132.226.3.145:8501")
+        ok, msg = send_telegram_msg(tg_token, tg_chat_id, "\n".join(lines))
+        if ok: st.sidebar.success(f"✅ {msg}")
+        else: st.sidebar.error(f"❌ 전송 실패: {msg}")
+
+    if st.sidebar.button("🚀 오늘의 대형체결·문샷·뉴스 전체 전송", use_container_width=True):
+        summary_msg = """⚡ [OptionHub] 2026-11-11 핵심 리포트 전체
+
+[1] 🔥 AI Noteworthy Trades (핵심 대형 체결 6선)
+• META 750 Call (2027-01-15) @ 1.0M (Sweep) - Positioning 5/5
+• MU 800 Put (2027-03-19) @ 4.3M (Sweep) - Hedge 5/5
+• AMD 600 Put (2026-11-20) @ .2M (Golden Sweep) - Hedge 5/5
+• TSLA 410 Call (2026-11-27) @ .2M (Sweep) - Short-Term 5/5
+• INTC 50 Call (2027-02-19) @ 1.0M (Block) - Stock Replacement 4/5
+• LITE 750 Put (2026-11-13) @ 2.6M (Golden Sweep) - Short-Term 4/5
+
+[2] 🚀 Top 10 Moonshot Flows
+• INTC 85C (2026-11-27) @ 5K / 2K
+• PDFS 50C (2026-11-20) @ 2K
+• BW 7C (2026-12-18) @ 4K / 7.5C (2027-01-15) @ 5K
+• CIFR 9C (2027-01-15) @ 70K
+• FRVO 21C (2027-01-15) @ 34K
+• AZTA 55C (2026-11-20) @ 1K
+• LSCC 160C (2027-01-15) @ 33K
+• ACHR 6C (2027-01-15) @ 1K
+
+[3] 📰 Trending News (7선)
+• Anthropic (ANT): 클래스A 8.25억주(0~8) IPO 로드쇼 개시
+• U.S. Macro: 10월 CPI·매파적 연준 여파로 AI 인프라 부채 검증 심화
+• Nvidia (NVDA): 이사회 조사 개시 및 Baird 목표가 하향(00→00)
+• Costco (COST): 주당 0 특별 현금 배당(33억 규모) 및 자사주 매입
+• Amazon (AMZN): AWS 매출 +39.3%(60억), 수주잔고 ,780억
+• Firefly Aerospace: Q3 매출 .107억, 수주잔고 7억 사상 최대
+• Adobe (ADBE): Adobe MAX에서 GenStudio 에이전틱 AI 업그레이드 발표
+
+🌐 대시보드 바로가기: http://132.226.3.145:8501"""
+        ok, msg = send_telegram_msg(tg_token, tg_chat_id, summary_msg)
+        if ok: st.sidebar.success(f"✅ {msg}")
+        else: st.sidebar.error(f"❌ 전송 실패: {msg}")
 
     rows = [r for r in date_filtered_flows if r[1] == sel_tk]
     if sort_dir.startswith("과거"):
