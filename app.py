@@ -38,6 +38,26 @@ def load_multisource_sheet():
             pass
     return pd.DataFrame(rows_out)
 
+
+WL_PATH = os.path.expanduser("~/.optionhub_watchlist.json")
+JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
+
+def load_json_file(p, default):
+    if os.path.exists(p):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return default
+
+def save_json_file(p, data):
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 def load_tg_config():
     cfg_path = os.path.expanduser('~/.telegram_config.json')
     if os.path.exists(cfg_path):
@@ -156,17 +176,21 @@ DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (�
 
 🌐 대시보드 바로가기: http://132.226.3.145:8501"""
 
-tab0, tab1, tab_scan, tab_multi, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab0, tab1, tab_watch, tab_scan, tab_opex, tab_cal, tab_track, tab_multi, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📝 오늘의 종합평",
-    "🔥 Top Ticker + 차트/손익계산",
-    "🔍 조건별 스마트 스캐너",
-    "🔗 멀티 소스 교차 검증",
-    "🚀 Top 10 문샷 급등주",
-    "📅 5일 누적 수급 & GEX",
-    "⚡ AI Plays & Noteworthy",
+    "🔥 Top Ticker + 차트/P&L",
+    "⭐ 내 관심종목",
+    "🔍 조건별 스캐너",
+    "📆 만기 집중도(OPEX)",
+    "🗓️ 거시·실적 캘린더",
+    "📈 포착 사후 추적",
+    "🔗 멀티 소스 검증",
+    "🚀 Top 10 문샷",
+    "📅 5일 수급 & GEX",
+    "⚡ AI Plays & Note",
     "📊 Options Top 차트",
-    "🗺️ 히트맵 & 테마 분석",
-    "📰 트레이딩 뉴스 (7선)"
+    "🗺️ 히트맵 & 테마",
+    "📰 뉴스 (7선)"
 ])
 
 DAILY_METRICS_BY_DATE = {
@@ -487,7 +511,7 @@ with tab1:
           <script type="text/javascript">
           new TradingView.widget({{
             "autosize": true,
-            "symbol": "{sel_tk}",
+            "symbol": "{"SPY" if sel_tk=="SPX" else sel_tk}",
             "interval": "D",
             "timezone": "Asia/Seoul",
             "theme": "dark",
@@ -543,6 +567,178 @@ with tab1:
         fig_pnl.add_vline(x=bep, line_dash="dot", line_color="#fbbf24")
         fig_pnl.update_layout(height=210, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10), xaxis_title="만기 주가 ($)", yaxis_title="손익 ($)")
         st.plotly_chart(fig_pnl, use_container_width=True)
+
+# ================= TAB WATCH: PERSONAL WATCHLIST =================
+with tab_watch:
+    st.title("⭐ 내 관심종목 (Watchlist) 전용 모아보기")
+    st.caption("보유 중이거나 주시하는 종목만 골라 수급과 뉴스를 한눈에 확인하고 텔레그램으로 바로 받아보세요.")
+
+    saved_wl = load_json_file(WL_PATH, ["NVDA", "SNDK", "MU", "TSLA", "META", "INTC", "AMD"])
+    all_known_tks = sorted(list(set([r[1] for r in all_raw_flows] + saved_wl)))
+    sel_wl = st.multiselect("⭐ 관심종목 관리 (추가/제거 후 자동 저장)", all_known_tks, default=[t for t in saved_wl if t in all_known_tks])
+    if sel_wl != saved_wl:
+        save_json_file(WL_PATH, sel_wl)
+
+    wl_rows = [r for r in date_filtered_flows if r[1] in sel_wl]
+    wl_tot = len(wl_rows)
+    wl_calls = sum(1 for r in wl_rows if r[3] == "Call")
+    wl_puts = wl_tot - wl_calls
+    wl_prem_sum = sum(parse_prem_usd(r[14]) for r in wl_rows)
+
+    wk1, wk2, wk3, wk4 = st.columns(4)
+    wk1.metric("관심종목 체결 수", f"{wl_tot}건")
+    wk2.metric("콜 / 풋 건수", f"{wl_calls} Call / {wl_puts} Put")
+    wk3.metric("합산 프리미엄", f"${wl_prem_sum/1_000_000:,.2f}M")
+    wk4.metric("조회 기준일", sel_date)
+
+    if wl_tot > 0:
+        if st.button("📩 내 관심종목 수급만 텔레그램 전송", type="primary"):
+            t_tok, t_cid = load_tg_config()
+            lines = [f"⭐ [OptionHub 관심종목] {sel_date} ({', '.join(sel_wl)}) - {wl_tot}건\n"]
+            for r in wl_rows:
+                lines.append(f"• [{r[2]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} [{r[13]}]")
+            ok, msg = send_telegram_msg(t_tok, t_cid, "\n".join(lines))
+            if ok: st.success(f"✅ {msg}")
+            else: st.error(f"❌ {msg}")
+
+        tb_wl = "".join([f"<tr><td><strong>{d[0]}</strong></td><td><strong>{d[1]}</strong></td><td>{d[2]}</td><td class='{'badge-call' if d[3]=='Call' else 'badge-put'}'>{d[3]}</td><td>{d[5]}</td><td><strong>{d[7]}</strong></td><td>{d[13]}</td><td class='kpi-green'><strong>{d[14]}</strong></td></tr>" for d in wl_rows])
+        st.markdown(f"<table class='flow-table'><thead><tr><th>DATE</th><th>TICKER</th><th>TIME</th><th>C/P</th><th>EXPIRY</th><th>STRIKE</th><th>TYPE</th><th>PREMIUM</th></tr></thead><tbody>{tb_wl}</tbody></table>", unsafe_allow_html=True)
+    else:
+        st.info(f"선택하신 날짜({sel_date})에는 등록된 관심종목 체결이 없습니다.")
+
+# ================= TAB OPEX: EXPIRATION CONCENTRATION =================
+with tab_opex:
+    st.title("📆 옵션 만기일별 물량 집중도 (OPEX 캘린더)")
+    st.caption(f"선택된 날짜({sel_date}) 기준 어느 만기일에 콜/풋 자금이 가장 많이 몰려 있는지 확인합니다.")
+
+    opex_map = {}
+    for r in date_filtered_flows:
+        exp = r[5]
+        val_m = parse_prem_usd(r[14]) / 1_000_000
+        if exp not in opex_map:
+            opex_map[exp] = {"만기일": exp, "Call_M": 0.0, "Put_M": 0.0, "건수": 0, "종목": set()}
+        if r[3] == "Call":
+            opex_map[exp]["Call_M"] += val_m
+        else:
+            opex_map[exp]["Put_M"] += val_m
+        opex_map[exp]["건수"] += 1
+        opex_map[exp]["종목"].add(r[1])
+
+    if opex_map:
+        df_opex = pd.DataFrame([
+            {
+                "만기일": k,
+                "Call ($M)": round(v["Call_M"], 2),
+                "Put ($M)": round(v["Put_M"], 2),
+                "합계 ($M)": round(v["Call_M"] + v["Put_M"], 2),
+                "체결건수": v["건수"],
+                "주요종목": ", ".join(sorted(v["종목"]))
+            }
+            for k, v in sorted(opex_map.items())
+        ])
+
+        fig_opex = go.Figure()
+        fig_opex.add_trace(go.Bar(x=df_opex["만기일"], y=df_opex["Call ($M)"], name="Call 프리미엄 ($M)", marker_color="#00e676"))
+        fig_opex.add_trace(go.Bar(x=df_opex["만기일"], y=df_opex["Put ($M)"], name="Put 프리미엄 ($M)", marker_color="#f23645"))
+        fig_opex.update_layout(
+            barmode="stack", plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc",
+            xaxis_title="만기일 (Expiration Date)", yaxis_title="프리미엄 규모 ($M)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=30, b=20)
+        )
+        st.plotly_chart(fig_opex, use_container_width=True)
+        st.dataframe(df_opex, use_container_width=True, hide_index=True)
+    else:
+        st.info("표시할 만기 데이터가 없습니다.")
+
+# ================= TAB CAL: MACRO & EARNINGS CALENDAR =================
+with tab_cal:
+    st.title("🗓️ 주요 거시경제(FOMC·CPI) & 실적·IPO 촉매 캘린더")
+    st.caption("TradingView 실시간 경제 지표 캘린더와 InsiderFinance 주요 이벤트 일정을 함께 확인하세요.")
+
+    col_cal1, col_cal2 = st.columns([3, 2])
+    with col_cal1:
+        st.subheader("🌐 실시간 미국 거시경제 지표 캘린더")
+        tv_cal_html = """
+        <div class="tradingview-widget-container">
+          <div class="tradingview-widget-container__widget"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-events.js" async>
+          {
+            "colorTheme": "dark",
+            "isTransparent": false,
+            "width": "100%",
+            "height": "520",
+            "locale": "kr",
+            "importanceFilter": "0,1",
+            "countryFilter": "us"
+          }
+          </script>
+        </div>
+        """
+        components.html(tv_cal_html, height=530)
+
+    with col_cal2:
+        st.subheader("📌 리포트 기반 핵심 촉매 일정")
+        catalysts = [
+            ("🏛️ 12월 FOMC 금리 결정", "높은 경계감", "10월 CPI(+0.4% m/m) 상회 및 연준 매파적 발언으로 12월 추가 금리 인상 확률 상승 중"),
+            ("💸 Anthropic (ANT) IPO", "11월 말 예정", "클래스A 8.25억주($70~$78) 로드쇼 진행 중. 첫날 개인 매수세 약 $2.5억 추산"),
+            ("🛒 Costco (COST) 특별배당", "발표 완료", "주당 $30 특별 현금배당(총 $133억 규모) 및 자사주 매입 재승인"),
+            ("⚖️ Nvidia (NVDA) 리스크", "단기 주의", "CEO 관련 이사회 독립 조사 개시 및 Baird 목표가 하향($500→$200)"),
+            ("☁️ Amazon (AMZN) 실적 반영", "호실적", "AWS 매출 +39.3%($460억), 수주잔고 $5,780억 기록 (단 2026 Capex $2,200억 부담)"),
+            ("🚀 Firefly Aerospace", "가이던스 상향", "Q3 매출 $1.107억, 수주잔고 $17억 사상 최대 및 AST 엔진 계약 $13억+")
+        ]
+        for t, badge, desc in catalysts:
+            st.markdown(f"""
+            <div class='moonshot-card'>
+                <div style='display:flex; justify-content:space-between;'>
+                    <strong style='color:white;'>{t}</strong>
+                    <span style='background:#2563eb; color:white; font-size:11px; padding:1px 7px; border-radius:4px;'>{badge}</span>
+                </div>
+                <div style='font-size:12px; color:#cbd5e1; margin-top:4px;'>{desc}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ================= TAB TRACK: PERFORMANCE & JOURNAL =================
+with tab_track:
+    st.title("📈 포착 종목 사후 추적 & 내 매매 복기 트래커")
+    st.caption("이전 일자(11/10) AI 포착 종목들의 익일(11/11) 후속 흐름 추적 및 개인 매매 일지 기록")
+
+    st.subheader("🔎 11/10 포착 주요 종목 → 11/11 후속 수급 변화")
+    followup_rows = [
+        {"포착일": "2026-11-10", "종목": "SNDK", "당시 포착": "3건 / $120K OTM (21%)", "11/11 후속 결과": "9건 급증 / $6.8M 스윕 (OTM 31%)", "상태": "🔥 수급 폭발 지속"},
+        {"포착일": "2026-11-10", "종목": "NVDA", "당시 포착": "Bear Put Spread ($50M Put)", "11/11 후속 결과": "이사회 조사·목표가 하향($200) 하락", "상태": "✅ 풋 방향 적중"},
+        {"포착일": "2026-11-10", "종목": "RIOT", "당시 포착": "Long Call (5일 +20% 랠리)", "11/11 후속 결과": "31% OTM + $696K 스윕 추가 유입", "상태": "🟢 상방 모멘텀 유지"},
+        {"포착일": "2026-11-10", "종목": "MU", "당시 포착": "$34.7M 1050P 헷지", "11/11 후속 결과": "주가 강세 속 $24.3M 800P 헷지 추가", "상태": "⚠️ 주가 반등 vs 헷지 지속"},
+        {"포착일": "2026-11-10", "종목": "AMD", "당시 포착": "510C 단기 골든스윕 ($2.48M)", "11/11 후속 결과": "주가 급등 후 $6.2M 600P 하방 헷지 유입", "상태": "🔄 목표가 도달 후 헷지 전환"},
+    ]
+    st.dataframe(pd.DataFrame(followup_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.subheader("📓 내 실전 매매 복기 일지 (서버 자동 저장)")
+    journal = load_json_file(JOURNAL_PATH, [])
+
+    with st.form("journal_form", clear_on_submit=True):
+        jc1, jc2, jc3, jc4, jc5 = st.columns(5)
+        j_tk = jc1.text_input("종목", "SNDK").upper()
+        j_dir = jc2.selectbox("포지션", ["Call", "Put"])
+        j_entry = jc3.number_input("진입가 ($)", min_value=0.01, value=3.0, step=0.1)
+        j_exit = jc4.number_input("청산가 ($)", min_value=0.0, value=4.5, step=0.1)
+        j_memo = jc5.text_input("복기 메모", "스윕 따라 진입")
+        if st.form_submit_button("💾 매매 기록 저장"):
+            ret = ((j_exit - j_entry) / j_entry * 100) if j_entry > 0 else 0.0
+            journal.insert(0, {"날짜": sel_date, "종목": j_tk, "구분": j_dir, "진입가": j_entry, "청산가": j_exit, "수익률(%)": round(ret, 1), "메모": j_memo})
+            save_json_file(JOURNAL_PATH, journal)
+            st.success("저장되었습니다!")
+
+    if journal:
+        df_j = pd.DataFrame(journal)
+        wins = sum(1 for x in journal if x.get("수익률(%)", 0) > 0)
+        win_rate = wins / len(journal) * 100
+        avg_ret = sum(x.get("수익률(%)", 0) for x in journal) / len(journal)
+        st.markdown(f"**총 {len(journal)}건 기록 | 승률: {win_rate:.1f}% | 평균 수익률: {avg_ret:+.1f}%**")
+        st.dataframe(df_j, use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 기록된 매매 일지가 없습니다. 위 폼에서 첫 거래를 기록해 보세요!")
 
 # ================= TAB SCAN: SMART SCANNER =================
 with tab_scan:
