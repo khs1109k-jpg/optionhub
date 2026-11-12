@@ -722,9 +722,31 @@ if nav_menu == MENU_ITEMS[1]:
         st.plotly_chart(fig_pnl, use_container_width=True)
 
 # ================= TAB OI: OPEN INTEREST COLLECTOR & TRACKER =================
-if nav_menu == MENU_ITEMS[2]:
+if nav_menu == "🎯 실발·OI 매집 스캐너":
     st.title("🎯 실적 발표 & 조용한 OI 매집 스캐너 (Stealth OI)")
     st.caption("단타 스윕(Flow)에 안 잡혀도 행사가별로 조용히 누적되는 OI 급증과 실적 발표 예상 변동폭(Expected Move)·Call/Put Wall을 포착합니다.")
+
+    live_cache = load_json_file(os.path.expanduser("~/.optionhub_intraday_live.json"), {})
+    st.subheader("⚡ 장중 실시간 Vol > OI 신규 오픈 TOP (10분 자동 갱신)")
+    if live_cache.get("items"):
+        st.caption(f"최근 장중 스캔 시각: {live_cache.get('updated', '-')}")
+        df_live = pd.DataFrame([{
+            "티커": h.get("tk"),
+            "현재가($)": h.get("spot"),
+            "만기": h.get("exp"),
+            "구분": h.get("cp"),
+            "행사가($)": h.get("k"),
+            "추정금액": h.get("prem_str", "-"),
+            "거래량": h.get("vol"),
+            "기존 OI": h.get("oi"),
+            "최소 신규(+)": h.get("min_new"),
+            "Vol/OI": f"{h.get('ratio', 0)}x",
+            "방향추정": h.get("hint", "-"),
+        } for h in live_cache["items"][:20]])
+        st.dataframe(df_live, use_container_width=True, hide_index=True)
+    else:
+        st.caption("장중 10분 스캐너(`intraday_vol_oi.py`) 실행 시 실시간 Vol > OI 포착 내역이 여기에 자동 표시됩니다.")
+    st.markdown("---")
 
     oi_hist_s = load_json_file(OI_PATH, {})
     st.subheader("🕵️ 전일 대비 행사가별 OI 급증 TOP (조용한 매집 포착)")
@@ -736,8 +758,9 @@ if nav_menu == MENU_ITEMS[2]:
                 k_id = (x["만기"], x["구분"], x["행사가"])
                 p_oi = prev_det.get(k_id, 0)
                 diff = x["OI"] - p_oi
-                if diff >= 300:
+                if abs(diff) >= 300 and p_oi >= 10 and x["OI"] >= 10:
                     stealth_rows.append({
+                        "포착유형": "🟢 신규 오픈(BTO/STO)" if diff > 0 else "🔴 대량 청산(BTC/STC)",
                         "티커": tk_s,
                         "현재가($)": snaps_s[-1].get("Spot", 0),
                         "만기": x["만기"],
@@ -745,12 +768,19 @@ if nav_menu == MENU_ITEMS[2]:
                         "행사가($)": x["행사가"],
                         "전일 OI": p_oi,
                         "현재 OI": x["OI"],
-                        "OI 순증": diff,
-                        "증가율(%)": round(diff / max(p_oi, 1) * 100, 1),
+                        "OI 순증감": diff,
+                        "변동규모": abs(diff),
+                        "변동률(%)": round(diff / max(p_oi, 1) * 100, 1),
                         "GEX($M)": x.get("GEX($M)", 0),
                     })
     if stealth_rows:
-        df_st = pd.DataFrame(stealth_rows).sort_values("OI 순증", ascending=False).head(30)
+        oi_flt = st.radio("포착 필터", ["전체 (신규+청산)", "🟢 신규 오픈(+)만", "🔴 대량 청산(-)만"], horizontal=True)
+        df_st = pd.DataFrame(stealth_rows)
+        if oi_flt.startswith("🟢"):
+            df_st = df_st[df_st["OI 순증감"] > 0]
+        elif oi_flt.startswith("🔴"):
+            df_st = df_st[df_st["OI 순증감"] < 0]
+        df_st = df_st.sort_values("변동규모", ascending=False).drop(columns=["변동규모"]).head(30)
         st.dataframe(df_st, use_container_width=True, hide_index=True)
     else:
         st.info("아직 2일치 이상 누적된 OI 비교 데이터가 부족합니다. 내일 오전 6:30 `auto_oi.py` 수집 후부터 전일 대비 OI 순증이 자동 표시됩니다!")
@@ -814,7 +844,7 @@ if nav_menu == MENU_ITEMS[2]:
         else:
             st.warning("조회된 데이터가 없습니다.")
 
-if nav_menu == MENU_ITEMS[3]:
+if nav_menu == "📊 OI(미결제약정) 수집":
     st.title("📊 OI · GEX(감마 익스포저) · Delta/Gamma 실시간 수집기")
     st.caption("종목별 행사가별 미결제약정(OI)과 Black-Scholes 기반 감마(Gamma)·델타(Delta)·GEX·DEX를 실시간 산출하고 누적 저장합니다.")
 
