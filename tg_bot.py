@@ -161,6 +161,31 @@ def format_gex_summary(target_tk=None):
     return "\n".join(lines)
 
 
+def send_ticker_gex_with_chart(token, chat_id, raw_tk):
+    tk = raw_tk.strip().upper()
+    yf_tk = {"SPX": "^SPX", "NDX": "^NDX", "VIX": "^VIX", "RUT": "^RUT"}.get(tk, tk)
+    try:
+        import sys
+        sys.path.insert(0, os.path.expanduser("~"))
+        import gex_chart_tg as gc
+        send_msg(token, chat_id, f"🔎 [{tk}] 실시간 GEX · Zero Gamma 차트를 생성 중입니다...")
+        rows, spot = gc.fetch_chain_for_chart(yf_tk)
+        if rows:
+            png_bytes, net_gex, cw, pw, pc, zg = gc.render_gex_png(tk, rows, spot)
+            cap = (
+                f"📊 [{tk} 실시간 GEX · OI 차트]\n"
+                f"• 현재가(Spot): ${spot}\n"
+                f"• Net GEX: {net_gex:+.2f}M\n"
+                f"• Zero Gamma(플립): {(f'${zg:g}' if zg else '-')}\n"
+                f"• Call Wall(저항): ${cw:g} | Put Wall(지지): ${pw:g}\n"
+                f"• P/C 비율: {pc}"
+            )
+            if gc.send_tg_photo(token, chat_id, png_bytes, caption=cap):
+                return
+    except Exception:
+        pass
+    send_msg(token, chat_id, format_gex_summary(tk))
+
 def handle_command(token, chat_id, text):
     cmd = text.strip()
     low = cmd.lower()
@@ -194,7 +219,10 @@ def handle_command(token, chat_id, text):
     elif low.startswith("/gex") or cmd == "📊 주요 GEX 요약":
         parts = cmd.split()
         tk = parts[1] if (low.startswith("/gex") and len(parts) >= 2) else None
-        send_msg(token, chat_id, format_gex_summary(tk))
+        if tk:
+            send_ticker_gex_with_chart(token, chat_id, tk)
+        else:
+            send_msg(token, chat_id, format_gex_summary(None))
 
     elif low.startswith("/chart") or cmd == "🖼️ 차트 지금 받기":
         send_msg(token, chat_id, "🖼️ 실시간 GEX·Zero Gamma 차트를 생성해 보내드리는 중입니다...")
@@ -254,7 +282,7 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "\n".join(lines))
 
     elif re.fullmatch(r"[A-Za-z]{1,5}", cmd):
-        send_msg(token, chat_id, format_gex_summary(cmd))
+        send_ticker_gex_with_chart(token, chat_id, cmd)
 
 
 def check_sheet_review(token, chat_id):
