@@ -334,7 +334,17 @@ if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings
 """, unsafe_allow_html=True)
 
 with st.expander("🔬 반도체 기본군 (SOXX · SMH · SOXS · SOXL) 개폐·OI 핵심 정리", expanded=True):
-    st.caption("기준: 11/11 ET 마감 확정분 (전달된 텔레그램 표 요약)")
+    st.caption("기준: 11/11 ET 마감 확정분 (전달된 텔레그램 표·텍스트 요약)")
+    semi_note_txt = tide_cache.get("semi_note", "")
+    if not semi_note_txt:
+        semi_note_txt = (
+            "반도체 4종 · 11/12 ET 장전\n"
+            "• SOXX 11/20 125P 매수·140P 매도 각 7,470계약 동반. 140P는 OI +2,206과 당일 청산 기록이 공존. 12월 155P는 신규 풋 매수 분류.\n"
+            "• SMH 380P 매수·295P 매도 신규 방어 후보와 385P·285P 매도가 공존. 630P 4,000 중 청산 ≥3,998. 6월 550C는 매수 표기·개폐 보류.\n"
+            "• SOXS 47C +573·42.5P +562. 69C는 일중 매수·매도 신규가 함께 확인.\n"
+            "• SOXL 60P +2,403·55P -4,839·60C 두 만기 감소. 11/27 100C 매수 3,312 중 BTC ≥1,299."
+        )
+    st.info(semi_note_txt)
     semi_rows = [
         {"종목": "SOXX ($151.24)", "핵심 체결": "125P 청산(-3,525) + 140P SELL(+2,206) | 160C(+4,665)", "해석": "125P→140P 하방 지지 상향 · 160C 단기 저항"},
         {"종목": "SMH ($489.50)", "핵심 체결": "380P BTO + 295P STO (각 1만계약) | 385/285P STO | 630P 청산(-4,000)", "해석": "대부분 동시 체결 풋 스프레드·헤지 롤링 (단독 폭락 베팅 아님)"},

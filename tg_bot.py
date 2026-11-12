@@ -418,7 +418,11 @@ def parse_and_save_tide_brief(text):
         }
         data["tickers"] = tks_dict
 
-    # 7. M7 관심도
+    # 7. 반도체 4종 텍스트 브리핑
+    if "반도체 4종" in text or "반도체 기본군" in text:
+        data["semi_note"] = text.strip()[:1200]
+
+    # 8. M7 관심도
     if "M7 관심도" in text:
         m7 = []
         for ln in text.splitlines():
@@ -540,7 +544,7 @@ def handle_command(token, chat_id, text):
             lines.append(f"• [{r[0]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} [{r[13]}]")
         send_msg(token, chat_id, "\n".join(lines))
 
-    elif any(k in text for k in ("시장 브리핑", "프리미엄 흐름", "시장 자금 순포지션", "Conviction Scores", "아침 종합 브리핑", "다크풀 하루 정리", "핵심 레벨", "스마트머니", "M7 관심도")):
+    elif any(k in text for k in ("시장 브리핑", "프리미엄 흐름", "시장 자금 순포지션", "Conviction Scores", "아침 종합 브리핑", "다크풀 하루 정리", "핵심 레벨", "스마트머니", "M7 관심도", "반도체 4종", "반도체 기본군")):
         d = parse_and_save_tide_brief(text)
         msg = (
             f"✅ [OptionHub 반영 완료] ({d.get('updated', '')})\n"
