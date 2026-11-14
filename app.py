@@ -242,132 +242,157 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 상단 1분 모닝 브리핑 배너 (2026-11-11 최신 반영)
-st.markdown("""
-<div class='morning-banner'>
-    <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
-        <span style='font-size:16px; font-weight:800; color:#60a5fa;'>☀️ AI 옵션 모닝 1분 핵심 브리핑 (장전 체크포인트)</span>
-        <span style='background:#2563eb; color:white; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px;'>2026-11-11 최신본</span>
-    </div>
-    <div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size:13px; color:#e2e8f0; line-height:1.5;'>
-        <div style='background:rgba(239,68,68,0.1); border-left:3px solid #ef4444; padding:8px 10px; border-radius:4px;'>
-            <strong>🔴 반도체 반등 속 풋 헷지 지속 (MU·AMD)</strong><br>
-            MU($24.3M 800 Put), AMD($6.2M 600 Put) 등 주가 반등에도 기관 하방 방어 풋 집중. NVDA는 이사회 조사 및 목표가 하향($200) 여파.
-        </div>
-        <div style='background:rgba(16,185,129,0.1); border-left:3px solid #10b981; padding:8px 10px; border-radius:4px;'>
-            <strong>🟢 주도주 선별 콜 집중 (META·INTC·TSLA)</strong><br>
-            META($31M 750 Call), INTC($31M 50 Call), TSLA($4.2M 410 Call) 등 개별 강세 종목에 대규모 상방 포지셔닝 유입.
-        </div>
-        <div style='background:rgba(245,158,11,0.1); border-left:3px solid #f59e0b; padding:8px 10px; border-radius:4px;'>
-            <strong>🚀 SNDK·KGC·BW 콜 스윕 & 주요 뉴스</strong><br>
-            SNDK 9건($6.8M 스윕), KGC 11.2x 모멘텀 콜 집중. 앤스로픽 IPO 로드쇼($70~$78) 및 코스트코 주당 $30 특별배당 발표.
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+MENU_ITEMS = [
+    "📝 오늘의 종합평",
+    "🔥 Top Ticker + 차트/P&L",
+    "📊 OI(미결제약정) 수집",
+    "🎯 실발·OI 매집 스캐너",
+    "⭐ 내 관심종목",
+    "🔍 조건별 스캐너",
+    "📆 만기 집중도(OPEX)",
+    "🗓️ 거시·실적 캘린더",
+    "📈 포착 사후 추적",
+    "🔗 멀티 소스 검증",
+    "🚀 Top 10 문샷",
+    "📅 5일 수급 & GEX",
+    "⚡ AI Plays & Note",
+    "📊 Options Top 차트",
+    "🗺️ 히트맵 & 테마",
+    "📰 뉴스 (7선)",
+    "⚡ 무무 실시간 차트",
+    "📌 다음 주·원월 포지션"
+]
+st.sidebar.title("⚙️ OptionHub")
+st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
+nav_menu = st.sidebar.radio("📌 메뉴 이동", MENU_ITEMS, index=0)
 
-DEFAULT_TIDE_BRIEF = {
-    "updated": "2026-11-12 06:06 (텔레그램 브리핑)",
-    "tide": "누적 $+482M · 후반30분 $-42M · 추세 bearish_steady",
-    "flows": [
-        {"tk": "MU", "net": "+85.6M", "dir": "콜 순매수"},
-        {"tk": "NVDA", "net": "+37.0M", "dir": "콜 순매수"},
-        {"tk": "TSLA", "net": "+34.3M", "dir": "콜 순매수"},
-        {"tk": "SNDK", "net": "+34.3M", "dir": "콜 순매수"},
-        {"tk": "CRWV", "net": "+29.5M", "dir": "콜 순매수"},
-        {"tk": "SOXL", "net": "+25.3M", "dir": "콜 순매수"},
-        {"tk": "NBIS", "net": "-23.1M", "dir": "풋 순매수"},
-        {"tk": "AAPL", "net": "+22.1M", "dir": "콜 순매수"},
-    ],
-    "warnings": [
-        {"tk": "NVDA", "tag": "커버드콜(콜ask45%)"},
-        {"tk": "AAPL", "tag": "OI역행⚠(풋ask56%)"},
-        {"tk": "INTC", "tag": "신규하방(풋ask99%)"},
-        {"tk": "MSFT", "tag": "진짜매수(콜ask99%)"},
-    ],
-    "dir_note": "겉은 콜 순유입(+$482M)이나 후반 30분 풋 역전(-$42M)·전원 Short Gamma(QQQ $690 / SPY $758 / SOXX $155 방어선)로 하방 가속 리스크 경계",
-    "morning_head": "SPY·QQQ·SMH 주간 1σ 상단 초과 소진(추격 여지 제한) · Tide bullish(25) vs 추세 bearish_reversal",
-    "morning_bull": [
-        {"tk": "SMH", "desc": "반도체 ETF [중]"},
-        {"tk": "HOOD", "desc": "온라인 증권 [약]"},
-        {"tk": "IBIT", "desc": "비트코인 ETF [약]"},
-        {"tk": "CE", "desc": "특수화학 [약]"},
-    ],
-    "morning_bear": [
-        {"tk": "MSFT", "desc": "시장 역행★ [중]"},
-        {"tk": "GEV", "desc": "전력장비 [약]"},
-        {"tk": "AMKR", "desc": "반도체 패키징 [약]"},
-        {"tk": "QQQ", "desc": "콜유출·풋유입 [약]"},
-    ],
-    "darkpool_note": "정규장 섞인 MSFT($2.67억)와 거래량 비중 급증 SIX(167.9%)·EXEL(67.0%)·DKNG(34.4%)·XOM(24.0%)·WMT(15.9%)만 관찰 대상",
-}
-tide_cache = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), DEFAULT_TIDE_BRIEF)
-if not (tide_cache.get("tide") or tide_cache.get("flows")):
-    tide_cache = DEFAULT_TIDE_BRIEF
-if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings"):
-    tide_str = tide_cache.get("tide", "-")
-    flows_html = " · ".join([f"<span style='color:{'#34d399' if '콜' in x.get('dir','') else '#f87171'}; font-weight:700;'>{x['tk']} {x['net']}</span>" for x in tide_cache.get("flows", [])[:8]])
-    warn_html = " · ".join([f"<span style='background:rgba(245,158,11,0.18); color:#fbbf24; padding:1px 6px; border-radius:4px; font-size:12px;'>{w['tk']}: {w['tag']}</span>" for w in tide_cache.get("warnings", [])[:6]])
-    dir_note = tide_cache.get("dir_note", "")
-    m_head = tide_cache.get("morning_head", "")
-    m_bull = " · ".join([f"<span style='color:#34d399; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bull", [])])
-    m_bear = " · ".join([f"<span style='color:#f87171; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bear", [])])
-    dp_note = tide_cache.get("darkpool_note", "")
-    tk_items = tide_cache.get("tickers", {})
-    tk_html = " · ".join([
-        f"<span style='background:rgba(56,189,248,0.12); padding:1px 6px; border-radius:4px; font-size:12px;'><strong>{k}</strong>({v.get('spot','')}) {v.get('summary','')}</span>"
-        for k, v in list(tk_items.items())[:8]
-    ])
-    st.markdown(f"""
-<div style='background:#131722; border:1px solid #2a2e39; border-left:4px solid #38bdf8; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#e2e8f0;'>
-  <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
-    <span><strong style='color:#38bdf8;'>🌊 Market Tide & 데일리 브리핑</strong> &nbsp;|&nbsp; {tide_str}</span>
-    <span style='color:#94a3b8; font-size:11px;'>갱신: {tide_cache.get('updated', '-')}</span>
-  </div>
-  {f"<div style='margin-bottom:5px;'><strong>자금 TOP:</strong> {flows_html}</div>" if flows_html else ""}
-  {f"<div style='margin-bottom:5px;'><strong>⚠️ OI·커버드콜 검증:</strong> {warn_html}</div>" if warn_html else ""}
-  {f"<div style='margin-bottom:4px;'><strong>🟢 반등 주목:</strong> {m_bull}</div>" if m_bull else ""}
-  {f"<div style='margin-bottom:4px;'><strong>🔴 약세 주목:</strong> {m_bear}</div>" if m_bear else ""}
-  {f"<div style='margin-bottom:4px; color:#cbd5e1; font-size:12px;'>🌅 <strong>아침 요약:</strong> {m_head}</div>" if m_head else ""}
-  {f"<div style='margin-bottom:4px; color:#94a3b8; font-size:12px;'>🌑 <strong>다크풀:</strong> {dp_note}</div>" if dp_note else ""}
-  {f"<div style='margin-bottom:4px;'><strong>📌 개별 종목 요약:</strong> {tk_html}</div>" if tk_html else ""}
-  {f"<div style='color:#cbd5e1; font-size:12px;'>💡 {dir_note}</div>" if dir_note else ""}
-</div>
-""", unsafe_allow_html=True)
+if nav_menu == "📝 오늘의 종합평":
+    # 상단 1분 모닝 브리핑 배너 (2026-11-11 최신 반영)
+    st.markdown("""
+    <div class='morning-banner'>
+        <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
+            <span style='font-size:16px; font-weight:800; color:#60a5fa;'>☀️ AI 옵션 모닝 1분 핵심 브리핑 (장전 체크포인트)</span>
+            <span style='background:#2563eb; color:white; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px;'>2026-11-11 최신본</span>
+        </div>
+        <div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size:13px; color:#e2e8f0; line-height:1.5;'>
+            <div style='background:rgba(239,68,68,0.1); border-left:3px solid #ef4444; padding:8px 10px; border-radius:4px;'>
+                <strong>🔴 반도체 반등 속 풋 헷지 지속 (MU·AMD)</strong><br>
+                MU($24.3M 800 Put), AMD($6.2M 600 Put) 등 주가 반등에도 기관 하방 방어 풋 집중. NVDA는 이사회 조사 및 목표가 하향($200) 여파.
+            </div>
+            <div style='background:rgba(16,185,129,0.1); border-left:3px solid #10b981; padding:8px 10px; border-radius:4px;'>
+                <strong>🟢 주도주 선별 콜 집중 (META·INTC·TSLA)</strong><br>
+                META($31M 750 Call), INTC($31M 50 Call), TSLA($4.2M 410 Call) 등 개별 강세 종목에 대규모 상방 포지셔닝 유입.
+            </div>
+            <div style='background:rgba(245,158,11,0.1); border-left:3px solid #f59e0b; padding:8px 10px; border-radius:4px;'>
+                <strong>🚀 SNDK·KGC·BW 콜 스윕 & 주요 뉴스</strong><br>
+                SNDK 9건($6.8M 스윕), KGC 11.2x 모멘텀 콜 집중. 앤스로픽 IPO 로드쇼($70~$78) 및 코스트코 주당 $30 특별배당 발표.
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-with st.expander("🔬 반도체 기본군 (SOXX · SMH · SOXS · SOXL) 개폐·OI 핵심 정리", expanded=True):
-    st.caption("기준: 11/11 ET 마감 확정분 (전달된 텔레그램 표·텍스트 요약)")
-    semi_note_txt = tide_cache.get("semi_note", "")
-    if not semi_note_txt:
-        semi_note_txt = (
-            "반도체 4종 · 11/12 ET 장전\n"
-            "• SOXX 11/20 125P 매수·140P 매도 각 7,470계약 동반. 140P는 OI +2,206과 당일 청산 기록이 공존. 12월 155P는 신규 풋 매수 분류.\n"
-            "• SMH 380P 매수·295P 매도 신규 방어 후보와 385P·285P 매도가 공존. 630P 4,000 중 청산 ≥3,998. 6월 550C는 매수 표기·개폐 보류.\n"
-            "• SOXS 47C +573·42.5P +562. 69C는 일중 매수·매도 신규가 함께 확인.\n"
-            "• SOXL 60P +2,403·55P -4,839·60C 두 만기 감소. 11/27 100C 매수 3,312 중 BTC ≥1,299."
-        )
-    st.info(semi_note_txt)
-    semi_rows = [
-        {"종목": "SOXX ($151.24)", "핵심 체결": "125P 청산(-3,525) + 140P SELL(+2,206) | 160C(+4,665)", "해석": "125P→140P 하방 지지 상향 · 160C 단기 저항"},
-        {"종목": "SMH ($489.50)", "핵심 체결": "380P BTO + 295P STO (각 1만계약) | 385/285P STO | 630P 청산(-4,000)", "해석": "대부분 동시 체결 풋 스프레드·헤지 롤링 (단독 폭락 베팅 아님)"},
-        {"종목": "SOXS ($48.90)", "핵심 체결": "69C(+2,552, 일중 BTO≥672·STO≥448) | 47C(+573) | 42.5P(+562)", "해석": "단기 69C 양방향 혼재 · 47C/42.5P 소폭 유입"},
-        {"종목": "SOXL ($60.95)", "핵심 체결": "60C 청산(-2,253/-2,304) | 60P(+2,403) | 55P 청산(-4,839) | 11/27 100C BTC≥1,299(-2,819)", "해석": "단기 60C 차익+60P 헤지, 위쪽 100C 매도 저항은 BTC로 일부 해제"},
-    ]
-    st.dataframe(pd.DataFrame(semi_rows), use_container_width=True, hide_index=True)
-    photo_dir = os.path.expanduser("~/.optionhub_tg_photos")
-    photo_list = []
-    if os.path.isdir(photo_dir):
-        photo_list = [os.path.join(photo_dir, x) for x in sorted(os.listdir(photo_dir), reverse=True) if x.endswith(".jpg")][:5]
-    if not photo_list:
-        semi_img_p = os.path.expanduser("~/.optionhub_semi_latest.jpg")
-        if os.path.exists(semi_img_p):
-            photo_list = [semi_img_p]
-    if photo_list:
-        st.markdown(f"**🖼️ 텔레그램 전달 표 갤러리 (최근 {len(photo_list)}장)**")
-        cols_img = st.columns(2)
-        for idx_i, p_img in enumerate(photo_list):
-            with cols_img[idx_i % 2]:
-                st.image(p_img, use_container_width=True)
+    DEFAULT_TIDE_BRIEF = {
+        "updated": "2026-11-12 06:06 (텔레그램 브리핑)",
+        "tide": "누적 $+482M · 후반30분 $-42M · 추세 bearish_steady",
+        "flows": [
+            {"tk": "MU", "net": "+85.6M", "dir": "콜 순매수"},
+            {"tk": "NVDA", "net": "+37.0M", "dir": "콜 순매수"},
+            {"tk": "TSLA", "net": "+34.3M", "dir": "콜 순매수"},
+            {"tk": "SNDK", "net": "+34.3M", "dir": "콜 순매수"},
+            {"tk": "CRWV", "net": "+29.5M", "dir": "콜 순매수"},
+            {"tk": "SOXL", "net": "+25.3M", "dir": "콜 순매수"},
+            {"tk": "NBIS", "net": "-23.1M", "dir": "풋 순매수"},
+            {"tk": "AAPL", "net": "+22.1M", "dir": "콜 순매수"},
+        ],
+        "warnings": [
+            {"tk": "NVDA", "tag": "커버드콜(콜ask45%)"},
+            {"tk": "AAPL", "tag": "OI역행⚠(풋ask56%)"},
+            {"tk": "INTC", "tag": "신규하방(풋ask99%)"},
+            {"tk": "MSFT", "tag": "진짜매수(콜ask99%)"},
+        ],
+        "dir_note": "겉은 콜 순유입(+$482M)이나 후반 30분 풋 역전(-$42M)·전원 Short Gamma(QQQ $690 / SPY $758 / SOXX $155 방어선)로 하방 가속 리스크 경계",
+        "morning_head": "SPY·QQQ·SMH 주간 1σ 상단 초과 소진(추격 여지 제한) · Tide bullish(25) vs 추세 bearish_reversal",
+        "morning_bull": [
+            {"tk": "SMH", "desc": "반도체 ETF [중]"},
+            {"tk": "HOOD", "desc": "온라인 증권 [약]"},
+            {"tk": "IBIT", "desc": "비트코인 ETF [약]"},
+            {"tk": "CE", "desc": "특수화학 [약]"},
+        ],
+        "morning_bear": [
+            {"tk": "MSFT", "desc": "시장 역행★ [중]"},
+            {"tk": "GEV", "desc": "전력장비 [약]"},
+            {"tk": "AMKR", "desc": "반도체 패키징 [약]"},
+            {"tk": "QQQ", "desc": "콜유출·풋유입 [약]"},
+        ],
+        "darkpool_note": "정규장 섞인 MSFT($2.67억)와 거래량 비중 급증 SIX(167.9%)·EXEL(67.0%)·DKNG(34.4%)·XOM(24.0%)·WMT(15.9%)만 관찰 대상",
+    }
+    tide_cache = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), DEFAULT_TIDE_BRIEF)
+    if not (tide_cache.get("tide") or tide_cache.get("flows")):
+        tide_cache = DEFAULT_TIDE_BRIEF
+    if tide_cache.get("tide") or tide_cache.get("flows") or tide_cache.get("warnings"):
+        tide_str = tide_cache.get("tide", "-")
+        flows_html = " · ".join([f"<span style='color:{'#34d399' if '콜' in x.get('dir','') else '#f87171'}; font-weight:700;'>{x['tk']} {x['net']}</span>" for x in tide_cache.get("flows", [])[:8]])
+        warn_html = " · ".join([f"<span style='background:rgba(245,158,11,0.18); color:#fbbf24; padding:1px 6px; border-radius:4px; font-size:12px;'>{w['tk']}: {w['tag']}</span>" for w in tide_cache.get("warnings", [])[:6]])
+        dir_note = tide_cache.get("dir_note", "")
+        m_head = tide_cache.get("morning_head", "")
+        m_bull = " · ".join([f"<span style='color:#34d399; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bull", [])])
+        m_bear = " · ".join([f"<span style='color:#f87171; font-weight:700;'>{x['tk']}</span>({x['desc']})" for x in tide_cache.get("morning_bear", [])])
+        dp_note = tide_cache.get("darkpool_note", "")
+        tk_items = tide_cache.get("tickers", {})
+        tk_html = " · ".join([
+            f"<span style='background:rgba(56,189,248,0.12); padding:1px 6px; border-radius:4px; font-size:12px;'><strong>{k}</strong>({v.get('spot','')}) {v.get('summary','')}</span>"
+            for k, v in list(tk_items.items())[:8]
+        ])
+        st.markdown(f"""
+    <div style='background:#131722; border:1px solid #2a2e39; border-left:4px solid #38bdf8; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#e2e8f0;'>
+      <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
+        <span><strong style='color:#38bdf8;'>🌊 Market Tide & 데일리 브리핑</strong> &nbsp;|&nbsp; {tide_str}</span>
+        <span style='color:#94a3b8; font-size:11px;'>갱신: {tide_cache.get('updated', '-')}</span>
+      </div>
+      {f"<div style='margin-bottom:5px;'><strong>자금 TOP:</strong> {flows_html}</div>" if flows_html else ""}
+      {f"<div style='margin-bottom:5px;'><strong>⚠️ OI·커버드콜 검증:</strong> {warn_html}</div>" if warn_html else ""}
+      {f"<div style='margin-bottom:4px;'><strong>🟢 반등 주목:</strong> {m_bull}</div>" if m_bull else ""}
+      {f"<div style='margin-bottom:4px;'><strong>🔴 약세 주목:</strong> {m_bear}</div>" if m_bear else ""}
+      {f"<div style='margin-bottom:4px; color:#cbd5e1; font-size:12px;'>🌅 <strong>아침 요약:</strong> {m_head}</div>" if m_head else ""}
+      {f"<div style='margin-bottom:4px; color:#94a3b8; font-size:12px;'>🌑 <strong>다크풀:</strong> {dp_note}</div>" if dp_note else ""}
+      {f"<div style='margin-bottom:4px;'><strong>📌 개별 종목 요약:</strong> {tk_html}</div>" if tk_html else ""}
+      {f"<div style='color:#cbd5e1; font-size:12px;'>💡 {dir_note}</div>" if dir_note else ""}
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.expander("🔬 반도체 기본군 (SOXX · SMH · SOXS · SOXL) 개폐·OI 핵심 정리", expanded=True):
+        st.caption("기준: 11/11 ET 마감 확정분 (전달된 텔레그램 표·텍스트 요약)")
+        semi_note_txt = tide_cache.get("semi_note", "")
+        if not semi_note_txt:
+            semi_note_txt = (
+                "반도체 4종 · 11/12 ET 장전\n"
+                "• SOXX 11/20 125P 매수·140P 매도 각 7,470계약 동반. 140P는 OI +2,206과 당일 청산 기록이 공존. 12월 155P는 신규 풋 매수 분류.\n"
+                "• SMH 380P 매수·295P 매도 신규 방어 후보와 385P·285P 매도가 공존. 630P 4,000 중 청산 ≥3,998. 6월 550C는 매수 표기·개폐 보류.\n"
+                "• SOXS 47C +573·42.5P +562. 69C는 일중 매수·매도 신규가 함께 확인.\n"
+                "• SOXL 60P +2,403·55P -4,839·60C 두 만기 감소. 11/27 100C 매수 3,312 중 BTC ≥1,299."
+            )
+        st.info(semi_note_txt)
+        semi_rows = [
+            {"종목": "SOXX ($151.24)", "핵심 체결": "125P 청산(-3,525) + 140P SELL(+2,206) | 160C(+4,665)", "해석": "125P→140P 하방 지지 상향 · 160C 단기 저항"},
+            {"종목": "SMH ($489.50)", "핵심 체결": "380P BTO + 295P STO (각 1만계약) | 385/285P STO | 630P 청산(-4,000)", "해석": "대부분 동시 체결 풋 스프레드·헤지 롤링 (단독 폭락 베팅 아님)"},
+            {"종목": "SOXS ($48.90)", "핵심 체결": "69C(+2,552, 일중 BTO≥672·STO≥448) | 47C(+573) | 42.5P(+562)", "해석": "단기 69C 양방향 혼재 · 47C/42.5P 소폭 유입"},
+            {"종목": "SOXL ($60.95)", "핵심 체결": "60C 청산(-2,253/-2,304) | 60P(+2,403) | 55P 청산(-4,839) | 11/27 100C BTC≥1,299(-2,819)", "해석": "단기 60C 차익+60P 헤지, 위쪽 100C 매도 저항은 BTC로 일부 해제"},
+        ]
+        st.dataframe(pd.DataFrame(semi_rows), use_container_width=True, hide_index=True)
+        photo_dir = os.path.expanduser("~/.optionhub_tg_photos")
+        photo_list = []
+        if os.path.isdir(photo_dir):
+            photo_list = [os.path.join(photo_dir, x) for x in sorted(os.listdir(photo_dir), reverse=True) if x.endswith(".jpg")][:5]
+        if not photo_list:
+            semi_img_p = os.path.expanduser("~/.optionhub_semi_latest.jpg")
+            if os.path.exists(semi_img_p):
+                photo_list = [semi_img_p]
+        if photo_list:
+            st.markdown(f"**🖼️ 텔레그램 전달 표 갤러리 (최근 {len(photo_list)}장)**")
+            cols_img = st.columns(2)
+            for idx_i, p_img in enumerate(photo_list):
+                with cols_img[idx_i % 2]:
+                    st.image(p_img, use_container_width=True)
 
 
 DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (한국시간 11/12 장전)
@@ -397,29 +422,6 @@ DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (�
 
 🌐 대시보드 바로가기: http://132.226.3.145:8501"""
 
-MENU_ITEMS = [
-    "📝 오늘의 종합평",
-    "🔥 Top Ticker + 차트/P&L",
-    "📊 OI(미결제약정) 수집",
-    "🎯 실발·OI 매집 스캐너",
-    "⭐ 내 관심종목",
-    "🔍 조건별 스캐너",
-    "📆 만기 집중도(OPEX)",
-    "🗓️ 거시·실적 캘린더",
-    "📈 포착 사후 추적",
-    "🔗 멀티 소스 검증",
-    "🚀 Top 10 문샷",
-    "📅 5일 수급 & GEX",
-    "⚡ AI Plays & Note",
-    "📊 Options Top 차트",
-    "🗺️ 히트맵 & 테마",
-    "📰 뉴스 (7선)",
-    "⚡ 무무 실시간 차트",
-    "📌 다음 주·원월 포지션"
-]
-st.sidebar.title("⚙️ OptionHub")
-st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
-nav_menu = st.sidebar.radio("📌 메뉴 이동", MENU_ITEMS, index=0)
 
 
 DAILY_METRICS_BY_DATE = {
