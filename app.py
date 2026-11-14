@@ -262,7 +262,8 @@ MENU_ITEMS = [
     "📰 뉴스 (7선)",
     "⚡ 무무 실시간 차트",
     "📌 다음 주·원월 포지션",
-    "📚 실피 자료실"
+    "📚 실피 자료실",
+    "📂 옵션자료실"
 ]
 st.sidebar.title("⚙️ OptionHub")
 st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
@@ -3117,3 +3118,121 @@ if nav_menu == "📚 실피 자료실":
             if fp_sp and os.path.exists(fp_sp):
                 with open(fp_sp, "rb") as fr:
                     st.download_button(f"📥 {item_sp.get('파일명', '첨부파일')}", fr.read(), file_name=item_sp.get("파일명", "file"), key=f"dl_sp_{item_sp.get('id', idx_sp)}")
+
+
+# ================= TAB: OPTIONS ARCHIVE =================
+if nav_menu == "📂 옵션자료실":
+    st.title("📂 옵션자료실 (GEX · 그릭스 · 옵션 전략 아카이브)")
+    st.caption("옵션 리포트, GEX/HIRO/OI 분석 메모, 전략 파일(PDF·엑셀·이미지) 및 참고 링크를 서버에 영구 저장합니다.")
+
+    OPT_VAULT_PATH = os.path.expanduser("~/.optionhub_options_vault.json")
+    OPT_VAULT_DIR = os.path.expanduser("~/.optionhub_options_files")
+    os.makedirs(OPT_VAULT_DIR, exist_ok=True)
+    default_opt_vault = [
+        {
+            "id": "opt_1",
+            "날짜": "2026-11-14",
+            "카테고리": "GEX/그릭스",
+            "종목": "공통",
+            "제목": "양(+)감마 vs 음(-)감마 장세 딜러 헤징 메커니즘",
+            "내용": "• +GEX 구간 (Zero Gamma 위): 딜러가 상승 시 매도·하락 시 매수로 변동성을 억제하고 Call/Put Wall 사이에 가두는(Pinning) 경향.\n• -GEX 구간 (Zero Gamma 아래): 딜러가 하락 시 매도·상승 시 매수로 추세를 증폭시켜 1σ 이상 급변동 발생 가능.",
+            "링크": ""
+        },
+        {
+            "id": "opt_2",
+            "날짜": "2026-11-14",
+            "카테고리": "OI·Wall 분석",
+            "종목": "SOXL·NVDA",
+            "제목": "Ask/Bid 체결 의도 & BTO vs STO 판별 기준",
+            "내용": "• Ask 체결 + Vol > OI: 신규 매수(BTO) 가능성 높음 (콜이면 강한 상방, 풋이면 강한 하방/헷지).\n• Bid 체결 + 큰 OI 기존 잔고: 매도(STO/커버드콜) 또는 기존 포지션 청산(STC) 가능성 병행 체크.",
+            "링크": ""
+        },
+        {
+            "id": "opt_3",
+            "날짜": "2026-11-14",
+            "카테고리": "0DTE·만기 전략",
+            "종목": "SPX·QQQ",
+            "제목": "OPEX & 0DTE 만기일 체크리스트 (1σ · Max Pain · Flip)",
+            "내용": "1) Spot과 Zero Gamma Flip 거리 확인 → 2) 1D Expected Move(SIG_H / SIG_L) 밴드 설정 → 3) 장 후반 HIRO 방향(양수 마감 시 다음날 상방 우위, 음수 마감 시 하방 경계).",
+            "링크": ""
+        }
+    ]
+    opt_items = load_json_file(OPT_VAULT_PATH, default_opt_vault)
+    if st.session_state.pop("opt_saved_ok", False):
+        st.success("✅ 옵션자료실에 정상 저장되었습니다!")
+
+    with st.expander("➕ 새 옵션 자료 / 메모 / 파일 추가하기", expanded=True):
+        with st.form("opt_add_form", clear_on_submit=True):
+            oc1, oc2, oc3 = st.columns([1.2, 1.0, 2.0])
+            o_cat = oc1.selectbox("카테고리", ["GEX/그릭스", "OI·Wall 분석", "HIRO·다크풀", "스윕·블록", "0DTE·만기 전략", "참고 파일/PDF"])
+            o_tk = oc2.text_input("관련 종목", "공통", placeholder="예: SOXL, NVDA, SPX, 공통").strip().upper() or "공통"
+            o_title = oc3.text_input("제목 (비워두면 내용 첫 줄 자동 입력)", placeholder="예: 11/14 NVDA 150P/200C GEX 구조")
+            o_body = st.text_area("상세 내용 / 메모", height=110, placeholder="GEX·DEX·OI·스윕 분석 내용이나 전략 기준을 입력하세요.")
+            oc4, oc5 = st.columns([1.5, 1.5])
+            o_link = oc4.text_input("참고 URL (선택)", placeholder="https://...")
+            o_file = oc5.file_uploader("파일 첨부 (PDF·이미지·CSV·XLSX 등)", type=None, key="opt_file_up")
+            submitted_o = st.form_submit_button("💾 옵션자료실에 저장", type="primary")
+            if submitted_o:
+                saved_fp = ""
+                saved_fn = ""
+                if o_file is not None:
+                    safe_n = f"{int(time.time())}_{os.path.basename(o_file.name)}"
+                    saved_fp = os.path.join(OPT_VAULT_DIR, safe_n)
+                    with open(saved_fp, "wb") as fw:
+                        fw.write(o_file.getbuffer())
+                    saved_fn = o_file.name
+                auto_t = o_title.strip() or (o_body.strip().splitlines()[0][:50] if o_body.strip() else "") or saved_fn or o_link.strip()
+                if auto_t:
+                    opt_items.insert(0, {
+                        "id": f"op_{int(time.time()*1000)}",
+                        "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
+                        "카테고리": o_cat,
+                        "종목": o_tk,
+                        "제목": auto_t,
+                        "내용": o_body.strip(),
+                        "링크": o_link.strip(),
+                        "파일경로": saved_fp,
+                        "파일명": saved_fn,
+                    })
+                    save_json_file(OPT_VAULT_PATH, opt_items)
+                    st.session_state["opt_saved_ok"] = True
+                    st.rerun()
+                else:
+                    st.warning("제목, 내용, 파일, 또는 링크 중 하나는 입력해 주세요.")
+
+    oc_f1, oc_f2, oc_f3 = st.columns([1.2, 1.2, 2.0])
+    o_cats = ["전체"] + sorted(list({x.get("카테고리", "기타") for x in opt_items}))
+    o_tks = ["전체"] + sorted(list({x.get("종목", "공통") for x in opt_items}))
+    fo_cat = oc_f1.selectbox("카테고리 필터", o_cats, key="op_f_cat")
+    fo_tk = oc_f2.selectbox("종목 필터", o_tks, key="op_f_tk")
+    fo_kw = oc_f3.text_input("🔍 키워드 검색", "", placeholder="제목 또는 내용 검색...", key="op_f_kw").strip().lower()
+
+    filtered_op = []
+    for x in opt_items:
+        if fo_cat != "전체" and x.get("카테고리") != fo_cat:
+            continue
+        if fo_tk != "전체" and x.get("종목") != fo_tk:
+            continue
+        if fo_kw and fo_kw not in (x.get("제목", "") + " " + x.get("내용", "") + " " + x.get("종목", "")).lower():
+            continue
+        filtered_op.append(x)
+
+    st.caption(f"총 {len(filtered_op)}건의 옵션 자료가 표시되고 있습니다.")
+    for idx_op, item_op in enumerate(filtered_op):
+        with st.container(border=True):
+            oh_l, oh_r = st.columns([5, 1])
+            with oh_l:
+                st.markdown(f"**[{item_op.get('카테고리','')}] {item_op.get('제목','')}**  `{item_op.get('종목','')}` · {item_op.get('날짜','')}")
+            with oh_r:
+                if st.button("🗑️ 삭제", key=f"del_op_{item_op.get('id', idx_op)}"):
+                    opt_items = [z for z in opt_items if z.get("id") != item_op.get("id")]
+                    save_json_file(OPT_VAULT_PATH, opt_items)
+                    st.rerun()
+            if item_op.get("내용"):
+                st.markdown(item_op["내용"].replace("\n", "  \n"))
+            if item_op.get("링크"):
+                st.markdown(f"🔗 참고 링크: [{item_op['링크']}]({item_op['링크']})")
+            fp_op = item_op.get("파일경로", "")
+            if fp_op and os.path.exists(fp_op):
+                with open(fp_op, "rb") as fr:
+                    st.download_button(f"📥 {item_op.get('파일명', '첨부파일')}", fr.read(), file_name=item_op.get("파일명", "file"), key=f"dl_op_{item_op.get('id', idx_op)}")
