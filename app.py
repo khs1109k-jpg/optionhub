@@ -211,7 +211,7 @@ st.markdown("""
 <style>
     .main { background-color: #0b0e14; }
     .kpi-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 15px 0; }
-    .kpi-box { background: #131722; border-radius: 4px; padding: 8px 6px; text-align: center; border: 1px solid #232733; flex: 1; min-width: 75px; }
+    .kpi-box { background: #080c14; border-radius: 4px; padding: 8px 6px; text-align: center; border: 1px solid #232733; flex: 1; min-width: 75px; }
     .kpi-title { font-size: 10px; color: #787b86; text-transform: uppercase; margin-bottom: 4px; font-weight: 600; }
     .kpi-value { font-size: 14px; font-weight: 700; color: #ffffff; }
     .kpi-green { color: #00e676 !important; }
@@ -734,6 +734,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
     with sel_c3:
         tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=1, horizontal=True, key="mm_tf")
 
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_opt_snapshot(tk_sym):
+        rows, sp, _ = fetch_yahoo_oi(tk_sym)
+        return rows, sp
+
     # OptionHub GEX Wall + SIG_H/L + DELTA + GEX CALL/PUT + Left Call/Put Bars lookup
     oi_hist_m = load_json_file(OI_PATH, {})
     cw_lv = pw_lv = zg_lv = sig_h_lv = sig_l_lv = delta_lv = gex_c_lv = gex_p_lv = None
@@ -771,8 +776,39 @@ if nav_menu == "⚡ 무무 실시간 차트":
             for k in all_ks:
                 cv = float(grp_c.get(k, 0))
                 pv = float(grp_p.get(k, 0))
-                if cv + pv > 0:
-                    opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 2), "p_m": round(pv, 2)})
+                if cv + pv > 0 and (not spot_m or 0.55 * spot_m <= float(k) <= 1.45 * spot_m):
+                    c_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Call")]["OI"].sum()) if "OI" in df_dm.columns else 0
+                    p_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Put")]["OI"].sum()) if "OI" in df_dm.columns else 0
+                    net_g_k = float(df_dm[df_dm["행사가"] == k]["GEX($M)"].sum()) if "GEX($M)" in df_dm.columns else 0.0
+                    opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 2), "p_m": round(pv, 2), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
+    if not opt_bars:
+        try:
+            y_rows, y_sp = _cached_opt_snapshot(clean_tk)
+            if y_rows:
+                df_yd = pd.DataFrame(y_rows)
+                sp_ref = float(y_sp or cur["px"] or 0)
+                if sp_ref > 0:
+                    df_yd = df_yd[(df_yd["행사가"] >= sp_ref * 0.7) & (df_yd["행사가"] <= sp_ref * 1.3)]
+                if not df_yd.empty:
+                    if cw_lv is None and not df_yd[df_yd["구분"] == "Call"].empty:
+                        cw_lv = float(df_yd[df_yd["구분"] == "Call"].sort_values("OI", ascending=False).iloc[0]["행사가"])
+                    if pw_lv is None and not df_yd[df_yd["구분"] == "Put"].empty:
+                        pw_lv = float(df_yd[df_yd["구분"] == "Put"].sort_values("OI", ascending=False).iloc[0]["행사가"])
+                    if zg_lv is None:
+                        zg_lv = calc_zero_gamma(df_yd, sp_ref)
+                    yc = df_yd[df_yd["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum().abs()
+                    yp = df_yd[df_yd["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum().abs()
+                    yks = sorted(set(yc.index.tolist()) | set(yp.index.tolist()))
+                    ymx = max([float(yc.get(k, 0)) + float(yp.get(k, 0)) for k in yks] + [1e-6])
+                    for k in yks:
+                        cv, pv = float(yc.get(k, 0)), float(yp.get(k, 0))
+                        if cv + pv > 0:
+                            c_oi = int(df_yd[(df_yd["행사가"] == k) & (df_yd["구분"] == "Call")]["OI"].sum())
+                            p_oi = int(df_yd[(df_yd["행사가"] == k) & (df_yd["구분"] == "Put")]["OI"].sum())
+                            net_g_k = float(df_yd[df_yd["행사가"] == k]["GEX($M)"].sum())
+                            opt_bars.append({"p": float(k), "c": round(cv / ymx, 3), "put": round(pv / ymx, 3), "c_m": round(cv, 2), "p_m": round(pv, 2), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
+        except Exception:
+            pass
 
     # Build OHLCV candles: yfinance base (1m/5m/10m/15m/1d) + moomoo live overlay
     tf_map = {
@@ -866,12 +902,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
     m5.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
 
     ov1, ov2, ov3, ov4, ov5, ov6 = st.columns(6)
-    show_vwap = ov1.checkbox("VWAP", value=True)
-    show_bb = ov2.checkbox("볼린저(20,2σ)", value=True)
-    show_ichi = ov3.checkbox("일목균형표", value=True)
-    show_ma = ov4.checkbox("MA20·200", value=True)
-    show_vpvr = ov5.checkbox("매물대(VPVR)", value=True)
-    show_walls = ov6.checkbox("Call/Put·ZG", value=True)
+    show_vwap = ov1.checkbox("VWAP", value=False)
+    show_bb = ov2.checkbox("볼린저(20,2σ)", value=False)
+    show_ichi = ov3.checkbox("구름(일목)", value=True)
+    show_ma = ov4.checkbox("MA20·200", value=False)
+    show_vpvr = ov5.checkbox("매물대·콜풋막대", value=True)
+    show_walls = ov6.checkbox("1σ·Call/Put·γ", value=True)
 
     sub1, sub2, sub3, sub4, sub5, sub6 = st.columns(6)
     show_vol = sub1.checkbox("거래량(Vol)", value=True)
@@ -1021,21 +1057,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
     })
 
     tv_html = f"""
-    <div id="tv_wrap" style="background:#0b0f17; border-radius:8px;">
-    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#0f172a; border:1px solid #2a2e39; border-radius:6px 6px 0 0; padding:6px 10px; font-family:sans-serif; font-size:12px; color:#d1d4dc;">
-      <span style="font-weight:700; color:#38bdf8; margin-right:4px;">🛠️ 그리기:</span>
-      <button class="tv-tool active" data-t="cursor" style="background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;">🖱️ 커서</button>
-      <button class="tv-tool" data-t="brush" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">✏️ 붓</button>
-      <button class="tv-tool" data-t="line" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">📏 추세선</button>
-      <button class="tv-tool" data-t="hline" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">➖ 수평선</button>
-      <button class="tv-tool" data-t="memo" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">📝 메모</button>
-      <input id="tv_color" type="color" value="#f59e0b" style="width:28px;height:24px;border:0;background:none;cursor:pointer;" title="선/붓 색상"/>
-      <button id="tv_undo" style="background:#1e293b;color:#fbbf24;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">↩️ 되돌리기</button>
-      <button id="tv_clear" style="background:#1e293b;color:#f87171;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">🗑️ 전체지우기</button>
-      <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:4px 9px;cursor:pointer;font-weight:700;">⛶ 전체 확대</button>
-      <span id="tv_hint" style="margin-left:auto; color:#94a3b8;">커서 모드: 차트 줌·이동 가능</span>
+    <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden;">
+    <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
+      <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 끌기=이동 · 휠=확대/축소</span>
+      <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 10px;cursor:pointer;font-weight:700;">⛶ 전체화면 확대</button>
     </div>
-    <div style="position:relative; width:100%; background:#131722; border:1px solid #2a2e39; border-top:0; border-radius:0 0 8px 8px; overflow:hidden;">
+    <div style="display:flex; width:100%;">
+      <div style="width:38px; flex-shrink:0; background:#0b101b; border-right:1px solid #1e293b; display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 0; z-index:6;">
+        <button class="tv-tool active" data-t="cursor" title="커서(이동/줌)" style="width:28px;height:28px;background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer;">🖱️</button>
+        <button class="tv-tool" data-t="line" title="추세선" style="width:28px;height:28px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;cursor:pointer;">📏</button>
+        <button class="tv-tool" data-t="hline" title="수평선" style="width:28px;height:28px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;cursor:pointer;">➖</button>
+        <button class="tv-tool" data-t="brush" title="붓 그리기" style="width:28px;height:28px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;cursor:pointer;">✏️</button>
+        <button class="tv-tool" data-t="memo" title="메모 입력" style="width:28px;height:28px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;cursor:pointer;">📝</button>
+        <input id="tv_color" type="color" value="#f59e0b" style="width:26px;height:24px;border:0;background:none;cursor:pointer;" title="색상"/>
+        <button id="tv_undo" title="되돌리기" style="width:28px;height:28px;background:#1e293b;color:#fbbf24;border:1px solid #334155;border-radius:4px;cursor:pointer;">↩️</button>
+        <button id="tv_clear" title="전체지우기" style="width:28px;height:28px;background:#1e293b;color:#f87171;border:1px solid #334155;border-radius:4px;cursor:pointer;">🗑️</button>
+      </div>
+      <div style="position:relative; flex:1; min-width:0; background:#080c14;">
       <div id="tv_main" style="width:100%; height:460px;"></div>
       <div id="tv_hud" style="position:absolute; top:8px; right:76px; z-index:4; background:rgba(15,23,42,0.85); border:1px solid #334155; border-radius:6px; padding:5px 10px; font-family:monospace; font-size:11px; color:#e2e8f0; pointer-events:none;"></div>
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
@@ -1045,6 +1083,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <div id="tv_bii" style="width:100%; height:{130 if show_bii else 0}px; border-top:{'1px solid #2a2e39' if show_bii else '0'};"></div>
       <div id="tv_macd" style="width:100%; height:{130 if show_macd else 0}px; border-top:{'1px solid #2a2e39' if show_macd else '0'};"></div>
       <div id="tv_rsi" style="width:100%; height:{130 if show_rsi else 0}px; border-top:{'1px solid #2a2e39' if show_rsi else '0'};"></div>
+      </div>
+      <canvas id="tv_rail" style="width:86px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
     </div>
     </div>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -1114,6 +1154,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }}
       function drawVpvr() {{
         drawCloud();
+        drawRail();
         const mh = elMain.clientHeight || 460;
         vpCv.width = 160; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
@@ -1140,6 +1181,31 @@ if nav_menu == "⚡ 무무 실시간 차트":
           const w = Math.max(2, b.pct * 115);
           ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.55)" : "rgba(56,189,248,0.35)";
           ctx.fillRect(0, y - 4, w, 8);
+        }});
+      }}
+      function drawRail() {{
+        const rl = document.getElementById("tv_rail");
+        if (!rl) return;
+        const mh = elMain.clientHeight || 460;
+        rl.width = 86; rl.height = mh;
+        const rctx = rl.getContext("2d");
+        rctx.clearRect(0, 0, 86, mh);
+        rctx.fillStyle = "#64748b"; rctx.font = "bold 10px monospace";
+        rctx.fillText("Net γ", 6, 14); rctx.fillText("P/C", 52, 14);
+        rctx.strokeStyle = "#1e293b"; rctx.beginPath(); rctx.moveTo(44, 0); rctx.lineTo(44, mh); rctx.stroke();
+        if (!d.opt_bars || !d.opt_bars.length) return;
+        const maxG = Math.max(...d.opt_bars.map(x => Math.abs(x.net_g || 0)), 0.1);
+        d.opt_bars.forEach(b => {{
+          const y = cs.priceToCoordinate(b.p);
+          if (y === null || y < 20 || y > mh - 8) return;
+          const gw = Math.max(2, Math.round(Math.abs(b.net_g || 0) / maxG * 34));
+          rctx.fillStyle = (b.net_g || 0) >= 0 ? "#10b981" : "#ef4444";
+          rctx.fillRect(6, y - 3, gw, 6);
+          const totOi = Math.max((b.c_oi || 0) + (b.p_oi || 0), 1);
+          const cw2 = Math.round((b.c_oi || 0) / totOi * 32);
+          const pw2 = Math.round((b.p_oi || 0) / totOi * 32);
+          rctx.fillStyle = "#10b981"; rctx.fillRect(48, y - 3, cw2, 6);
+          rctx.fillStyle = "#ef4444"; rctx.fillRect(48 + cw2, y - 3, pw2, 6);
         }});
       }}
 
@@ -1321,55 +1387,65 @@ if nav_menu == "⚡ 무무 실시간 차트":
         st.plotly_chart(fig_icc, use_container_width=True)
 
     # 차트 하단 옵션 체결·레벨 요약 테이블 (TIME / EXP / STRIKE / LEVEL / C/P / B/S / PREM / OI)
-    st.subheader(f"📋 {clean_tk} 옵션 체결 · 주요 레벨 내역")
+    st.subheader(f"📋 {clean_tk} 옵션 분석 표 (GEX → DEX → OI → Vol/OI → Sweep → Premium → Delta/Gamma → DTE)")
     det_lookup = {}
     if clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
         for x_o in oi_hist_m[clean_tk][-1].get("상세", []):
             det_lookup[(str(x_o.get("구분", ""))[0].upper(), float(x_o.get("행사가", 0) or 0))] = x_o
     flow_tbl = []
+    today_dt = pd.Timestamp.now(tz="America/New_York").date()
     for rf in [r for r in all_raw_flows if str(r[1]).upper() == clean_tk][:12]:
         cp_c = str(rf[3])[0].upper()
         try:
             sk_v = float(str(rf[7]).replace("$", "").replace(",", ""))
         except Exception:
             sk_v = 0.0
-        lv_lbl = "-"
-        if cw_lv and abs(sk_v - float(cw_lv)) < 0.01:
-            lv_lbl = "CALL WALL"
-        elif pw_lv and abs(sk_v - float(pw_lv)) < 0.01:
-            lv_lbl = "PUT WALL"
-        elif zg_lv and abs(sk_v - float(zg_lv)) < 0.5:
-            lv_lbl = "GAMMA"
+        lv_lbl = "CALL WALL" if (cw_lv and abs(sk_v - float(cw_lv)) < 0.01) else ("PUT WALL" if (pw_lv and abs(sk_v - float(pw_lv)) < 0.01) else ("GAMMA" if (zg_lv and abs(sk_v - float(zg_lv)) < 0.5) else "-"))
         oi_info = det_lookup.get((cp_c, sk_v), {})
+        oi_v = int(oi_info.get("OI", 0) or 0)
+        vol_v = int(oi_info.get("거래량", 0) or 0)
+        voi_s = f"{vol_v/oi_v:.2f}" if oi_v > 0 else "-"
+        try:
+            dte_v = max(0, (pd.to_datetime(str(rf[5])).date() - today_dt).days)
+        except Exception:
+            dte_v = "-"
         flow_tbl.append({
             "TIME": rf[2],
-            "EXP": str(rf[5])[-5:],
-            "STRIKE": f"${sk_v:g}" if sk_v else str(rf[7]),
+            "STRIKE(C/P)": f"${sk_v:g}{cp_c}" if sk_v else f"{rf[7]}{cp_c}",
             "LEVEL": lv_lbl,
-            "C/P": cp_c,
-            "B/S": "BUY" if "A" in str(rf[4]) else str(rf[4]),
-            "SIDE": "Ask(매수)" if "A" in str(rf[4]) else ("Bid(매도)" if "B" in str(rf[4]) else str(rf[4])),
-            "PREM": rf[14],
-            "Volume": f"{int(oi_info.get('거래량', 0)):,}" if oi_info else "-",
-            "OI": f"{int(oi_info.get('OI', 0)):,}" if oi_info else "-",
-            "NOTE": rf[13],
+            "GEX": f"${oi_info.get('GEX($M)', 0):+.2f}M" if oi_info else "-",
+            "DEX": f"${oi_info.get('DEX($M)', 0):+.2f}M" if oi_info else "-",
+            "OI": f"{oi_v:,}" if oi_info else "-",
+            "Vol/OI": voi_s,
+            "Sweep(Side)": f"{rf[13]} · {'Ask' if 'A' in str(rf[4]) else 'Bid'}",
+            "Premium": rf[14],
+            "Delta/Gamma": f"{oi_info.get('Delta', 0):.2f} / {oi_info.get('Gamma', 0):.4f}" if oi_info else "-",
+            "DTE": f"{dte_v}d ({str(rf[5])[-5:]})" if dte_v != "-" else str(rf[5])[-5:],
         })
     if not flow_tbl and clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
-        top_det = sorted(oi_hist_m[clean_tk][-1].get("상세", []), key=lambda x: x.get("거래량", 0), reverse=True)[:10]
+        top_det = sorted(oi_hist_m[clean_tk][-1].get("상세", []), key=lambda x: abs(float(x.get("GEX($M)", 0) or 0)), reverse=True)[:10]
         for x_o in top_det:
             sk_v = float(x_o.get("행사가", 0) or 0)
+            cp_c = str(x_o.get("구분", "C"))[0].upper()
             lv_lbl = "CALL WALL" if (cw_lv and abs(sk_v - float(cw_lv)) < 0.01) else ("PUT WALL" if (pw_lv and abs(sk_v - float(pw_lv)) < 0.01) else "-")
+            oi_v = int(x_o.get("OI", 0) or 0)
+            vol_v = int(x_o.get("거래량", 0) or 0)
+            try:
+                dte_v = max(0, (pd.to_datetime(str(x_o.get("만기", ""))).date() - today_dt).days)
+            except Exception:
+                dte_v = "-"
             flow_tbl.append({
                 "TIME": oi_hist_m[clean_tk][-1].get("수집시각", "-").split(" ")[-1],
-                "EXP": str(x_o.get("만기", "-"))[-5:],
-                "STRIKE": f"${sk_v:g}",
+                "STRIKE(C/P)": f"${sk_v:g}{cp_c}",
                 "LEVEL": lv_lbl,
-                "C/P": str(x_o.get("구분", "C"))[0].upper(),
-                "B/S": "-",
-                "PREM": f"GEX ${x_o.get('GEX($M)', 0):+.2f}M",
-                "Volume": f"{int(x_o.get('거래량', 0)):,}",
-                "OI": f"{int(x_o.get('OI', 0)):,}",
-                "NOTE": f"IV {x_o.get('IV(%)', 0):.1f}%",
+                "GEX": f"${float(x_o.get('GEX($M)', 0) or 0):+.2f}M",
+                "DEX": f"${float(x_o.get('DEX($M)', 0) or 0):+.2f}M",
+                "OI": f"{oi_v:,}",
+                "Vol/OI": f"{vol_v/oi_v:.2f}" if oi_v > 0 else "-",
+                "Sweep(Side)": "-",
+                "Premium": f"IV {float(x_o.get('IV(%)', 0) or 0):.1f}%",
+                "Delta/Gamma": f"{float(x_o.get('Delta', 0) or 0):.2f} / {float(x_o.get('Gamma', 0) or 0):.4f}",
+                "DTE": f"{dte_v}d ({str(x_o.get('만기', '-'))[-5:]})" if dte_v != "-" else str(x_o.get("만기", "-"))[-5:],
             })
     if flow_tbl:
         st.dataframe(pd.DataFrame(flow_tbl), use_container_width=True, hide_index=True)
