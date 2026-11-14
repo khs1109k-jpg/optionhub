@@ -710,18 +710,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
         except Exception:
             pass
 
+    sel_c1, sel_c2 = st.columns([2, 3])
     if q_map:
         with col_r1:
             st.success(f"🟢 무무 실시간 수신 중 · {len(parsed_q)}종목 · 최근 갱신: {parsed_q[0]['수신시각(KST)']} KST")
-        sel_syn = st.selectbox("📌 종목 선택", list(q_map.keys()), index=0)
+        with sel_c1:
+            sel_syn = st.selectbox("📌 종목 선택", list(q_map.keys()), index=0)
         cur = q_map[sel_syn]
         clean_tk = sel_syn.split(".")[-1].upper()
     else:
         with col_r1:
             st.info("📡 무무 브리지 대기 중 — 기본 야후 실시간 분봉으로 트레이딩뷰 차트를 미리 표시합니다.")
-        clean_tk = st.selectbox("📌 종목 선택", ["NVDA", "SOXL", "SOXS", "TSLA", "MU", "AMD", "SPY", "QQQ"], index=0)
+        with sel_c1:
+            clean_tk = st.selectbox("📌 종목 선택", ["NVDA", "SOXL", "SOXS", "TSLA", "MU", "AMD", "SPY", "QQQ"], index=0)
         sel_syn = f"US.{clean_tk}"
         cur = {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"}
+    with sel_c2:
+        tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=1, horizontal=True, key="mm_tf")
 
     # OptionHub GEX Wall lookup
     oi_hist_m = load_json_file(OI_PATH, {})
@@ -737,12 +742,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
             pw_lv = max(puts_m, key=lambda x: x.get("OI", 0)).get("행사가")
         zg_lv = calc_zero_gamma(det_m, float(snap_m.get("Spot", cur["px"] or 0)))
 
-    # Build OHLCV candles: yfinance 5d 15m base + moomoo bars & live quote_hist overlay
+    # Build OHLCV candles: yfinance base (1m/5m/10m/15m/1d) + moomoo live overlay
+    tf_map = {
+        "1분봉": ("2d", "1m", 60),
+        "5분봉": ("5d", "5m", 300),
+        "10분봉": ("5d", "5m", 600),
+        "15분봉": ("5d", "15m", 900),
+        "1일봉": ("1y", "1d", 86400),
+    }
+    yf_per, yf_int, tf_sec = tf_map.get(tf_opt, ("5d", "5m", 300))
     candles = []
     try:
         import yfinance as yf
-        df_yf = yf.Ticker(clean_tk).history(period="5d", interval="15m")
+        df_yf = yf.Ticker(clean_tk).history(period=yf_per, interval=yf_int)
         if not df_yf.empty:
+            if tf_opt == "10분봉":
+                df_yf = df_yf.resample("10min").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
             for idx_t, r_y in df_yf.iterrows():
                 candles.append({
                     "time": int(idx_t.timestamp()),
@@ -752,7 +767,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     "close": round(float(r_y["Close"]), 2),
                     "volume": float(r_y["Volume"]),
                 })
-            if cur["px"] == 0:
+            if cur["px"] == 0 and candles:
                 cur["px"] = candles[-1]["close"]
     except Exception:
         pass
@@ -783,7 +798,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? ORDER BY ts ASC", (sel_syn,)).fetchall()
             if hist_rows:
                 df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
-                df_h["min_ts"] = (df_h["ts"] // 60).astype(int) * 60
+                df_h["min_ts"] = (df_h["ts"] // tf_sec).astype(int) * tf_sec
                 for m_ts, g in df_h.groupby("min_ts"):
                     candles.append({
                         "time": int(m_ts),
@@ -941,6 +956,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     })
 
     tv_html = f"""
+    <div id="tv_wrap" style="background:#131722; border-radius:8px;">
     <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#131722; border:1px solid #2a2e39; border-radius:6px 6px 0 0; padding:6px 10px; font-family:sans-serif; font-size:12px; color:#d1d4dc;">
       <span style="font-weight:700; color:#38bdf8; margin-right:4px;">🛠️ 그리기:</span>
       <button class="tv-tool active" data-t="cursor" style="background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;">🖱️ 커서</button>
@@ -951,6 +967,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <input id="tv_color" type="color" value="#f59e0b" style="width:28px;height:24px;border:0;background:none;cursor:pointer;" title="선/붓 색상"/>
       <button id="tv_undo" style="background:#1e293b;color:#fbbf24;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">↩️ 되돌리기</button>
       <button id="tv_clear" style="background:#1e293b;color:#f87171;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">🗑️ 전체지우기</button>
+      <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:4px 9px;cursor:pointer;font-weight:700;">⛶ 전체 확대</button>
       <span id="tv_hint" style="margin-left:auto; color:#94a3b8;">커서 모드: 차트 줌·이동 가능</span>
     </div>
     <div style="position:relative; width:100%; background:#131722; border:1px solid #2a2e39; border-top:0; border-radius:0 0 8px 8px; overflow:hidden;">
@@ -960,6 +977,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <div id="tv_cvd" style="width:100%; height:{130 if show_cvd else 0}px; border-top:{'1px solid #2a2e39' if show_cvd else '0'};"></div>
       <div id="tv_macd" style="width:100%; height:{130 if show_macd else 0}px; border-top:{'1px solid #2a2e39' if show_macd else '0'};"></div>
       <div id="tv_rsi" style="width:100%; height:{130 if show_rsi else 0}px; border-top:{'1px solid #2a2e39' if show_rsi else '0'};"></div>
+    </div>
     </div>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
@@ -1126,12 +1144,25 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }};
       window.addEventListener("mouseup", () => {{ if (drawing) {{ drawing = false; curItem = null; saveDraw(); }} }});
       resizeDraw();
-      window.addEventListener("resize", () => {{
-        chart.applyOptions({{ width: elMain.clientWidth }});
+      const fsBtn = document.getElementById("tv_fs");
+      const tvWrap = document.getElementById("tv_wrap");
+      fsBtn.onclick = () => {{
+        if (!document.fullscreenElement) tvWrap.requestFullscreen().catch(() => {{}});
+        else document.exitFullscreen().catch(() => {{}});
+      }};
+      function syncSize() {{
+        const isFs = !!document.fullscreenElement;
+        const mh = isFs ? Math.max(420, window.innerHeight - 60 - (subCharts.length * 130)) : 460;
+        elMain.style.height = mh + "px";
+        vpCv.style.height = mh + "px";
+        drCv.style.height = mh + "px";
+        chart.applyOptions({{ width: elMain.clientWidth, height: mh }});
         subCharts.forEach(sc => sc.applyOptions({{ width: elMain.clientWidth }}));
-        resizeDraw();
+        drCv.width = elMain.clientWidth; drCv.height = mh; redraw();
         drawVpvr();
-      }});
+      }}
+      document.addEventListener("fullscreenchange", syncSize);
+      window.addEventListener("resize", syncSize);
     </script>
     """
     components.html(tv_html, height=total_h)
@@ -1154,6 +1185,63 @@ if nav_menu == "⚡ 무무 실시간 차트":
                               plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc",
                               margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig_icc, use_container_width=True)
+
+    # 차트 하단 옵션 체결·레벨 요약 테이블 (TIME / EXP / STRIKE / LEVEL / C/P / B/S / PREM / OI)
+    st.subheader(f"📋 {clean_tk} 옵션 체결 · 주요 레벨 내역")
+    det_lookup = {}
+    if clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
+        for x_o in oi_hist_m[clean_tk][-1].get("상세", []):
+            det_lookup[(str(x_o.get("구분", ""))[0].upper(), float(x_o.get("행사가", 0) or 0))] = x_o
+    flow_tbl = []
+    if not df.empty and "티커" in df.columns:
+        df_tk_f = df[df["티커"].astype(str).str.upper() == clean_tk].head(12)
+        for _, rf in df_tk_f.iterrows():
+            cp_c = str(rf.get("구분", "C"))[0].upper()
+            try:
+                sk_v = float(str(rf.get("행사가", "0")).replace("$", "").replace(",", ""))
+            except Exception:
+                sk_v = 0.0
+            lv_lbl = "-"
+            if cw_lv and abs(sk_v - float(cw_lv)) < 0.01:
+                lv_lbl = "CALL WALL"
+            elif pw_lv and abs(sk_v - float(pw_lv)) < 0.01:
+                lv_lbl = "PUT WALL"
+            elif zg_lv and abs(sk_v - float(zg_lv)) < 0.5:
+                lv_lbl = "GAMMA"
+            oi_info = det_lookup.get((cp_c, sk_v), {})
+            flow_tbl.append({
+                "TIME": rf.get("발견시각", "-"),
+                "EXP": str(rf.get("만기일", "-"))[-5:],
+                "STRIKE": f"${sk_v:g}" if sk_v else str(rf.get("행사가", "-")),
+                "LEVEL": lv_lbl,
+                "C/P": cp_c,
+                "B/S": "BUY" if "A" in str(rf.get("체결(Side)", "")) else str(rf.get("체결(Side)", "-")),
+                "PREM": rf.get("프리미엄", "-"),
+                "Volume": f"{int(oi_info.get('거래량', 0)):,}" if oi_info else "-",
+                "OI": f"{int(oi_info.get('OI', 0)):,}" if oi_info else "-",
+                "NOTE": rf.get("주문특징", "-"),
+            })
+    if not flow_tbl and clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
+        top_det = sorted(oi_hist_m[clean_tk][-1].get("상세", []), key=lambda x: x.get("거래량", 0), reverse=True)[:10]
+        for x_o in top_det:
+            sk_v = float(x_o.get("행사가", 0) or 0)
+            lv_lbl = "CALL WALL" if (cw_lv and abs(sk_v - float(cw_lv)) < 0.01) else ("PUT WALL" if (pw_lv and abs(sk_v - float(pw_lv)) < 0.01) else "-")
+            flow_tbl.append({
+                "TIME": oi_hist_m[clean_tk][-1].get("수집시각", "-").split(" ")[-1],
+                "EXP": str(x_o.get("만기", "-"))[-5:],
+                "STRIKE": f"${sk_v:g}",
+                "LEVEL": lv_lbl,
+                "C/P": str(x_o.get("구분", "C"))[0].upper(),
+                "B/S": "-",
+                "PREM": f"GEX ${x_o.get('GEX($M)', 0):+.2f}M",
+                "Volume": f"{int(x_o.get('거래량', 0)):,}",
+                "OI": f"{int(x_o.get('OI', 0)):,}",
+                "NOTE": f"IV {x_o.get('IV(%)', 0):.1f}%",
+            })
+    if flow_tbl:
+        st.dataframe(pd.DataFrame(flow_tbl), use_container_width=True, hide_index=True)
+    else:
+        st.caption(f"{clean_tk} 최근 옵션 체결 내역이 아직 없습니다. (OI 수집 탭에서 스냅샷 수집 시 자동 표시됩니다.)")
 
     col_b1, col_b2 = st.columns(2)
     with col_b1:
