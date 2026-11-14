@@ -776,79 +776,354 @@ if nav_menu == "⚡ 무무 실시간 차트":
     m3.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
     m4.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
 
-    chk1, chk2, chk3 = st.columns(3)
-    show_vwap = chk1.checkbox("VWAP 표시", value=True)
-    show_bb = chk2.checkbox("볼린저 밴드 (20, 2σ)", value=True)
-    show_walls = chk3.checkbox("옵션 Call/Put Wall · ZG", value=True)
+    ov1, ov2, ov3, ov4, ov5, ov6 = st.columns(6)
+    show_vwap = ov1.checkbox("VWAP", value=True)
+    show_bb = ov2.checkbox("볼린저(20,2σ)", value=True)
+    show_ichi = ov3.checkbox("일목균형표", value=True)
+    show_ma = ov4.checkbox("MA20·200", value=True)
+    show_vpvr = ov5.checkbox("매물대(VPVR)", value=True)
+    show_walls = ov6.checkbox("Call/Put·ZG", value=True)
 
-    # Compute VWAP & BB lines
+    sub1, sub2, sub3, sub4, sub5 = st.columns(5)
+    show_vol = sub1.checkbox("거래량(Vol)", value=True)
+    show_cvd = sub2.checkbox("CVD(누적델타)", value=True)
+    show_macd = sub3.checkbox("MACD(12,26,9)", value=True)
+    show_rsi = sub4.checkbox("RSI(14)", value=False)
+    show_icc = sub5.checkbox("역시계곡선(20)", value=True)
+
     vwap_pts, bb_up_pts, bb_dn_pts, vol_pts = [], [], [], []
+    ma20_pts, ma200_pts = [], []
+    tenkan_pts, kijun_pts, span_a_pts, span_b_pts, chikou_pts = [], [], [], [], []
+    cvd_pts, macd_pts, macd_sig_pts, macd_hist_pts, rsi_pts = [], [], [], [], []
+    vpvr_bins = []
+    icc_df = pd.DataFrame()
+
     if candles:
         df_c = pd.DataFrame(candles)
         tp = (df_c["high"] + df_c["low"] + df_c["close"]) / 3.0
-        cum_v = df_c["volume"].replace(0, 1).cumsum()
-        df_c["vwap"] = (tp * df_c["volume"].replace(0, 1)).cumsum() / cum_v
+        v_safe = df_c["volume"].replace(0, 1)
+        df_c["vwap"] = (tp * v_safe).cumsum() / v_safe.cumsum()
         df_c["ma20"] = df_c["close"].rolling(20).mean()
         df_c["std20"] = df_c["close"].rolling(20).std()
+        df_c["ma200"] = df_c["close"].rolling(min(200, max(30, len(df_c)//2))).mean()
+
+        # 일목균형표 (9, 26, 52)
+        h9 = df_c["high"].rolling(9).max(); l9 = df_c["low"].rolling(9).min()
+        h26 = df_c["high"].rolling(26).max(); l26 = df_c["low"].rolling(26).min()
+        h52 = df_c["high"].rolling(52).max(); l52 = df_c["low"].rolling(52).min()
+        df_c["tenkan"] = (h9 + l9) / 2.0
+        df_c["kijun"] = (h26 + l26) / 2.0
+        df_c["span_a"] = ((df_c["tenkan"] + df_c["kijun"]) / 2.0).shift(26)
+        df_c["span_b"] = ((h52 + l52) / 2.0).shift(26)
+        df_c["chikou"] = df_c["close"].shift(-26)
+
+        # CVD (캔들 내 매수/매도 압력 추정 델타 누적)
+        rng_hl = (df_c["high"] - df_c["low"]).replace(0, 1e-6)
+        bar_delta = df_c["volume"] * ((2.0 * df_c["close"] - df_c["high"] - df_c["low"]) / rng_hl)
+        df_c["cvd"] = bar_delta.cumsum()
+
+        # MACD (12, 26, 9)
+        ema12 = df_c["close"].ewm(span=12, adjust=False).mean()
+        ema26 = df_c["close"].ewm(span=26, adjust=False).mean()
+        df_c["macd"] = ema12 - ema26
+        df_c["macd_sig"] = df_c["macd"].ewm(span=9, adjust=False).mean()
+        df_c["macd_hist"] = df_c["macd"] - df_c["macd_sig"]
+
+        # RSI (14)
+        diff_c = df_c["close"].diff()
+        gain = diff_c.clip(lower=0).rolling(14).mean()
+        loss = (-diff_c.clip(upper=0)).rolling(14).mean().replace(0, 1e-6)
+        df_c["rsi"] = 100.0 - (100.0 / (1.0 + gain / loss))
+
+        # 역시계곡선 (20봉 종가 MA vs 거래량 MA)
+        df_c["vol_ma20"] = df_c["volume"].rolling(20).mean()
+        icc_df = df_c.dropna(subset=["ma20", "vol_ma20"]).tail(40).copy()
+
+        # VPVR (매물대 24구간)
+        p_min, p_max = float(df_c["low"].min()), float(df_c["high"].max())
+        if p_max > p_min:
+            bins = 24
+            step = (p_max - p_min) / bins
+            v_arr = [0.0] * bins
+            for _, rc in df_c.iterrows():
+                idx_b = min(bins - 1, max(0, int((float(rc["close"]) - p_min) / step)))
+                v_arr[idx_b] += float(rc["volume"])
+            v_mx = max(v_arr) or 1.0
+            for bi in range(bins):
+                vpvr_bins.append({"p": round(p_min + (bi + 0.5) * step, 2), "pct": round(v_arr[bi] / v_mx, 3)})
+
         for _, r_c in df_c.iterrows():
             t_i = int(r_c["time"])
             is_up = r_c["close"] >= r_c["open"]
-            vol_pts.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.45)" if is_up else "rgba(239,83,80,0.45)"})
+            vol_pts.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
             vwap_pts.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
+            cvd_pts.append({"time": t_i, "value": round(float(r_c["cvd"]), 1)})
+            macd_pts.append({"time": t_i, "value": round(float(r_c["macd"]), 3)})
+            macd_sig_pts.append({"time": t_i, "value": round(float(r_c["macd_sig"]), 3)})
+            mh = float(r_c["macd_hist"])
+            macd_hist_pts.append({"time": t_i, "value": round(mh, 3), "color": "rgba(16,185,129,0.65)" if mh >= 0 else "rgba(239,68,68,0.65)"})
+            if pd.notna(r_c["ma20"]):
+                ma20_pts.append({"time": t_i, "value": round(float(r_c["ma20"]), 2)})
+            if pd.notna(r_c["ma200"]):
+                ma200_pts.append({"time": t_i, "value": round(float(r_c["ma200"]), 2)})
             if pd.notna(r_c["ma20"]) and pd.notna(r_c["std20"]):
                 bb_up_pts.append({"time": t_i, "value": round(float(r_c["ma20"] + 2 * r_c["std20"]), 2)})
                 bb_dn_pts.append({"time": t_i, "value": round(float(r_c["ma20"] - 2 * r_c["std20"]), 2)})
+            if pd.notna(r_c["tenkan"]):
+                tenkan_pts.append({"time": t_i, "value": round(float(r_c["tenkan"]), 2)})
+            if pd.notna(r_c["kijun"]):
+                kijun_pts.append({"time": t_i, "value": round(float(r_c["kijun"]), 2)})
+            if pd.notna(r_c["span_a"]):
+                span_a_pts.append({"time": t_i, "value": round(float(r_c["span_a"]), 2)})
+            if pd.notna(r_c["span_b"]):
+                span_b_pts.append({"time": t_i, "value": round(float(r_c["span_b"]), 2)})
+            if pd.notna(r_c["chikou"]):
+                chikou_pts.append({"time": t_i, "value": round(float(r_c["chikou"]), 2)})
+            if pd.notna(r_c["rsi"]):
+                rsi_pts.append({"time": t_i, "value": round(float(r_c["rsi"]), 2)})
+
+    pane_cnt = int(show_cvd) + int(show_macd) + int(show_rsi)
+    total_h = 520 + pane_cnt * 135
 
     tv_payload = json.dumps({
+        "tk": clean_tk,
         "candles": [{k: c[k] for k in ("time", "open", "high", "low", "close")} for c in candles],
-        "volumes": vol_pts,
+        "volumes": vol_pts if show_vol else [],
         "vwap": vwap_pts if show_vwap else [],
         "bb_up": bb_up_pts if show_bb else [],
         "bb_dn": bb_dn_pts if show_bb else [],
+        "ma20": ma20_pts if show_ma else [],
+        "ma200": ma200_pts if show_ma else [],
+        "tenkan": tenkan_pts if show_ichi else [],
+        "kijun": kijun_pts if show_ichi else [],
+        "span_a": span_a_pts if show_ichi else [],
+        "span_b": span_b_pts if show_ichi else [],
+        "chikou": chikou_pts if show_ichi else [],
+        "vpvr": vpvr_bins if show_vpvr else [],
+        "cvd": cvd_pts if show_cvd else [],
+        "macd": macd_pts if show_macd else [],
+        "macd_sig": macd_sig_pts if show_macd else [],
+        "macd_hist": macd_hist_pts if show_macd else [],
+        "rsi": rsi_pts if show_rsi else [],
         "cw": cw_lv if show_walls else None,
         "pw": pw_lv if show_walls else None,
         "zg": zg_lv if show_walls else None,
     })
 
     tv_html = f"""
-    <div id="tv_chart_box" style="width:100%; height:540px; background:#131722; border-radius:8px; border:1px solid #2a2e39;"></div>
+    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#131722; border:1px solid #2a2e39; border-radius:6px 6px 0 0; padding:6px 10px; font-family:sans-serif; font-size:12px; color:#d1d4dc;">
+      <span style="font-weight:700; color:#38bdf8; margin-right:4px;">🛠️ 그리기:</span>
+      <button class="tv-tool active" data-t="cursor" style="background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;">🖱️ 커서</button>
+      <button class="tv-tool" data-t="brush" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">✏️ 붓</button>
+      <button class="tv-tool" data-t="line" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">📏 추세선</button>
+      <button class="tv-tool" data-t="hline" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">➖ 수평선</button>
+      <button class="tv-tool" data-t="memo" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">📝 메모</button>
+      <input id="tv_color" type="color" value="#f59e0b" style="width:28px;height:24px;border:0;background:none;cursor:pointer;" title="선/붓 색상"/>
+      <button id="tv_undo" style="background:#1e293b;color:#fbbf24;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">↩️ 되돌리기</button>
+      <button id="tv_clear" style="background:#1e293b;color:#f87171;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">🗑️ 전체지우기</button>
+      <span id="tv_hint" style="margin-left:auto; color:#94a3b8;">커서 모드: 차트 줌·이동 가능</span>
+    </div>
+    <div style="position:relative; width:100%; background:#131722; border:1px solid #2a2e39; border-top:0; border-radius:0 0 8px 8px; overflow:hidden;">
+      <div id="tv_main" style="width:100%; height:460px;"></div>
+      <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:130px; height:460px; pointer-events:none; z-index:2;"></canvas>
+      <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
+      <div id="tv_cvd" style="width:100%; height:{130 if show_cvd else 0}px; border-top:{'1px solid #2a2e39' if show_cvd else '0'};"></div>
+      <div id="tv_macd" style="width:100%; height:{130 if show_macd else 0}px; border-top:{'1px solid #2a2e39' if show_macd else '0'};"></div>
+      <div id="tv_rsi" style="width:100%; height:{130 if show_rsi else 0}px; border-top:{'1px solid #2a2e39' if show_rsi else '0'};"></div>
+    </div>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
       const d = {tv_payload};
-      const el = document.getElementById("tv_chart_box");
-      const chart = LightweightCharts.createChart(el, {{
+      const baseOpt = {{
         layout: {{ background: {{ color: "#131722" }}, textColor: "#d1d4dc" }},
-        grid: {{ vertLines: {{ color: "rgba(42,46,57,0.4)" }}, horzLines: {{ color: "rgba(42,46,57,0.4)" }} }},
+        grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-        rightPriceScale: {{ borderColor: "#2a2e39" }},
+        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 68 }},
         timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false }},
-      }});
-      const cs = chart.addCandlestickSeries({{
-        upColor: "#26a69a", downColor: "#ef5350",
-        borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350"
-      }});
+      }};
+      const elMain = document.getElementById("tv_main");
+      const chart = LightweightCharts.createChart(elMain, baseOpt);
+      const cs = chart.addCandlestickSeries({{ upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350" }});
       cs.setData(d.candles);
-      const vs = chart.addHistogramSeries({{ priceFormat: {{ type: "volume" }}, priceScaleId: "" }});
-      vs.priceScale().applyOptions({{ scaleMargins: {{ top: 0.8, bottom: 0 }} }});
-      vs.setData(d.volumes);
-      if (d.vwap.length) {{
-        const l1 = chart.addLineSeries({{ color: "#38bdf8", lineWidth: 2, title: "VWAP" }});
-        l1.setData(d.vwap);
+      if (d.volumes.length) {{
+        const vs = chart.addHistogramSeries({{ priceFormat:{{type:"volume"}}, priceScaleId:"" }});
+        vs.priceScale().applyOptions({{ scaleMargins:{{ top:0.82, bottom:0 }} }});
+        vs.setData(d.volumes);
       }}
+      if (d.vwap.length) chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, title:"VWAP" }}).setData(d.vwap);
+      if (d.ma20.length) chart.addLineSeries({{ color:"#22c55e", lineWidth:1, title:"MA20" }}).setData(d.ma20);
+      if (d.ma200.length) chart.addLineSeries({{ color:"#eab308", lineWidth:2, title:"MA200" }}).setData(d.ma200);
       if (d.bb_up.length) {{
-        const u1 = chart.addLineSeries({{ color: "rgba(168,85,247,0.7)", lineWidth: 1, lineStyle: 2, title: "BB+" }});
-        const d1 = chart.addLineSeries({{ color: "rgba(168,85,247,0.7)", lineWidth: 1, lineStyle: 2, title: "BB-" }});
-        u1.setData(d.bb_up);
-        d1.setData(d.bb_dn);
+        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, title:"BB+" }}).setData(d.bb_up);
+        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, title:"BB-" }}).setData(d.bb_dn);
       }}
-      if (d.cw) cs.createPriceLine({{ price: d.cw, color: "#10b981", lineWidth: 2, lineStyle: 2, title: "Call Wall" }});
-      if (d.pw) cs.createPriceLine({{ price: d.pw, color: "#ef4444", lineWidth: 2, lineStyle: 2, title: "Put Wall" }});
-      if (d.zg) cs.createPriceLine({{ price: d.zg, color: "#f59e0b", lineWidth: 2, lineStyle: 1, title: "Zero Gamma" }});
+      if (d.tenkan.length) {{
+        chart.addLineSeries({{ color:"#ef4444", lineWidth:1, title:"전환선" }}).setData(d.tenkan);
+        chart.addLineSeries({{ color:"#3b82f6", lineWidth:1, title:"기준선" }}).setData(d.kijun);
+        chart.addLineSeries({{ color:"rgba(16,185,129,0.55)", lineWidth:1, title:"선행A" }}).setData(d.span_a);
+        chart.addLineSeries({{ color:"rgba(239,68,68,0.55)", lineWidth:1, title:"선행B" }}).setData(d.span_b);
+        chart.addLineSeries({{ color:"rgba(148,163,184,0.6)", lineWidth:1, lineStyle:2, title:"후행" }}).setData(d.chikou);
+      }}
+      if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"Call Wall" }});
+      if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"Put Wall" }});
+      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"Zero Gamma" }});
+
+      // VPVR 좌측 매물대 그리기
+      const vpCv = document.getElementById("tv_vpvr");
+      function drawVpvr() {{
+        vpCv.width = 130; vpCv.height = 460;
+        const ctx = vpCv.getContext("2d");
+        ctx.clearRect(0, 0, 130, 460);
+        if (!d.vpvr.length) return;
+        d.vpvr.forEach(b => {{
+          const y = cs.priceToCoordinate(b.p);
+          if (y === null || y < 0 || y > 460) return;
+          const w = Math.max(2, b.pct * 115);
+          ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.55)" : "rgba(56,189,248,0.35)";
+          ctx.fillRect(0, y - 4, w, 8);
+        }});
+      }}
+
+      // 보조지표 차트 동기화
+      const subCharts = [];
+      if (d.cvd.length) {{
+        const cCvd = LightweightCharts.createChart(document.getElementById("tv_cvd"), baseOpt);
+        const sCvd = cCvd.addAreaSeries({{ lineColor:"#38bdf8", topColor:"rgba(56,189,248,0.3)", bottomColor:"rgba(56,189,248,0.02)", lineWidth:2, title:"CVD" }});
+        sCvd.setData(d.cvd);
+        subCharts.push(cCvd);
+      }}
+      if (d.macd.length) {{
+        const cMacd = LightweightCharts.createChart(document.getElementById("tv_macd"), baseOpt);
+        cMacd.addHistogramSeries({{ title:"MACD Hist" }}).setData(d.macd_hist);
+        cMacd.addLineSeries({{ color:"#38bdf8", lineWidth:1.5, title:"MACD" }}).setData(d.macd);
+        cMacd.addLineSeries({{ color:"#f59e0b", lineWidth:1.5, title:"Signal" }}).setData(d.macd_sig);
+        subCharts.push(cMacd);
+      }}
+      if (d.rsi.length) {{
+        const cRsi = LightweightCharts.createChart(document.getElementById("tv_rsi"), baseOpt);
+        const sRsi = cRsi.addLineSeries({{ color:"#a855f7", lineWidth:2, title:"RSI(14)" }});
+        sRsi.setData(d.rsi);
+        sRsi.createPriceLine({{ price:70, color:"rgba(239,68,68,0.6)", lineStyle:2, title:"70" }});
+        sRsi.createPriceLine({{ price:30, color:"rgba(16,185,129,0.6)", lineStyle:2, title:"30" }});
+        subCharts.push(cRsi);
+      }}
       chart.timeScale().fitContent();
-      window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWidth }}));
+      subCharts.forEach(sc => sc.timeScale().fitContent());
+      chart.timeScale().subscribeVisibleLogicalRangeChange(r => {{
+        if (r) subCharts.forEach(sc => sc.timeScale().setVisibleLogicalRange(r));
+        drawVpvr();
+      }});
+      setTimeout(drawVpvr, 250);
+
+      // 그리기 도구 (붓 / 추세선 / 수평선 / 메모) + localStorage 저장
+      const drCv = document.getElementById("tv_draw");
+      const drCtx = drCv.getContext("2d");
+      const storeKey = "optionhub_draw_" + d.tk;
+      let items = [];
+      try {{ items = JSON.parse(localStorage.getItem(storeKey) || "[]"); }} catch(e) {{}}
+      let tool = "cursor", drawing = false, curItem = null;
+
+      function resizeDraw() {{
+        drCv.width = elMain.clientWidth; drCv.height = 460;
+        redraw();
+      }}
+      function redraw() {{
+        drCtx.clearRect(0, 0, drCv.width, drCv.height);
+        items.forEach(it => {{
+          drCtx.strokeStyle = it.color || "#f59e0b";
+          drCtx.fillStyle = it.color || "#f59e0b";
+          drCtx.lineWidth = 2;
+          if (it.type === "brush" && it.pts.length > 1) {{
+            drCtx.beginPath();
+            drCtx.moveTo(it.pts[0][0], it.pts[0][1]);
+            for (let i=1; i<it.pts.length; i++) drCtx.lineTo(it.pts[i][0], it.pts[i][1]);
+            drCtx.stroke();
+          }} else if (it.type === "line") {{
+            drCtx.beginPath(); drCtx.moveTo(it.x1, it.y1); drCtx.lineTo(it.x2, it.y2); drCtx.stroke();
+          }} else if (it.type === "hline") {{
+            drCtx.setLineDash([5, 4]);
+            drCtx.beginPath(); drCtx.moveTo(0, it.y); drCtx.lineTo(drCv.width, it.y); drCtx.stroke();
+            drCtx.setLineDash([]);
+          }} else if (it.type === "memo") {{
+            drCtx.font = "bold 12px sans-serif";
+            const w = drCtx.measureText(it.text).width + 12;
+            drCtx.fillStyle = "rgba(15,23,42,0.85)";
+            drCtx.fillRect(it.x, it.y - 16, w, 22);
+            drCtx.strokeRect(it.x, it.y - 16, w, 22);
+            drCtx.fillStyle = it.color || "#f59e0b";
+            drCtx.fillText(it.text, it.x + 6, it.y);
+          }}
+        }});
+      }}
+      function saveDraw() {{ try {{ localStorage.setItem(storeKey, JSON.stringify(items)); }} catch(e) {{}} }}
+
+      document.querySelectorAll(".tv-tool").forEach(btn => {{
+        btn.onclick = () => {{
+          tool = btn.dataset.t;
+          document.querySelectorAll(".tv-tool").forEach(b => {{
+            b.style.background = b === btn ? "#2563eb" : "#1e293b";
+            b.style.color = b === btn ? "#fff" : "#e2e8f0";
+          }});
+          drCv.style.pointerEvents = tool === "cursor" ? "none" : "auto";
+          drCv.style.cursor = tool === "cursor" ? "default" : "crosshair";
+          const hints = {{cursor:"커서 모드: 차트 줌·이동 가능", brush:"드래그로 자유롭게 그리기", line:"시작점→끝점 드래그로 추세선", hline:"클릭 위치에 수평선 긋기", memo:"클릭 위치에 메모 입력"}};
+          document.getElementById("tv_hint").textContent = hints[tool] || "";
+        }};
+      }});
+      document.getElementById("tv_undo").onclick = () => {{ items.pop(); saveDraw(); redraw(); }};
+      document.getElementById("tv_clear").onclick = () => {{ items = []; saveDraw(); redraw(); }};
+
+      drCv.onmousedown = e => {{
+        const r = drCv.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top, col = document.getElementById("tv_color").value;
+        if (tool === "hline") {{ items.push({{type:"hline", y, color:col}}); saveDraw(); redraw(); return; }}
+        if (tool === "memo") {{
+          const txt = prompt("차트 메모 입력:");
+          if (txt) {{ items.push({{type:"memo", x, y, text:txt, color:col}}); saveDraw(); redraw(); }}
+          return;
+        }}
+        drawing = true;
+        curItem = tool === "brush" ? {{type:"brush", pts:[[x,y]], color:col}} : {{type:"line", x1:x, y1:y, x2:x, y2:y, color:col}};
+        items.push(curItem);
+      }};
+      drCv.onmousemove = e => {{
+        if (!drawing || !curItem) return;
+        const r = drCv.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top;
+        if (curItem.type === "brush") curItem.pts.push([x,y]);
+        else {{ curItem.x2 = x; curItem.y2 = y; }}
+        redraw();
+      }};
+      window.addEventListener("mouseup", () => {{ if (drawing) {{ drawing = false; curItem = null; saveDraw(); }} }});
+      resizeDraw();
+      window.addEventListener("resize", () => {{
+        chart.applyOptions({{ width: elMain.clientWidth }});
+        subCharts.forEach(sc => sc.applyOptions({{ width: elMain.clientWidth }}));
+        resizeDraw();
+        drawVpvr();
+      }});
     </script>
     """
-    components.html(tv_html, height=555)
+    components.html(tv_html, height=total_h)
+
+    if show_icc and not icc_df.empty:
+        st.subheader("🔄 역시계곡선 (Inverse Clock Curve · 20봉 거래량-가격 순환)")
+        fig_icc = go.Figure()
+        fig_icc.add_trace(go.Scatter(
+            x=icc_df["vol_ma20"], y=icc_df["ma20"], mode="lines+markers",
+            line=dict(color="#38bdf8", width=2),
+            marker=dict(size=6, color=list(range(len(icc_df))), colorscale="Viridis"),
+            name="순환 궤적"
+        ))
+        fig_icc.add_trace(go.Scatter(
+            x=[icc_df["vol_ma20"].iloc[-1]], y=[icc_df["ma20"].iloc[-1]],
+            mode="markers+text", text=["현재"], textposition="top center",
+            marker=dict(size=12, color="#f59e0b", symbol="star"), name="현재 위치"
+        ))
+        fig_icc.update_layout(height=300, xaxis_title="거래량 20봉 평균", yaxis_title="종가 20봉 평균 ($)",
+                              plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc",
+                              margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig_icc, use_container_width=True)
 
     col_b1, col_b2 = st.columns(2)
     with col_b1:
