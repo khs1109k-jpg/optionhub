@@ -411,7 +411,9 @@ MENU_ITEMS = [
     "⚡ AI Plays & Note",
     "📊 Options Top 차트",
     "🗺️ 히트맵 & 테마",
-    "📰 뉴스 (7선)"
+    "📰 뉴스 (7선)",
+    "⚡ 무무 실시간 차트",
+    "📌 다음 주·원월 포지션"
 ]
 st.sidebar.title("⚙️ OptionHub")
 st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
@@ -625,6 +627,376 @@ if st.sidebar.button("🚀 오늘의 대형체결·문샷·뉴스 전체 전송"
 
 
 # ================= TAB 0: TODAY COMPREHENSIVE REVIEW =================
+
+# ================= TAB MOOMOO: REALTIME CHART & ORDERBOOK =================
+if nav_menu == "⚡ 무무 실시간 차트":
+    import sqlite3
+    import streamlit.components.v1 as components
+
+    st.title("⚡ 무무(Moomoo) 트레이딩뷰 실시간 차트")
+    st.caption("TradingView Lightweight Charts 엔진 기반 · 무무 실시간 시세 + VWAP·볼린저밴드 + 옵션 Call/Put Wall·Zero Gamma")
+
+    db_path = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+    col_r1, col_r2 = st.columns([3, 1])
+    with col_r2:
+        if st.button("🔄 실시간 새로고침", use_container_width=True):
+            st.rerun()
+
+    con = None
+    q_map = {}
+    parsed_q = []
+    if os.path.exists(db_path):
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            q_rows = con.execute("SELECT syn, ts, data FROM quotes ORDER BY ts DESC").fetchall()
+            for syn, ts_val, d_txt in q_rows:
+                try:
+                    d = json.loads(d_txt) if d_txt else {}
+                except Exception:
+                    d = {}
+                px = d.get("last_price") or d.get("px") or d.get("price") or 0
+                prev_c = d.get("prev_close_price") or d.get("prev_close") or 0
+                chg = d.get("change_rate") or d.get("chg_pct")
+                if chg is None and px and prev_c:
+                    chg = round((float(px) - float(prev_c)) / float(prev_c) * 100, 2)
+                vol = d.get("volume") or d.get("vol") or 0
+                t_kst = pd.to_datetime(ts_val, unit="s", utc=True).tz_convert("Asia/Seoul").strftime("%m-%d %H:%M:%S")
+                q_map[syn] = {"px": float(px or 0), "chg": chg, "vol": float(vol or 0), "t": t_kst, "raw": d}
+                parsed_q.append({
+                    "종목": syn,
+                    "현재가($)": round(float(px or 0), 2),
+                    "등락률(%)": round(float(chg), 2) if chg is not None else None,
+                    "거래량": int(float(vol or 0)),
+                    "수신시각(KST)": t_kst,
+                })
+        except Exception:
+            pass
+
+    if q_map:
+        with col_r1:
+            st.success(f"🟢 무무 실시간 수신 중 · {len(parsed_q)}종목 · 최근 갱신: {parsed_q[0]['수신시각(KST)']} KST")
+        sel_syn = st.selectbox("📌 종목 선택", list(q_map.keys()), index=0)
+        cur = q_map[sel_syn]
+        clean_tk = sel_syn.split(".")[-1].upper()
+    else:
+        with col_r1:
+            st.info("📡 무무 브리지 대기 중 — 기본 야후 실시간 분봉으로 트레이딩뷰 차트를 미리 표시합니다.")
+        clean_tk = st.selectbox("📌 종목 선택", ["NVDA", "SOXL", "SOXS", "TSLA", "MU", "AMD", "SPY", "QQQ"], index=0)
+        sel_syn = f"US.{clean_tk}"
+        cur = {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"}
+
+    # OptionHub GEX Wall lookup
+    oi_hist_m = load_json_file(OI_PATH, {})
+    cw_lv = pw_lv = zg_lv = None
+    if clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
+        snap_m = oi_hist_m[clean_tk][-1]
+        det_m = snap_m.get("상세", [])
+        calls_m = [x for x in det_m if x.get("구분") == "Call"]
+        puts_m = [x for x in det_m if x.get("구분") == "Put"]
+        if calls_m:
+            cw_lv = max(calls_m, key=lambda x: x.get("OI", 0)).get("행사가")
+        if puts_m:
+            pw_lv = max(puts_m, key=lambda x: x.get("OI", 0)).get("행사가")
+        zg_lv = calc_zero_gamma(det_m, float(snap_m.get("Spot", cur["px"] or 0)))
+
+    # Build OHLCV candles from moomoo bars -> quote_hist -> yfinance fallback
+    candles = []
+    aux_map = {}
+    if con is not None:
+        try:
+            for k_a, d_a in con.execute("SELECT kind, data FROM aux WHERE syn=?", (sel_syn,)).fetchall():
+                try:
+                    aux_map[k_a] = json.loads(d_a)
+                except Exception:
+                    pass
+            bars_data = aux_map.get("bars")
+            if isinstance(bars_data, dict):
+                bars_data = bars_data.get("bars") or bars_data.get("data") or bars_data.get("items")
+            if isinstance(bars_data, list) and len(bars_data) >= 5 and isinstance(bars_data[0], dict):
+                for b in bars_data:
+                    t_raw = b.get("time_key") or b.get("time") or b.get("ts") or b.get("t")
+                    ts_sec = int(pd.Timestamp(t_raw).timestamp()) if isinstance(t_raw, str) else int(float(t_raw))
+                    candles.append({
+                        "time": ts_sec,
+                        "open": float(b.get("open", b.get("o", 0))),
+                        "high": float(b.get("high", b.get("h", 0))),
+                        "low": float(b.get("low", b.get("l", 0))),
+                        "close": float(b.get("close", b.get("c", 0))),
+                        "volume": float(b.get("volume", b.get("vol", b.get("v", 0))) or 0),
+                    })
+            if len(candles) < 5:
+                hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE syn=? ORDER BY ts ASC", (sel_syn,)).fetchall()
+                if len(hist_rows) >= 5:
+                    df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
+                    df_h["min_ts"] = (df_h["ts"] // 60).astype(int) * 60
+                    for m_ts, g in df_h.groupby("min_ts"):
+                        candles.append({
+                            "time": int(m_ts),
+                            "open": float(g["px"].iloc[0]),
+                            "high": float(g["px"].max()),
+                            "low": float(g["px"].min()),
+                            "close": float(g["px"].iloc[-1]),
+                            "volume": float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0)),
+                        })
+        except Exception:
+            pass
+
+    if len(candles) < 5:
+        try:
+            import yfinance as yf
+            df_yf = yf.Ticker(clean_tk).history(period="5d", interval="15m")
+            if not df_yf.empty:
+                for idx_t, r_y in df_yf.iterrows():
+                    candles.append({
+                        "time": int(idx_t.timestamp()),
+                        "open": round(float(r_y["Open"]), 2),
+                        "high": round(float(r_y["High"]), 2),
+                        "low": round(float(r_y["Low"]), 2),
+                        "close": round(float(r_y["Close"]), 2),
+                        "volume": float(r_y["Volume"]),
+                    })
+                if cur["px"] == 0:
+                    cur["px"] = candles[-1]["close"]
+        except Exception:
+            pass
+
+    # Deduplicate & sort candles strictly ascending by time
+    c_dict = {c["time"]: c for c in candles if c["close"] > 0}
+    candles = [c_dict[k] for k in sorted(c_dict.keys())]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("현재가", f"${cur['px']:,.2f}" if cur["px"] else "-", f"{cur['chg']:+.2f}%" if cur["chg"] is not None else None)
+    m2.metric("당일 거래량", f"{int(cur['vol']):,}" if cur["vol"] else "-")
+    m3.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
+    m4.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
+
+    chk1, chk2, chk3 = st.columns(3)
+    show_vwap = chk1.checkbox("VWAP 표시", value=True)
+    show_bb = chk2.checkbox("볼린저 밴드 (20, 2σ)", value=True)
+    show_walls = chk3.checkbox("옵션 Call/Put Wall · ZG", value=True)
+
+    # Compute VWAP & BB lines
+    vwap_pts, bb_up_pts, bb_dn_pts, vol_pts = [], [], [], []
+    if candles:
+        df_c = pd.DataFrame(candles)
+        tp = (df_c["high"] + df_c["low"] + df_c["close"]) / 3.0
+        cum_v = df_c["volume"].replace(0, 1).cumsum()
+        df_c["vwap"] = (tp * df_c["volume"].replace(0, 1)).cumsum() / cum_v
+        df_c["ma20"] = df_c["close"].rolling(20).mean()
+        df_c["std20"] = df_c["close"].rolling(20).std()
+        for _, r_c in df_c.iterrows():
+            t_i = int(r_c["time"])
+            is_up = r_c["close"] >= r_c["open"]
+            vol_pts.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.45)" if is_up else "rgba(239,83,80,0.45)"})
+            vwap_pts.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
+            if pd.notna(r_c["ma20"]) and pd.notna(r_c["std20"]):
+                bb_up_pts.append({"time": t_i, "value": round(float(r_c["ma20"] + 2 * r_c["std20"]), 2)})
+                bb_dn_pts.append({"time": t_i, "value": round(float(r_c["ma20"] - 2 * r_c["std20"]), 2)})
+
+    tv_payload = json.dumps({
+        "candles": [{k: c[k] for k in ("time", "open", "high", "low", "close")} for c in candles],
+        "volumes": vol_pts,
+        "vwap": vwap_pts if show_vwap else [],
+        "bb_up": bb_up_pts if show_bb else [],
+        "bb_dn": bb_dn_pts if show_bb else [],
+        "cw": cw_lv if show_walls else None,
+        "pw": pw_lv if show_walls else None,
+        "zg": zg_lv if show_walls else None,
+    })
+
+    tv_html = f"""
+    <div id="tv_chart_box" style="width:100%; height:540px; background:#131722; border-radius:8px; border:1px solid #2a2e39;"></div>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+      const d = {tv_payload};
+      const el = document.getElementById("tv_chart_box");
+      const chart = LightweightCharts.createChart(el, {{
+        layout: {{ background: {{ color: "#131722" }}, textColor: "#d1d4dc" }},
+        grid: {{ vertLines: {{ color: "rgba(42,46,57,0.4)" }}, horzLines: {{ color: "rgba(42,46,57,0.4)" }} }},
+        crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+        rightPriceScale: {{ borderColor: "#2a2e39" }},
+        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false }},
+      }});
+      const cs = chart.addCandlestickSeries({{
+        upColor: "#26a69a", downColor: "#ef5350",
+        borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350"
+      }});
+      cs.setData(d.candles);
+      const vs = chart.addHistogramSeries({{ priceFormat: {{ type: "volume" }}, priceScaleId: "" }});
+      vs.priceScale().applyOptions({{ scaleMargins: {{ top: 0.8, bottom: 0 }} }});
+      vs.setData(d.volumes);
+      if (d.vwap.length) {{
+        const l1 = chart.addLineSeries({{ color: "#38bdf8", lineWidth: 2, title: "VWAP" }});
+        l1.setData(d.vwap);
+      }}
+      if (d.bb_up.length) {{
+        const u1 = chart.addLineSeries({{ color: "rgba(168,85,247,0.7)", lineWidth: 1, lineStyle: 2, title: "BB+" }});
+        const d1 = chart.addLineSeries({{ color: "rgba(168,85,247,0.7)", lineWidth: 1, lineStyle: 2, title: "BB-" }});
+        u1.setData(d.bb_up);
+        d1.setData(d.bb_dn);
+      }}
+      if (d.cw) cs.createPriceLine({{ price: d.cw, color: "#10b981", lineWidth: 2, lineStyle: 2, title: "Call Wall" }});
+      if (d.pw) cs.createPriceLine({{ price: d.pw, color: "#ef4444", lineWidth: 2, lineStyle: 2, title: "Put Wall" }});
+      if (d.zg) cs.createPriceLine({{ price: d.zg, color: "#f59e0b", lineWidth: 2, lineStyle: 1, title: "Zero Gamma" }});
+      chart.timeScale().fitContent();
+      window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWidth }}));
+    </script>
+    """
+    components.html(tv_html, height=555)
+
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        st.subheader("🧱 실시간 60호가 매수·매도 벽")
+        bk = aux_map.get("book") or {}
+        bids = bk.get("Bid") or bk.get("bids") or []
+        asks = bk.get("Ask") or bk.get("asks") or []
+        if bids or asks:
+            b_pts = [(float(x[0]), float(x[1])) for x in bids[:15] if len(x) >= 2]
+            a_pts = [(float(x[0]), float(x[1])) for x in asks[:15] if len(x) >= 2]
+            fig_bk = go.Figure()
+            if b_pts:
+                fig_bk.add_trace(go.Bar(y=[f"${p:g}" for p, _ in b_pts], x=[v for _, v in b_pts], orientation="h", name="매수잔량(Bid)", marker_color="#10b981"))
+            if a_pts:
+                fig_bk.add_trace(go.Bar(y=[f"${p:g}" for p, _ in a_pts], x=[-v for _, v in a_pts], orientation="h", name="매도잔량(Ask)", marker_color="#ef4444"))
+            fig_bk.update_layout(height=340, barmode="relative", plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_bk, use_container_width=True)
+        else:
+            st.caption("호가창(book) 데이터가 수신되면 매수/매도 잔량 벽이 표시됩니다.")
+
+    with col_b2:
+        st.subheader("💰 실시간 자금 유입/유출 분포")
+        fl = aux_map.get("flow") or {}
+        if isinstance(fl, dict) and fl:
+            st.json(fl)
+        else:
+            st.caption("자금분포(flow) 데이터 수신 대기 중 (3분 주기)")
+
+    if parsed_q:
+        st.subheader("📋 전체 수신 종목 실시간 시세표")
+        st.dataframe(pd.DataFrame(parsed_q), use_container_width=True, hide_index=True)
+    if con is not None:
+        con.close()
+
+
+# ================= TAB POS: NEXT WEEK & FAR MONTH POSITIONS =================
+if nav_menu == "📌 다음 주·원월 포지션":
+    import math
+    import yfinance as yf
+    from datetime import datetime
+
+    st.title("📌 종목별 다음 주 · 원월 포지션 (계약 누적 & OPEN/CLOSE)")
+    st.caption("다음 주(5~14 DTE)와 원월(25+ DTE) 주요 계약의 수량·OI 변화·총 PREM·|GEX| 1% 및 시트 시간순 플로우를 한눈에 봅니다.")
+
+    c_p1, c_p2 = st.columns([2, 1])
+    with c_p1:
+        preset_tk = st.selectbox("종목 선택", ["SOXL", "NVDA", "TSLA", "MU", "AMD", "SMH", "SOXS", "SPY", "QQQ", "META", "AAPL", "직접 입력"], index=0)
+    with c_p2:
+        custom_tk = st.text_input("직접 입력 (선택 시)", value="").strip().upper()
+    target_tk = custom_tk if (preset_tk == "직접 입력" and custom_tk) else ("SOXL" if preset_tk == "직접 입력" else preset_tk)
+
+    if st.button(f"🔍 {target_tk} 다음 주·원월 포지션 스캔", type="primary"):
+        with st.spinner(f"{target_tk} 옵션 체인 및 OI 히스토리 분석 중..."):
+            try:
+                yf_sym = {"SPX": "^SPX", "NDX": "^NDX", "VIX": "^VIX", "RUT": "^RUT"}.get(target_tk, target_tk)
+                t_obj = yf.Ticker(yf_sym)
+                exps = list(t_obj.options or [])
+                spot = 0.0
+                try:
+                    spot = round(float(t_obj.fast_info.get("lastPrice", 0) or 0), 2)
+                except Exception:
+                    pass
+
+                now_d = datetime.now()
+                sel_exps = []
+                near_exps = [e for e in exps if 4 <= (datetime.strptime(e, "%Y-%m-%d") - now_d).days <= 16]
+                far_exps = [e for e in exps if (datetime.strptime(e, "%Y-%m-%d") - now_d).days >= 25]
+                if not near_exps and exps:
+                    near_exps = exps[:2]
+                sel_exps = near_exps[:2] + far_exps[:2]
+
+                oi_hist_p = load_json_file(OI_PATH, {})
+                prev_oi_map = {}
+                if target_tk in oi_hist_p and oi_hist_p[target_tk]:
+                    for x_p in oi_hist_p[target_tk][-1].get("상세", []):
+                        prev_oi_map[(x_p.get("만기"), x_p.get("구분"), float(x_p.get("행사가", 0)))] = int(x_p.get("OI", 0))
+
+                rows_pos = []
+                for exp in sel_exps:
+                    d_days = max((datetime.strptime(exp, "%Y-%m-%d") - now_d).days, 1)
+                    T_y = d_days / 365.0
+                    ch = t_obj.option_chain(exp)
+                    for cp, df_s in [("CALL", ch.calls), ("PUT", ch.puts)]:
+                        cp_kor = "Call" if cp == "CALL" else "Put"
+                        for _, r_o in df_s.iterrows():
+                            vol = 0 if pd.isna(r_o.get("volume")) else int(r_o.get("volume"))
+                            oi = 0 if pd.isna(r_o.get("openInterest")) else int(r_o.get("openInterest"))
+                            if vol < 50 and oi < 200:
+                                continue
+                            k = float(r_o["strike"])
+                            lp = 0.0 if pd.isna(r_o.get("lastPrice")) else float(r_o.get("lastPrice") or 0)
+                            bid = 0.0 if pd.isna(r_o.get("bid")) else float(r_o.get("bid") or 0)
+                            ask = 0.0 if pd.isna(r_o.get("ask")) else float(r_o.get("ask") or 0)
+                            iv = 0.45 if pd.isna(r_o.get("impliedVolatility")) else float(r_o.get("impliedVolatility") or 0.45)
+                            iv = max(0.05, min(iv, 3.0))
+
+                            prem_tot = vol * lp * 100.0
+                            p_oi = prev_oi_map.get((exp, cp_kor, k), oi)
+
+                            # |GEX| 1%
+                            gex_1pct = 0.0
+                            if spot > 0 and oi > 0:
+                                d1 = (math.log(spot / k) + (0.045 + 0.5 * iv * iv) * T_y) / (iv * math.sqrt(T_y))
+                                gamma = math.exp(-0.5 * d1 * d1) / (math.sqrt(2 * math.pi) * spot * iv * math.sqrt(T_y))
+                                gex_1pct = abs(gamma * oi * 100.0 * spot * spot * 0.01)
+
+                            # Direction & OPEN/CLOSE hint
+                            tags = []
+                            if oi >= 10 and vol > oi and (vol - oi) >= 300:
+                                tags.append(f"🟢 신규OPEN(≥{vol - oi:,})")
+                            elif p_oi > 0 and oi < p_oi and (p_oi - oi) >= 100:
+                                tags.append(f"🔴 CLOSE({oi - p_oi:,})")
+                            if ask > bid > 0 and lp > 0:
+                                if lp >= ask * 0.98:
+                                    tags.append("BUY 우위")
+                                elif lp <= bid * 1.02:
+                                    tags.append("SELL 우위")
+                                else:
+                                    tags.append("MID 혼재")
+                            if not tags:
+                                tags.append("관찰")
+
+                            rows_pos.append({
+                                "EXP ET": exp[2:].replace("-", "/"),
+                                "계약": f"{k:g} {cp}",
+                                "방향·개폐 추정": " · ".join(tags),
+                                "OI 이전→최신": f"{p_oi:,} → {oi:,}",
+                                "수량(Vol)": vol,
+                                "최종 1계약": f"${lp * 100:,.2f}",
+                                "총 PREM": f"${prem_tot / 1e6:.2f}M" if prem_tot >= 1e6 else f"${prem_tot / 1e3:.1f}K",
+                                "|GEX|·1%": f"${gex_1pct / 1e3:.1f}K" if gex_1pct >= 1e3 else f"${gex_1pct:,.0f}",
+                                "_sort": prem_tot,
+                            })
+
+                if rows_pos:
+                    st.success(f"📊 {target_tk} (현재가 ${spot}) · 만기 {len(sel_exps)}개 기준 주요 계약 TOP 20")
+                    df_pos = pd.DataFrame(rows_pos).sort_values("_sort", ascending=False).drop(columns=["_sort"]).head(20)
+                    st.dataframe(df_pos, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("조회된 옵션 계약이 없습니다.")
+            except Exception as e_p:
+                st.error(f"조회 오류: {e_p}")
+
+    st.markdown("---")
+    st.subheader(f"⏱ {target_tk} 시트 누적 플로우 (시간순 연결 참고)")
+    tk_flows = [
+        {"시각": r[0], "만기": r[5], "계약": f"{r[3]} {r[7]}", "프리미엄": r[14], "유형/특징": r[13]}
+        for r in all_raw_flows if str(r[1]).upper() == target_tk
+    ]
+    if tk_flows:
+        st.dataframe(pd.DataFrame(tk_flows[:20]), use_container_width=True, hide_index=True)
+    else:
+        st.caption(f"구글 시트 `전체` 탭에 저장된 {target_tk} 플로우가 아직 없습니다.")
+
 if nav_menu == MENU_ITEMS[0]:
     st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
     st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
