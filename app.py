@@ -901,21 +901,55 @@ if nav_menu == "⚡ 무무 실시간 차트":
     m4.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
     m5.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
 
-    ov1, ov2, ov3, ov4, ov5, ov6 = st.columns(6)
-    show_vwap = ov1.checkbox("VWAP", value=False)
-    show_bb = ov2.checkbox("볼린저(20,2σ)", value=False)
-    show_ichi = ov3.checkbox("구름(일목)", value=True)
-    show_ma = ov4.checkbox("MA20·200", value=False)
-    show_vpvr = ov5.checkbox("매물대·콜풋막대", value=True)
-    show_walls = ov6.checkbox("1σ·Call/Put·γ", value=True)
+    with st.expander("⚙️ 지표 편집 (차트 오버레이 · 일목 · 보조지표 · 기간 설정)", expanded=False):
+        ed_l, ed_r = st.columns([1.3, 1.0])
+        with ed_l:
+            st.markdown("**차트 위에 겹쳐 그리기**")
+            c_o1, c_o2, c_o3 = st.columns(3)
+            show_vwap = c_o1.checkbox("VWAP", value=False, key="ed_vwap")
+            show_bb = c_o2.checkbox("볼린저", value=False, key="ed_bb")
+            show_ma = c_o3.checkbox("이동평균(MA)", value=False, key="ed_ma")
+            c_o4, c_o5, c_o6 = st.columns(3)
+            show_walls = c_o4.checkbox("옵션 레벨(벽·플립·1σ)", value=True, key="ed_walls")
+            show_vpvr = c_o5.checkbox("매물대·콜풋막대", value=True, key="ed_vpvr")
+            show_ichi = c_o6.checkbox("일목 구름·후행", value=True, key="ed_ichi")
+            st.markdown("**아래 보조지표 창**")
+            c_s1, c_s2, c_s3 = st.columns(3)
+            show_vol = c_s1.checkbox("거래량(Vol)", value=True, key="ed_vol")
+            show_cvd = c_s2.checkbox("CVD(누적델타)", value=True, key="ed_cvd")
+            show_bii = c_s3.checkbox("BII(체결강도)", value=True, key="ed_bii")
+            c_s4, c_s5, c_s6 = st.columns(3)
+            show_macd = c_s4.checkbox("MACD", value=True, key="ed_macd")
+            show_rsi = c_s5.checkbox("RSI", value=False, key="ed_rsi")
+            show_icc = c_s6.checkbox("역시계곡선", value=True, key="ed_icc")
+        with ed_r:
+            st.markdown("**기간 설정**")
+            bb_cfg = st.text_input("볼린저 (기간, σ)", "20,2", key="ed_bb_p")
+            rsi_len = st.number_input("RSI 기간", 2, 100, 14, key="ed_rsi_p")
+            macd_cfg = st.text_input("MACD (단기, 장기, 시그널)", "12,26,9", key="ed_macd_p")
+            ichi_cfg = st.text_input("일목 (전환, 기준, 선행B)", "9,26,52", key="ed_ichi_p")
+            p_c1, p_c2 = st.columns(2)
+            icc_len = p_c1.number_input("역시계곡선 기간", 5, 100, 20, key="ed_icc_p")
+            vpvr_bins_n = p_c2.number_input("매물대 칸 수", 10, 60, 24, key="ed_vpvr_p")
+            ma_cfg = st.text_input("이동평균 (단기, 장기)", "20,200", key="ed_ma_p")
 
-    sub1, sub2, sub3, sub4, sub5, sub6 = st.columns(6)
-    show_vol = sub1.checkbox("거래량(Vol)", value=True)
-    show_cvd = sub2.checkbox("CVD(누적델타)", value=True)
-    show_bii = sub3.checkbox("BII(체결강도)", value=True)
-    show_macd = sub4.checkbox("MACD(12,26,9)", value=True)
-    show_rsi = sub5.checkbox("RSI(14)", value=False)
-    show_icc = sub6.checkbox("역시계곡선(20)", value=True)
+    try:
+        bb_len, bb_std = [float(x.strip()) for x in bb_cfg.split(",")[:2]]
+        bb_len = int(bb_len)
+    except Exception:
+        bb_len, bb_std = 20, 2.0
+    try:
+        m_fast, m_slow, m_sig = [int(x.strip()) for x in macd_cfg.split(",")[:3]]
+    except Exception:
+        m_fast, m_slow, m_sig = 12, 26, 9
+    try:
+        i_ten, i_kij, i_sen = [int(x.strip()) for x in ichi_cfg.split(",")[:3]]
+    except Exception:
+        i_ten, i_kij, i_sen = 9, 26, 52
+    try:
+        ma1_len, ma2_len = [int(x.strip()) for x in ma_cfg.split(",")[:2]]
+    except Exception:
+        ma1_len, ma2_len = 20, 200
 
     vwap_pts, bb_up_pts, bb_dn_pts, vol_pts = [], [], [], []
     ma20_pts, ma200_pts = [], []
@@ -929,19 +963,19 @@ if nav_menu == "⚡ 무무 실시간 차트":
         tp = (df_c["high"] + df_c["low"] + df_c["close"]) / 3.0
         v_safe = df_c["volume"].replace(0, 1)
         df_c["vwap"] = (tp * v_safe).cumsum() / v_safe.cumsum()
-        df_c["ma20"] = df_c["close"].rolling(20).mean()
-        df_c["std20"] = df_c["close"].rolling(20).std()
-        df_c["ma200"] = df_c["close"].rolling(min(200, max(30, len(df_c)//2))).mean()
+        df_c["ma20"] = df_c["close"].rolling(ma1_len).mean()
+        df_c["std20"] = df_c["close"].rolling(bb_len).std()
+        df_c["ma200"] = df_c["close"].rolling(min(ma2_len, max(30, len(df_c)//2))).mean()
 
         # 일목균형표 (9, 26, 52)
-        h9 = df_c["high"].rolling(9).max(); l9 = df_c["low"].rolling(9).min()
-        h26 = df_c["high"].rolling(26).max(); l26 = df_c["low"].rolling(26).min()
-        h52 = df_c["high"].rolling(52).max(); l52 = df_c["low"].rolling(52).min()
+        h9 = df_c["high"].rolling(i_ten).max(); l9 = df_c["low"].rolling(i_ten).min()
+        h26 = df_c["high"].rolling(i_kij).max(); l26 = df_c["low"].rolling(i_kij).min()
+        h52 = df_c["high"].rolling(i_sen).max(); l52 = df_c["low"].rolling(i_sen).min()
         df_c["tenkan"] = (h9 + l9) / 2.0
         df_c["kijun"] = (h26 + l26) / 2.0
-        df_c["span_a"] = ((df_c["tenkan"] + df_c["kijun"]) / 2.0).shift(26)
-        df_c["span_b"] = ((h52 + l52) / 2.0).shift(26)
-        df_c["chikou"] = df_c["close"].shift(-26)
+        df_c["span_a"] = ((df_c["tenkan"] + df_c["kijun"]) / 2.0).shift(i_kij)
+        df_c["span_b"] = ((h52 + l52) / 2.0).shift(i_kij)
+        df_c["chikou"] = df_c["close"].shift(-i_kij)
 
         # CVD (캔들 내 매수/매도 압력 추정 델타 누적)
         rng_hl = (df_c["high"] - df_c["low"]).replace(0, 1e-6)
@@ -950,26 +984,26 @@ if nav_menu == "⚡ 무무 실시간 차트":
         df_c["bii"] = bar_delta.cumsum() * 100.0
 
         # MACD (12, 26, 9)
-        ema12 = df_c["close"].ewm(span=12, adjust=False).mean()
-        ema26 = df_c["close"].ewm(span=26, adjust=False).mean()
+        ema12 = df_c["close"].ewm(span=m_fast, adjust=False).mean()
+        ema26 = df_c["close"].ewm(span=m_slow, adjust=False).mean()
         df_c["macd"] = ema12 - ema26
-        df_c["macd_sig"] = df_c["macd"].ewm(span=9, adjust=False).mean()
+        df_c["macd_sig"] = df_c["macd"].ewm(span=m_sig, adjust=False).mean()
         df_c["macd_hist"] = df_c["macd"] - df_c["macd_sig"]
 
         # RSI (14)
         diff_c = df_c["close"].diff()
-        gain = diff_c.clip(lower=0).rolling(14).mean()
-        loss = (-diff_c.clip(upper=0)).rolling(14).mean().replace(0, 1e-6)
+        gain = diff_c.clip(lower=0).rolling(int(rsi_len)).mean()
+        loss = (-diff_c.clip(upper=0)).rolling(int(rsi_len)).mean().replace(0, 1e-6)
         df_c["rsi"] = 100.0 - (100.0 / (1.0 + gain / loss))
 
         # 역시계곡선 (20봉 종가 MA vs 거래량 MA)
-        df_c["vol_ma20"] = df_c["volume"].rolling(20).mean()
+        df_c["vol_ma20"] = df_c["volume"].rolling(int(icc_len)).mean()
         icc_df = df_c.dropna(subset=["ma20", "vol_ma20"]).tail(40).copy()
 
         # VPVR (매물대 24구간)
         p_min, p_max = float(df_c["low"].min()), float(df_c["high"].max())
         if p_max > p_min:
-            bins = 24
+            bins = int(vpvr_bins_n)
             step = (p_max - p_min) / bins
             v_arr = [0.0] * bins
             for _, rc in df_c.iterrows():
@@ -995,8 +1029,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
             if pd.notna(r_c["ma200"]):
                 ma200_pts.append({"time": t_i, "value": round(float(r_c["ma200"]), 2)})
             if pd.notna(r_c["ma20"]) and pd.notna(r_c["std20"]):
-                bb_up_pts.append({"time": t_i, "value": round(float(r_c["ma20"] + 2 * r_c["std20"]), 2)})
-                bb_dn_pts.append({"time": t_i, "value": round(float(r_c["ma20"] - 2 * r_c["std20"]), 2)})
+                bb_up_pts.append({"time": t_i, "value": round(float(r_c["close"].rolling(bb_len).mean().loc[r_c.name] if False else r_c["ma20"] + bb_std * r_c["std20"]), 2)})
+                bb_dn_pts.append({"time": t_i, "value": round(float(r_c["ma20"] - bb_std * r_c["std20"]), 2)})
             if pd.notna(r_c["tenkan"]):
                 tenkan_pts.append({"time": t_i, "value": round(float(r_c["tenkan"]), 2)})
             if pd.notna(r_c["kijun"]):
@@ -1479,7 +1513,99 @@ if nav_menu == "⚡ 무무 실시간 차트":
         else:
             st.caption("자금분포(flow) 데이터 수신 대기 중 (3분 주기)")
 
+    # 🐋 무무·실시간 큰손 풋/콜 누적 & 텔레그램 경보
+    st.subheader("🐋 무무 · 실시간 큰손 풋/콜 누적 & 텔레그램 경보")
+    WHALE_LOG_PATH = os.path.expanduser("~/.optionhub_whale_log.json")
+    whale_data = load_json_file(WHALE_LOG_PATH, {"items": [], "sent": []})
+    w_items = whale_data.get("items", [])
+    w_sent = set(whale_data.get("sent", []))
+    wc1, wc2 = st.columns([2, 1])
+    with wc1:
+        auto_tg_whale = st.checkbox("📩 강한 콜/풋 포착 시 텔레그램 자동 발송 (중복 방지)", value=True, key="mm_auto_tg_whale")
+    with wc2:
+        send_whale_now = st.button("📤 큰손 풋/콜 지금 텔레그램 전송", use_container_width=True)
+
+    new_whales = []
+    # 1) 무무 aux 테이블 내 옵션/체결 데이터 확인
+    if con is not None:
+        try:
+            aux_w_rows = con.execute("SELECT sym, kind, ts, data FROM aux WHERE kind LIKE '%opt%' OR kind IN ('opt_flow','opt_hot','ticker') ORDER BY ts DESC LIMIT 30").fetchall()
+            for w_sym, w_kind, w_ts, w_txt in aux_w_rows:
+                try:
+                    w_obj = json.loads(w_txt) if w_txt else {}
+                except Exception:
+                    w_obj = {}
+                arr_w = w_obj if isinstance(w_obj, list) else (w_obj.get("items") or w_obj.get("data") or [w_obj])
+                for it_w in arr_w:
+                    if not isinstance(it_w, dict): continue
+                    cp_w = str(it_w.get("option_type") or it_w.get("cp") or it_w.get("type") or "").upper()
+                    if "CALL" in cp_w or "PUT" in cp_w or "opt" in str(w_kind).lower():
+                        t_s = pd.to_datetime(w_ts, unit="s", utc=True).tz_convert("Asia/Seoul").strftime("%m-%d %H:%M")
+                        stk_w = it_w.get("strike") or it_w.get("strike_price") or "-"
+                        prem_w = float(it_w.get("premium") or it_w.get("turnover") or 0)
+                        k_id = f"MM|{w_sym}|{cp_w}|{stk_w}|{int(prem_w)}"
+                        new_whales.append({"id": k_id, "시각": t_s, "소스": "무무", "종목": w_sym.split(".")[-1], "구분": "🟢 강한 콜" if "CALL" in cp_w else "🔴 강한 풋", "행사가": f"${stk_w}", "거래량": int(it_w.get("volume") or 0), "Vol/OI": "-", "GEX($M)": "-", "추정규모": f"${prem_w:,.0f}" if prem_w else "-"})
+        except Exception:
+            pass
+
+    # 2) 실시간 옵션 체인(yfinance) 강한 콜/풋 스캔 (Vol/OI >= 1.5 & 거래량 >= 200)
+    try:
+        y_rows_w, y_sp_w = _cached_opt_snapshot(clean_tk)
+        if y_rows_w:
+            now_kst_w = pd.Timestamp.now(tz="Asia/Seoul").strftime("%m-%d %H:%M")
+            for r_w in y_rows_w:
+                vol_w = int(r_w.get("거래량", 0) or 0)
+                oi_w = int(r_w.get("OI", 0) or 0)
+                voi_w = (vol_w / oi_w) if oi_w > 0 else 0.0
+                gex_w = abs(float(r_w.get("GEX($M)", 0) or 0))
+                if vol_w >= 200 and (voi_w >= 1.5 or gex_w >= 0.5):
+                    cp_w = str(r_w.get("구분", "Call"))
+                    stk_w = r_w.get("행사가", 0)
+                    exp_w = str(r_w.get("만기", "-"))[-5:]
+                    k_id = f"YF|{clean_tk}|{cp_w}|{stk_w}|{exp_w}|{vol_w}"
+                    new_whales.append({
+                        "id": k_id, "시각": now_kst_w, "소스": "실시간옵션", "종목": clean_tk,
+                        "구분": "🟢 강한 콜" if cp_w == "Call" else "🔴 강한 풋",
+                        "행사가": f"${stk_w:g} ({exp_w})", "거래량": f"{vol_w:,}",
+                        "Vol/OI": f"{voi_w:.2f}x", "GEX($M)": f"{float(r_w.get('GEX($M)', 0)):+.2f}M",
+                        "추정규모": f"OI {oi_w:,}"
+                    })
+    except Exception:
+        pass
+
+    existing_ids = {x.get("id") for x in w_items}
+    added_for_tg = []
+    for nw in new_whales[:20]:
+        if nw["id"] not in existing_ids:
+            w_items.insert(0, nw)
+            existing_ids.add(nw["id"])
+            if nw["id"] not in w_sent:
+                added_for_tg.append(nw)
+    w_items = w_items[:150]
+
+    if ((auto_tg_whale and added_for_tg) or send_whale_now) and tg_token and tg_chat_id:
+        send_targets = added_for_tg[:5] if (auto_tg_whale and added_for_tg and not send_whale_now) else w_items[:5]
+        if send_targets:
+            lines_tg = [f"🐋 <b>[{clean_tk} 큰손 풋/콜 경보]</b>"]
+            for it_t in send_targets:
+                lines_tg.append(f"• {it_t['구분']} <b>{it_t['종목']}</b> {it_t['행사가']} | 거래량 {it_t['거래량']} | Vol/OI {it_t['Vol/OI']} | GEX {it_t['GEX($M)']} ({it_t['소스']})")
+                w_sent.add(it_t["id"])
+            ok_tg, err_tg = send_tg_message(tg_token, tg_chat_id, "\n".join(lines_tg))
+            if ok_tg and send_whale_now:
+                st.success("✅ 텔레그램으로 큰손 풋/콜 경보를 전송했습니다!")
+            elif not ok_tg and send_whale_now:
+                st.error(f"텔레그램 전송 실패: {err_tg}")
+
+    save_json_file(WHALE_LOG_PATH, {"items": w_items, "sent": list(w_sent)[-300:]})
+    if w_items:
+        disp_w = [{k: v for k, v in x.items() if k != "id"} for x in w_items[:30]]
+        st.dataframe(pd.DataFrame(disp_w), use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 포착된 큰손 풋/콜 내역이 없습니다. (장중 Vol/OI 1.5x 이상 또는 무무 옵션 체결 시 자동 누적)")
+
     if auto_rf:
+        if con is not None:
+            con.close()
         time.sleep(5)
         st.rerun()
 
