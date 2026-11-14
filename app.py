@@ -1193,8 +1193,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
         for x_o in oi_hist_m[clean_tk][-1].get("상세", []):
             det_lookup[(str(x_o.get("구분", ""))[0].upper(), float(x_o.get("행사가", 0) or 0))] = x_o
     flow_tbl = []
-    if not df.empty and "티커" in df.columns:
-        df_tk_f = df[df["티커"].astype(str).str.upper() == clean_tk].head(12)
+    df_flow_src = load_all_flows()
+    if not df_flow_src.empty and "티커" in df_flow_src.columns:
+        df_tk_f = df_flow_src[df_flow_src["티커"].astype(str).str.upper() == clean_tk].head(12)
         for _, rf in df_tk_f.iterrows():
             cp_c = str(rf.get("구분", "C"))[0].upper()
             try:
