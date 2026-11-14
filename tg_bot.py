@@ -574,15 +574,23 @@ def handle_command(token, chat_id, text):
         send_ticker_gex_with_chart(token, chat_id, cmd)
 
 
+SENT_REVIEWS_PATH = os.path.expanduser("~/.optionhub_sent_reviews.json")
+
 def check_sheet_review(token, chat_id):
     try:
+        sent_list = []
+        if os.path.exists(SENT_REVIEWS_PATH):
+            try:
+                sent_list = json.load(open(SENT_REVIEWS_PATH, "r", encoding="utf-8"))
+            except Exception:
+                sent_list = []
         last_seen = open(STATE_PATH, "r", encoding="utf-8").read().strip() if os.path.exists(STATE_PATH) else ""
         rows = fetch_sheet_rows("AI노트_뉴스시황")
         reviews = [r for r in rows if "종합평" in str(r)]
         if reviews:
             latest = reviews[-1]
             key = f"{latest.get('날짜', '')}_{latest.get('한글 번역/해석', '')[:40]}"
-            if key and key != last_seen:
+            if key and key != last_seen and key not in sent_list:
                 msg = (
                     f"📝 [OptionHub 자동 종합평] {latest.get('날짜', '')}\n\n"
                     f"{latest.get('한글 번역/해석', '')}\n\n"
@@ -591,6 +599,9 @@ def check_sheet_review(token, chat_id):
                 send_msg(token, chat_id, msg)
                 with open(STATE_PATH, "w", encoding="utf-8") as f:
                     f.write(key)
+                sent_list.append(key)
+                with open(SENT_REVIEWS_PATH, "w", encoding="utf-8") as fs:
+                    json.dump(sent_list[-100:], fs, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
