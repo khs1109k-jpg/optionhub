@@ -56,7 +56,9 @@ JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
 
 def calc_zero_gamma(df_gex, spot=0.0):
-    if df_gex.empty or len(df_gex) < 2:
+    if isinstance(df_gex, list):
+        df_gex = pd.DataFrame(df_gex)
+    if df_gex is None or not hasattr(df_gex, "empty") or df_gex.empty or len(df_gex) < 2 or "GEX($M)" not in df_gex.columns or "행사가" not in df_gex.columns:
         return None
     d = df_gex.sort_values("행사가").reset_index(drop=True)
     flips = []
