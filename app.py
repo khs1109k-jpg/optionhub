@@ -639,8 +639,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
     st.caption("TradingView Lightweight Charts 엔진 기반 · 무무 실시간 시세 + VWAP·볼린저밴드 + 옵션 Call/Put Wall·Zero Gamma")
 
     db_path = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
-    col_r1, col_r2 = st.columns([3, 1])
+    col_r1, col_r2, col_r3 = st.columns([2.6, 0.9, 0.9])
     with col_r2:
+        auto_rf = st.toggle("⏱️ 5초 자동 갱신", value=False, key="mm_auto_rf")
+    with col_r3:
         if st.button("🔄 실시간 새로고침", use_container_width=True):
             st.rerun()
 
@@ -872,6 +874,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
             st.json(fl)
         else:
             st.caption("자금분포(flow) 데이터 수신 대기 중 (3분 주기)")
+
+    if auto_rf:
+        time.sleep(5)
+        st.rerun()
 
     if parsed_q:
         st.subheader("📋 전체 수신 종목 실시간 시세표")
