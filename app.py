@@ -3042,16 +3042,18 @@ if nav_menu == "📚 실피 자료실":
     if st.session_state.pop("silpi_saved_ok", False):
         st.success("✅ 실피 자료실에 정상 저장되었습니다!")
 
-    st.subheader("🚀 실피 브리핑 요약 대시보드 (11/14 최신)")
-    st.caption("11/14 시장 상태 · Conviction Leaders · M7 관심도 · DarkPool · Relative Impact · Smart Money · Key GEX Levels")
+    tide_live = load_json_file(os.path.expanduser("~/.optionhub_tide_brief.json"), {})
+    live_upd = tide_live.get("updated_at", "11/14 기준")
+    st.subheader(f"🚀 실피 브리핑 요약 대시보드 (텔레그램 자동 연동 · {live_upd})")
+    st.caption("텔레그램 봇(tg_bot.py)으로 전달된 최신 시장 브리핑·Conviction·M7·DarkPool·GEX 레벨을 자동 반영합니다.")
 
-    # 1. 시장 상태
+    # 1. 시장 상태 (텔레그램 tide_brief 우선, 없으면 기본값)
     st.subheader("🌊 Market State")
     ac1, ac2, ac3, ac4 = st.columns(4)
-    ac1.metric("Market Tide", "-31")
-    ac2.metric("Trend", "Bearish↓")
-    ac3.metric("Signal Count", "33")
-    ac4.metric("Dealer Regime", "Short Gamma")
+    ac1.metric("Market Tide", str(tide_live.get("cum_net", tide_live.get("tide", "-31"))))
+    ac2.metric("Trend", str(tide_live.get("trend", "Bearish↓")))
+    ac3.metric("Signal Count", str(tide_live.get("signal_count", "33")))
+    ac4.metric("Dealer Regime", str(tide_live.get("regime", "Short Gamma")))
 
     # 2. Conviction Leaders
     st.subheader("🎯 Conviction Leaders")
@@ -3120,13 +3122,15 @@ if nav_menu == "📚 실피 자료실":
         st.dataframe(levels_df, use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("📚 Latest Telegram Reports")
-    st.info("""11/14 시장 브리핑
-11/14 Conviction Score
-11/14 M7 관심도
-11/14 DarkPool Digest
-11/14 Morning Briefing
-모든 원문은 Telegram Archive에서 조회""")
+    st.subheader("📚 Latest Telegram Reports (자동 수신 원문)")
+    tg_notes = []
+    for k_lbl, k_name in [("M7 관심도", "m7_note"), ("반도체 4종", "semi_note"), ("다크풀", "darkpool_note"), ("핵심 레벨", "levels_note"), ("아침 브리핑", "morning_note")]:
+        if tide_live.get(k_name):
+            tg_notes.append(f"• [{k_lbl}] {tide_live[k_name]}")
+    if tg_notes:
+        st.info("\n".join(tg_notes))
+    else:
+        st.info("11/14 시장 브리핑 · Conviction Score · M7 관심도 · DarkPool Digest · Morning Briefing (텔레그램 봇에 새 브리핑 전달 시 자동 갱신됩니다)")
 
     st.divider()
 
