@@ -1193,35 +1193,32 @@ if nav_menu == "⚡ 무무 실시간 차트":
         for x_o in oi_hist_m[clean_tk][-1].get("상세", []):
             det_lookup[(str(x_o.get("구분", ""))[0].upper(), float(x_o.get("행사가", 0) or 0))] = x_o
     flow_tbl = []
-    df_flow_src = load_all_flows()
-    if not df_flow_src.empty and "티커" in df_flow_src.columns:
-        df_tk_f = df_flow_src[df_flow_src["티커"].astype(str).str.upper() == clean_tk].head(12)
-        for _, rf in df_tk_f.iterrows():
-            cp_c = str(rf.get("구분", "C"))[0].upper()
-            try:
-                sk_v = float(str(rf.get("행사가", "0")).replace("$", "").replace(",", ""))
-            except Exception:
-                sk_v = 0.0
-            lv_lbl = "-"
-            if cw_lv and abs(sk_v - float(cw_lv)) < 0.01:
-                lv_lbl = "CALL WALL"
-            elif pw_lv and abs(sk_v - float(pw_lv)) < 0.01:
-                lv_lbl = "PUT WALL"
-            elif zg_lv and abs(sk_v - float(zg_lv)) < 0.5:
-                lv_lbl = "GAMMA"
-            oi_info = det_lookup.get((cp_c, sk_v), {})
-            flow_tbl.append({
-                "TIME": rf.get("발견시각", "-"),
-                "EXP": str(rf.get("만기일", "-"))[-5:],
-                "STRIKE": f"${sk_v:g}" if sk_v else str(rf.get("행사가", "-")),
-                "LEVEL": lv_lbl,
-                "C/P": cp_c,
-                "B/S": "BUY" if "A" in str(rf.get("체결(Side)", "")) else str(rf.get("체결(Side)", "-")),
-                "PREM": rf.get("프리미엄", "-"),
-                "Volume": f"{int(oi_info.get('거래량', 0)):,}" if oi_info else "-",
-                "OI": f"{int(oi_info.get('OI', 0)):,}" if oi_info else "-",
-                "NOTE": rf.get("주문특징", "-"),
-            })
+    for rf in [r for r in all_raw_flows if str(r[1]).upper() == clean_tk][:12]:
+        cp_c = str(rf[3])[0].upper()
+        try:
+            sk_v = float(str(rf[7]).replace("$", "").replace(",", ""))
+        except Exception:
+            sk_v = 0.0
+        lv_lbl = "-"
+        if cw_lv and abs(sk_v - float(cw_lv)) < 0.01:
+            lv_lbl = "CALL WALL"
+        elif pw_lv and abs(sk_v - float(pw_lv)) < 0.01:
+            lv_lbl = "PUT WALL"
+        elif zg_lv and abs(sk_v - float(zg_lv)) < 0.5:
+            lv_lbl = "GAMMA"
+        oi_info = det_lookup.get((cp_c, sk_v), {})
+        flow_tbl.append({
+            "TIME": rf[2],
+            "EXP": str(rf[5])[-5:],
+            "STRIKE": f"${sk_v:g}" if sk_v else str(rf[7]),
+            "LEVEL": lv_lbl,
+            "C/P": cp_c,
+            "B/S": "BUY" if "A" in str(rf[4]) else str(rf[4]),
+            "PREM": rf[14],
+            "Volume": f"{int(oi_info.get('거래량', 0)):,}" if oi_info else "-",
+            "OI": f"{int(oi_info.get('OI', 0)):,}" if oi_info else "-",
+            "NOTE": rf[13],
+        })
     if not flow_tbl and clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
         top_det = sorted(oi_hist_m[clean_tk][-1].get("상세", []), key=lambda x: x.get("거래량", 0), reverse=True)[:10]
         for x_o in top_det:
