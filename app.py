@@ -3042,6 +3042,95 @@ if nav_menu == "📚 실피 자료실":
     if st.session_state.pop("silpi_saved_ok", False):
         st.success("✅ 실피 자료실에 정상 저장되었습니다!")
 
+    st.subheader("🚀 실피 브리핑 요약 대시보드 (11/14 최신)")
+    st.caption("11/14 시장 상태 · Conviction Leaders · M7 관심도 · DarkPool · Relative Impact · Smart Money · Key GEX Levels")
+
+    # 1. 시장 상태
+    st.subheader("🌊 Market State")
+    ac1, ac2, ac3, ac4 = st.columns(4)
+    ac1.metric("Market Tide", "-31")
+    ac2.metric("Trend", "Bearish↓")
+    ac3.metric("Signal Count", "33")
+    ac4.metric("Dealer Regime", "Short Gamma")
+
+    # 2. Conviction Leaders
+    st.subheader("🎯 Conviction Leaders")
+    bull_df = pd.DataFrame([
+        ["IBIT", "Bullish", 24.5],
+        ["VRT", "Bullish", 21.0],
+        ["LNG", "Bullish", 18.0],
+    ], columns=["Ticker", "Direction", "Conviction"])
+    bear_df = pd.DataFrame([
+        ["NVDA", "Bearish", 57.5],
+        ["NBIS", "Bearish", 49.0],
+        ["SNDK", "Bearish", 45.0],
+    ], columns=["Ticker", "Direction", "Conviction"])
+    acol1, acol2 = st.columns(2)
+    with acol1:
+        st.markdown("### 🟢 Bullish")
+        st.dataframe(bull_df, use_container_width=True, hide_index=True)
+    with acol2:
+        st.markdown("### 🔴 Bearish")
+        st.dataframe(bear_df, use_container_width=True, hide_index=True)
+
+    # 3. M7 Focus
+    st.subheader("🔥 M7 Focus")
+    m7_df = pd.DataFrame({
+        "Symbol": ["NVDA", "AMZN", "TSLA", "AAPL", "GOOGL", "META", "MSFT"],
+        "Score": [64, 59, 59, 54, 53, 51, 47],
+    })
+    fig_m7 = px.bar(m7_df, x="Symbol", y="Score", text="Score", color_discrete_sequence=["#38bdf8"])
+    fig_m7.update_layout(height=300, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig_m7, use_container_width=True)
+
+    # 4. DarkPool & Relative Impact
+    ad1, ad2 = st.columns(2)
+    with ad1:
+        st.subheader("🌑 DarkPool Watchlist")
+        darkpool_df = pd.DataFrame({
+            "Symbol": ["MSFT", "AAPL", "AMAT", "AVGO", "MU"],
+            "Premium($B)": [1.96, 1.77, 0.85, 0.50, 0.39],
+        })
+        st.dataframe(darkpool_df, use_container_width=True, hide_index=True)
+    with ad2:
+        st.subheader("⚡ Relative Impact")
+        impact_df = pd.DataFrame({
+            "Symbol": ["TXNM", "SLAB", "AMAT", "AMGN", "SAP"],
+            "Volume Impact (%)": [206, 134, 27, 22, 21],
+        })
+        st.dataframe(impact_df, use_container_width=True, hide_index=True)
+
+    # 5. Smart Money & Key GEX Levels
+    as1, as2 = st.columns(2)
+    with as1:
+        st.subheader("💰 Smart Money")
+        smart_df = pd.DataFrame({
+            "Symbol": ["AMD", "CRWV", "QQQ"],
+            "Signal": ["Call Buy + Put Sell", "Call Buy + Put Sell", "Call Buy + Put Sell"],
+        })
+        st.dataframe(smart_df, use_container_width=True, hide_index=True)
+    with as2:
+        st.subheader("🧲 Key GEX Levels")
+        levels_df = pd.DataFrame({
+            "Ticker": ["QQQ", "SPY", "SOXX"],
+            "Resistance": ["700", "770", "155"],
+            "Current": ["679.9", "754.2", "149.3"],
+            "Risk": ["680", "750", "149.17"],
+        })
+        st.dataframe(levels_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("📚 Latest Telegram Reports")
+    st.info("""11/14 시장 브리핑
+11/14 Conviction Score
+11/14 M7 관심도
+11/14 DarkPool Digest
+11/14 Morning Briefing
+모든 원문은 Telegram Archive에서 조회""")
+
+    st.divider()
+
+
     with st.expander("➕ 새 자료 / 메모 / 파일 추가하기", expanded=True):
         with st.form("silpi_add_form", clear_on_submit=True):
             fc1, fc2, fc3 = st.columns([1.2, 1.0, 2.0])
