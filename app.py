@@ -1276,7 +1276,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       const hudEl = document.getElementById("tv_hud");
       if (hudEl) {{
         const cTxt = d.candles.length ? d.candles[d.candles.length-1].close : "-";
-        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 종가 <b style="color:#f8fafc;">$${{cTxt}}</b>` +
+        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 종가 <b style="color:#f8fafc;">$${{cTxt}}` +
           (d.cw ? ` · <span style="color:#10b981;">CW $${{d.cw}}</span>` : "") +
           (d.pw ? ` · <span style="color:#ef4444;">PW $${{d.pw}}</span>` : "") +
           (d.zg ? ` · <span style="color:#f59e0b;">γ $${{d.zg}}</span>` : "");
@@ -1287,7 +1287,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if (!bar) return;
         const chgP = bar.open ? (((bar.close - bar.open) / bar.open) * 100).toFixed(2) : "0.00";
         const colP = bar.close >= bar.open ? "#10b981" : "#ef4444";
-        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 <b>${{bar.open}}</b> 고 <b>${{bar.high}}</b> 저 <b>${{bar.low}}</b> 종 <b style="color:${{colP}};">${{bar.close}} (${{chgP}}%)</b>`;
+        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 ${{bar.open}} 고 ${{bar.high}} 저 ${{bar.low}} 종 <b style="color:${{colP}};">${{bar.close}} (${{chgP}}%)`;
       }});
       chart.timeScale().fitContent();
       subCharts.forEach(sc => sc.timeScale().fitContent());
@@ -1586,11 +1586,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if ((auto_tg_whale and added_for_tg) or send_whale_now) and tg_token and tg_chat_id:
         send_targets = added_for_tg[:5] if (auto_tg_whale and added_for_tg and not send_whale_now) else w_items[:5]
         if send_targets:
-            lines_tg = [f"🐋 <b>[{clean_tk} 큰손 풋/콜 경보]</b>"]
+            lines_tg = [f"🐋 [{clean_tk} 큰손 풋/콜 경보]"]
             for it_t in send_targets:
-                lines_tg.append(f"• {it_t['구분']} <b>{it_t['종목']}</b> {it_t['행사가']} | 거래량 {it_t['거래량']} | Vol/OI {it_t['Vol/OI']} | GEX {it_t['GEX($M)']} ({it_t['소스']})")
+                lines_tg.append(f"• {it_t['구분']} {it_t['종목']} {it_t['행사가']} | 거래량 {it_t['거래량']} | Vol/OI {it_t['Vol/OI']} | GEX {it_t['GEX($M)']} ({it_t['소스']})")
                 w_sent.add(it_t["id"])
-            ok_tg, err_tg = send_tg_message(tg_token, tg_chat_id, "\n".join(lines_tg))
+            ok_tg, err_tg = send_telegram_msg(tg_token, tg_chat_id, "\n".join(lines_tg))
             if ok_tg and send_whale_now:
                 st.success("✅ 텔레그램으로 큰손 풋/콜 경보를 전송했습니다!")
             elif not ok_tg and send_whale_now:
@@ -2278,7 +2278,7 @@ if nav_menu == "📊 OI(미결제약정) 수집":
                 fig_oi = px.bar(
                     oi_grp, x="행사가", y="OI", color="구분", barmode="group",
                     color_discrete_map={"Call": "#00e676", "Put": "#f23645"},
-                    title=f"<b>{oi_tk} 행사가별 Call vs Put OI</b>"
+                    title=f"{oi_tk} 행사가별 Call vs Put OI"
                 )
                 fig_oi.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
                 st.plotly_chart(fig_oi, use_container_width=True)
@@ -2290,7 +2290,7 @@ if nav_menu == "📊 OI(미결제약정) 수집":
                     fig_dex = px.bar(
                         dex_by_k, x="행사가", y="DEX($M)", color="방향",
                         color_discrete_map={"Call DEX (+)": "#3b82f6", "Put DEX (-)": "#f97316"},
-                        title=f"<b>{oi_tk} 행사가별 Delta Exposure (DEX, $M)</b>"
+                        title=f"{oi_tk} 행사가별 Delta Exposure (DEX, $M)"
                     )
                     fig_dex.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
                     st.plotly_chart(fig_dex, use_container_width=True)
@@ -2929,7 +2929,7 @@ if nav_menu == MENU_ITEMS[14]:
         color_continuous_scale=['#f23645', '#363a45', '#00e676'],
         color_continuous_midpoint=50,
         hover_data=['Flow'],
-        title="<b>기관 프리미엄 규모 및 Call 비중 (%)</b> (초록색: 콜 우세, 붉은색: 풋 우세)"
+        title="기관 프리미엄 규모 및 Call 비중 (%) (초록색: 콜 우세, 붉은색: 풋 우세)"
     )
     fig.update_layout(
         paper_bgcolor="#0b0e14", plot_bgcolor="#0b0e14", font_color="#d1d4dc",
