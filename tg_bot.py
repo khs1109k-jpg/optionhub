@@ -14,6 +14,7 @@ OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
 LIVE_PATH = os.path.expanduser("~/.optionhub_intraday_live.json")
 EARN_PATH = os.path.expanduser("~/.optionhub_earnings_scan.json")
 TIDE_PATH = os.path.expanduser("~/.optionhub_tide_brief.json")
+TG_ARCHIVE_PATH = os.path.expanduser("~/.optionhub_tg_archive.json")
 APP_PATH = os.path.expanduser("~/app.py")
 SHEET_ID = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
 
@@ -434,6 +435,19 @@ def parse_and_save_tide_brief(text):
 
     with open(TIDE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        syms_list = ["SPY","QQQ","SOXX","SOXL","SOXS","SMH","NVDA","TSLA","AAPL","MSFT","AMZN","META","GOOGL","AMD","MU","AVGO","AMAT","LRCX","KLAC","IBIT","NBIS","SNDK","VRT","LNG","BRKB","INTC"]
+        found_syms = sorted(list({s for s in syms_list if re.search(rf"\b{s}\b", text.upper())}))
+        arch = []
+        if os.path.exists(TG_ARCHIVE_PATH):
+            with open(TG_ARCHIVE_PATH, "r", encoding="utf-8") as fa:
+                arch = json.load(fa)
+        title_line = text.strip().splitlines()[0][:60] if text.strip() else "Telegram Briefing"
+        arch.insert(0, {"date": data["updated_at"], "title": title_line, "symbols": ", ".join(found_syms), "content": text.strip()[:2000]})
+        with open(TG_ARCHIVE_PATH, "w", encoding="utf-8") as fa:
+            json.dump(arch[:200], fa, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
     return data
 
 

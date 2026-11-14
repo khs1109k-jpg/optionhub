@@ -1,3 +1,4 @@
+import re
 import time
 import streamlit as st
 import pandas as pd
@@ -3147,6 +3148,24 @@ if nav_menu == "📚 실피 자료실":
     if detected_syms:
         st.markdown("**🏷️ 브리핑 내 자동 추출 종목 태그:** " + " ".join([f"`{sym}`" for sym in detected_syms]))
     st.info(all_tg_txt if tg_notes else "11/14 시장 브리핑 · Conviction Score · M7 관심도 · DarkPool Digest · Morning Briefing (텔레그램 봇에 새 브리핑 전달 시 자동 갱신됩니다)")
+
+    TG_ARCHIVE_PATH = os.path.expanduser("~/.optionhub_tg_archive.json")
+    tg_arch_list = load_json_file(TG_ARCHIVE_PATH, [])
+    if not tg_arch_list and tg_notes:
+        tg_arch_list = [{"date": live_upd, "title": "최신 텔레그램 브리핑", "symbols": ", ".join(detected_syms), "content": all_tg_txt}]
+    st.markdown("#### 🔍 텔레그램 아카이브 종목 검색")
+    search_sym_tg = st.text_input("Ticker 입력", placeholder="예: NVDA, SOXL, QQQ", key="tg_arch_sym").strip().upper()
+    if tg_arch_list:
+        df_tg_arch = pd.DataFrame(tg_arch_list)
+        if "symbols" not in df_tg_arch.columns:
+            df_tg_arch["symbols"] = df_tg_arch.apply(lambda r: ", ".join(extract_silpi_symbols(str(r.get("title","")) + " " + str(r.get("content","")))), axis=1)
+        if search_sym_tg:
+            df_tg_filt = df_tg_arch[df_tg_arch["symbols"].astype(str).str.contains(search_sym_tg, na=False)]
+        else:
+            df_tg_filt = df_tg_arch
+        st.dataframe(df_tg_filt, use_container_width=True, hide_index=True)
+    else:
+        st.caption("텔레그램 봇에 브리핑이 전달되면 종목 태그(symbols)와 함께 자동 누적·검색됩니다.")
 
     st.divider()
 
