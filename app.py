@@ -260,7 +260,8 @@ MENU_ITEMS = [
     "🗺️ 히트맵 & 테마",
     "📰 뉴스 (7선)",
     "⚡ 무무 실시간 차트",
-    "📌 다음 주·원월 포지션"
+    "📌 다음 주·원월 포지션",
+    "📚 실피 자료실"
 ]
 st.sidebar.title("⚙️ OptionHub")
 st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
@@ -2997,3 +2998,100 @@ if nav_menu == MENU_ITEMS[15]:
             <div style='font-size:11px; color:#787b86; margin-top:4px;'>[EN] {en}</div>
         </div>
         """, unsafe_allow_html=True)
+
+# ================= TAB: SILPI ARCHIVE =================
+if nav_menu == "📚 실피 자료실":
+    st.title("📚 실피 자료실 (전략 · 지표 · 매매 복기 아카이브)")
+    st.caption("옵션·차트 핵심 이론, 나만의 매매 기준, 종목별 메모 및 참고 링크를 한곳에 모아두고 검색합니다.")
+
+    SILPI_PATH = os.path.expanduser("~/.optionhub_silpi_vault.json")
+    default_silpi = [
+        {
+            "id": "init_1",
+            "날짜": "2026-11-14",
+            "카테고리": "옵션 전략",
+            "종목": "공통",
+            "제목": "8단계 옵션 수급 판독 순서 (GEX→DEX→OI→Vol/OI→Sweep→Premium→Delta/Gamma→DTE)",
+            "내용": "1) GEX로 자석/방어선(+GEX 억제 vs -GEX 변동성 확대) 확인 → 2) DEX 방향성 → 3) OI 잔고 두께 → 4) Vol/OI > 1.0 신규 진입 여부 → 5) Sweep Ask/Bid 긴급 체결 → 6) Premium 규모($) → 7) Delta/Gamma 민감도 → 8) DTE 단기/원월 구분.",
+            "링크": ""
+        },
+        {
+            "id": "init_2",
+            "날짜": "2026-11-14",
+            "카테고리": "옵션 전략",
+            "종목": "SOXL·SMH",
+            "제목": "자석(C) · 방어(L) 레벨 & HIRO 진짜 상승 판별법",
+            "내용": "• 자석(C) 레벨: 딜러 델타 헷지로 가격을 끌어당기는 대형 콜/풋 밀집 구간\n• 방어(L) 레벨: 스마트머니가 절대 내주지 않으려는 지지/저항선\n• 진짜 상승: HIRO(또는 Delta) 증가 + Gamma(GEX) 감소 동반 시 추세 지속 신호.",
+            "링크": ""
+        },
+        {
+            "id": "init_3",
+            "날짜": "2026-11-14",
+            "카테고리": "차트 패턴",
+            "종목": "공통",
+            "제목": "트레이딩뷰 복합 필터 (일목·볼린저·CVD·BII·역시계곡선)",
+            "내용": "1분/5분봉에서 일목 구름대 돌파 + MA20 회복 + CVD/BII 동반 상승 + 역시계곡선 우상향 국면 진입 시 매수 우위. 1σ 상단(SIG_H) 도달 시 분할 익절 고려.",
+            "링크": ""
+        }
+    ]
+    silpi_items = load_json_file(SILPI_PATH, default_silpi)
+
+    with st.expander("➕ 새 자료 / 메모 추가하기", expanded=False):
+        with st.form("silpi_add_form", clear_on_submit=True):
+            fc1, fc2, fc3 = st.columns([1.2, 1.0, 2.0])
+            s_cat = fc1.selectbox("카테고리", ["옵션 전략", "차트 패턴", "매매 복기", "자금 관리", "참고 링크/PDF"])
+            s_tk = fc2.text_input("관련 종목", "공통", placeholder="예: SOXL, NVDA, 공통").strip().upper() or "공통"
+            s_title = fc3.text_input("제목", placeholder="예: 11/14 SOXL 58C/60C 매집 복기")
+            s_body = st.text_area("상세 내용 / 메모", height=120, placeholder="핵심 수치, 진입/손절 기준, 복기 내용을 입력하세요.")
+            s_link = st.text_input("참고 URL (선택)", placeholder="https://...")
+            submitted_s = st.form_submit_button("💾 자료실에 저장", type="primary")
+            if submitted_s:
+                if s_title.strip():
+                    new_entry = {
+                        "id": f"sp_{int(time.time()*1000)}",
+                        "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
+                        "카테고리": s_cat,
+                        "종목": s_tk,
+                        "제목": s_title.strip(),
+                        "내용": s_body.strip(),
+                        "링크": s_link.strip(),
+                    }
+                    silpi_items.insert(0, new_entry)
+                    save_json_file(SILPI_PATH, silpi_items)
+                    st.success("✅ 실피 자료실에 저장되었습니다!")
+                    st.rerun()
+                else:
+                    st.warning("제목을 입력해 주세요.")
+
+    sc1, sc2, sc3 = st.columns([1.2, 1.2, 2.0])
+    cats_all = ["전체"] + sorted(list({x.get("카테고리", "기타") for x in silpi_items}))
+    tks_all = ["전체"] + sorted(list({x.get("종목", "공통") for x in silpi_items}))
+    f_cat = sc1.selectbox("카테고리 필터", cats_all, key="sp_f_cat")
+    f_tk = sc2.selectbox("종목 필터", tks_all, key="sp_f_tk")
+    f_kw = sc3.text_input("🔍 키워드 검색", "", placeholder="제목 또는 내용 검색...", key="sp_f_kw").strip().lower()
+
+    filtered_sp = []
+    for x in silpi_items:
+        if f_cat != "전체" and x.get("카테고리") != f_cat:
+            continue
+        if f_tk != "전체" and x.get("종목") != f_tk:
+            continue
+        if f_kw and f_kw not in (x.get("제목", "") + " " + x.get("내용", "") + " " + x.get("종목", "")).lower():
+            continue
+        filtered_sp.append(x)
+
+    st.caption(f"총 {len(filtered_sp)}건의 자료가 표시되고 있습니다.")
+    for idx_sp, item_sp in enumerate(filtered_sp):
+        with st.container(border=True):
+            h_l, h_r = st.columns([5, 1])
+            with h_l:
+                st.markdown(f"**[{item_sp.get('카테고리','')}] {item_sp.get('제목','')}**  `{item_sp.get('종목','')}` · {item_sp.get('날짜','')}")
+            with h_r:
+                if st.button("🗑️ 삭제", key=f"del_sp_{item_sp.get('id', idx_sp)}"):
+                    silpi_items = [z for z in silpi_items if z.get("id") != item_sp.get("id")]
+                    save_json_file(SILPI_PATH, silpi_items)
+                    st.rerun()
+            if item_sp.get("내용"):
+                st.markdown(item_sp["내용"].replace("\n", "  \n"))
+            if item_sp.get("링크"):
+                st.markdown(f"🔗 참고 링크: [{item_sp['링크']}]({item_sp['링크']})")
