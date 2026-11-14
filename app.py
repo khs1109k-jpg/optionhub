@@ -1009,14 +1009,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "macd_sig": macd_sig_pts if show_macd else [],
         "macd_hist": macd_hist_pts if show_macd else [],
         "rsi": rsi_pts if show_rsi else [],
-        "cw": cw_lv if show_walls else None,
-        "pw": pw_lv if show_walls else None,
-        "zg": zg_lv if show_walls else None,
+        "cw": cw_lv if (show_walls and cw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(cw_lv) <= 1.45 * cur["px"])) else None,
+        "pw": pw_lv if (show_walls and pw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(pw_lv) <= 1.45 * cur["px"])) else None,
+        "zg": zg_lv if (show_walls and zg_lv and (not cur["px"] or 0.55 * cur["px"] <= float(zg_lv) <= 1.45 * cur["px"])) else None,
         "sig_h": sig_h_lv if show_walls else None,
         "sig_l": sig_l_lv if show_walls else None,
-        "delta_k": delta_lv if show_walls else None,
-        "gex_c_k": gex_c_lv if show_walls else None,
-        "gex_p_k": gex_p_lv if show_walls else None,
+        "delta_k": delta_lv if (show_walls and delta_lv and (not cur["px"] or 0.55 * cur["px"] <= float(delta_lv) <= 1.45 * cur["px"])) else None,
+        "gex_c_k": gex_c_lv if (show_walls and gex_c_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_c_lv) <= 1.45 * cur["px"])) else None,
+        "gex_p_k": gex_p_lv if (show_walls and gex_p_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_p_lv) <= 1.45 * cur["px"])) else None,
         "opt_bars": opt_bars if show_vpvr else [],
     })
 
@@ -1066,19 +1066,19 @@ if nav_menu == "⚡ 무무 실시간 차트":
         vs.priceScale().applyOptions({{ scaleMargins:{{ top:0.82, bottom:0 }} }});
         vs.setData(d.volumes);
       }}
-      if (d.vwap.length) chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, title:"VWAP" }}).setData(d.vwap);
-      if (d.ma20.length) chart.addLineSeries({{ color:"#22c55e", lineWidth:1, title:"MA20" }}).setData(d.ma20);
-      if (d.ma200.length) chart.addLineSeries({{ color:"#eab308", lineWidth:2, title:"MA200" }}).setData(d.ma200);
+      if (d.vwap.length) chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.vwap);
+      if (d.ma20.length) chart.addLineSeries({{ color:"#22c55e", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.ma20);
+      if (d.ma200.length) chart.addLineSeries({{ color:"#eab308", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.ma200);
       if (d.bb_up.length) {{
-        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, title:"BB+" }}).setData(d.bb_up);
-        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, title:"BB-" }}).setData(d.bb_dn);
+        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.bb_up);
+        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.bb_dn);
       }}
       if (d.tenkan.length) {{
-        chart.addLineSeries({{ color:"#ef4444", lineWidth:1, title:"전환선" }}).setData(d.tenkan);
-        chart.addLineSeries({{ color:"#3b82f6", lineWidth:1, title:"기준선" }}).setData(d.kijun);
-        chart.addLineSeries({{ color:"rgba(16,185,129,0.55)", lineWidth:1, title:"선행A" }}).setData(d.span_a);
-        chart.addLineSeries({{ color:"rgba(239,68,68,0.55)", lineWidth:1, title:"선행B" }}).setData(d.span_b);
-        chart.addLineSeries({{ color:"rgba(148,163,184,0.6)", lineWidth:1, lineStyle:2, title:"후행" }}).setData(d.chikou);
+        chart.addLineSeries({{ color:"#ef4444", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.tenkan);
+        chart.addLineSeries({{ color:"#3b82f6", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.kijun);
+        chart.addLineSeries({{ color:"rgba(16,185,129,0.55)", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.span_a);
+        chart.addLineSeries({{ color:"rgba(239,68,68,0.55)", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.span_b);
+        chart.addLineSeries({{ color:"rgba(148,163,184,0.6)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.chikou);
       }}
       if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"CALL WALL" }});
       if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"PUT WALL" }});
