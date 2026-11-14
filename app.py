@@ -847,11 +847,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
     c_dict = {c["time"]: c for c in candles if c["close"] > 0}
     candles = [c_dict[k] for k in sorted(c_dict.keys())]
 
-    m1, m2, m3, m4 = st.columns(4)
+    bk_top = aux_map.get("book") or {}
+    bids_top = bk_top.get("Bid") or bk_top.get("bids") or []
+    asks_top = bk_top.get("Ask") or bk_top.get("asks") or []
+    bid_px_s = f"${float(bids_top[0][0]):,.2f} ({int(bids_top[0][1])})" if bids_top and len(bids_top[0]) >= 2 else "-"
+    ask_px_s = f"${float(asks_top[0][0]):,.2f} ({int(asks_top[0][1])})" if asks_top and len(asks_top[0]) >= 2 else "-"
+    if bid_px_s == "-" and isinstance(cur.get("raw"), dict):
+        bp = cur["raw"].get("bid_price") or cur["raw"].get("bid")
+        ap = cur["raw"].get("ask_price") or cur["raw"].get("ask")
+        if bp: bid_px_s = f"${float(bp):,.2f}"
+        if ap: ask_px_s = f"${float(ap):,.2f}"
+
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("현재가", f"${cur['px']:,.2f}" if cur["px"] else "-", f"{cur['chg']:+.2f}%" if cur["chg"] is not None else None)
-    m2.metric("당일 거래량", f"{int(cur['vol']):,}" if cur["vol"] else "-")
-    m3.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
-    m4.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
+    m2.metric("Bid / Ask", f"{bid_px_s} / {ask_px_s}")
+    m3.metric("당일 거래량", f"{int(cur['vol']):,}" if cur["vol"] else "-")
+    m4.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
+    m5.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
 
     ov1, ov2, ov3, ov4, ov5, ov6 = st.columns(6)
     show_vwap = ov1.checkbox("VWAP", value=True)
@@ -861,17 +873,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
     show_vpvr = ov5.checkbox("매물대(VPVR)", value=True)
     show_walls = ov6.checkbox("Call/Put·ZG", value=True)
 
-    sub1, sub2, sub3, sub4, sub5 = st.columns(5)
+    sub1, sub2, sub3, sub4, sub5, sub6 = st.columns(6)
     show_vol = sub1.checkbox("거래량(Vol)", value=True)
     show_cvd = sub2.checkbox("CVD(누적델타)", value=True)
-    show_macd = sub3.checkbox("MACD(12,26,9)", value=True)
-    show_rsi = sub4.checkbox("RSI(14)", value=False)
-    show_icc = sub5.checkbox("역시계곡선(20)", value=True)
+    show_bii = sub3.checkbox("BII(체결강도)", value=True)
+    show_macd = sub4.checkbox("MACD(12,26,9)", value=True)
+    show_rsi = sub5.checkbox("RSI(14)", value=False)
+    show_icc = sub6.checkbox("역시계곡선(20)", value=True)
 
     vwap_pts, bb_up_pts, bb_dn_pts, vol_pts = [], [], [], []
     ma20_pts, ma200_pts = [], []
     tenkan_pts, kijun_pts, span_a_pts, span_b_pts, chikou_pts = [], [], [], [], []
-    cvd_pts, macd_pts, macd_sig_pts, macd_hist_pts, rsi_pts = [], [], [], [], []
+    cvd_pts, bii_pts, macd_pts, macd_sig_pts, macd_hist_pts, rsi_pts, cloud_pts = [], [], [], [], [], [], []
     vpvr_bins = []
     icc_df = pd.DataFrame()
 
@@ -898,6 +911,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         rng_hl = (df_c["high"] - df_c["low"]).replace(0, 1e-6)
         bar_delta = df_c["volume"] * ((2.0 * df_c["close"] - df_c["high"] - df_c["low"]) / rng_hl)
         df_c["cvd"] = bar_delta.cumsum()
+        df_c["bii"] = bar_delta.cumsum() * 100.0
 
         # MACD (12, 26, 9)
         ema12 = df_c["close"].ewm(span=12, adjust=False).mean()
@@ -935,6 +949,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             vol_pts.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
             vwap_pts.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
             cvd_pts.append({"time": t_i, "value": round(float(r_c["cvd"]), 1)})
+            bii_pts.append({"time": t_i, "value": round(float(r_c["bii"]), 0)})
             macd_pts.append({"time": t_i, "value": round(float(r_c["macd"]), 3)})
             macd_sig_pts.append({"time": t_i, "value": round(float(r_c["macd_sig"]), 3)})
             mh = float(r_c["macd_hist"])
@@ -954,6 +969,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 span_a_pts.append({"time": t_i, "value": round(float(r_c["span_a"]), 2)})
             if pd.notna(r_c["span_b"]):
                 span_b_pts.append({"time": t_i, "value": round(float(r_c["span_b"]), 2)})
+            if pd.notna(r_c["span_a"]) and pd.notna(r_c["span_b"]):
+                cloud_pts.append({"time": t_i, "a": round(float(r_c["span_a"]), 2), "b": round(float(r_c["span_b"]), 2)})
             if pd.notna(r_c["chikou"]):
                 chikou_pts.append({"time": t_i, "value": round(float(r_c["chikou"]), 2)})
             if pd.notna(r_c["rsi"]):
@@ -967,7 +984,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             sig_h_lv = round(last_c * (1.0 + rv_std * 2.0), 2)
             sig_l_lv = round(last_c * (1.0 - rv_std * 2.0), 2)
 
-    pane_cnt = int(show_cvd) + int(show_macd) + int(show_rsi)
+    pane_cnt = int(show_cvd) + int(show_bii) + int(show_macd) + int(show_rsi)
     total_h = 520 + pane_cnt * 135
 
     tv_payload = json.dumps({
@@ -986,6 +1003,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "chikou": chikou_pts if show_ichi else [],
         "vpvr": vpvr_bins if show_vpvr else [],
         "cvd": cvd_pts if show_cvd else [],
+        "bii": bii_pts if show_bii else [],
+        "cloud": cloud_pts if show_ichi else [],
         "macd": macd_pts if show_macd else [],
         "macd_sig": macd_sig_pts if show_macd else [],
         "macd_hist": macd_hist_pts if show_macd else [],
@@ -1002,8 +1021,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
     })
 
     tv_html = f"""
-    <div id="tv_wrap" style="background:#131722; border-radius:8px;">
-    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#131722; border:1px solid #2a2e39; border-radius:6px 6px 0 0; padding:6px 10px; font-family:sans-serif; font-size:12px; color:#d1d4dc;">
+    <div id="tv_wrap" style="background:#0b0f17; border-radius:8px;">
+    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#0f172a; border:1px solid #2a2e39; border-radius:6px 6px 0 0; padding:6px 10px; font-family:sans-serif; font-size:12px; color:#d1d4dc;">
       <span style="font-weight:700; color:#38bdf8; margin-right:4px;">🛠️ 그리기:</span>
       <button class="tv-tool active" data-t="cursor" style="background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;">🖱️ 커서</button>
       <button class="tv-tool" data-t="brush" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:4px 8px;cursor:pointer;">✏️ 붓</button>
@@ -1018,9 +1037,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
     </div>
     <div style="position:relative; width:100%; background:#131722; border:1px solid #2a2e39; border-top:0; border-radius:0 0 8px 8px; overflow:hidden;">
       <div id="tv_main" style="width:100%; height:460px;"></div>
+      <div id="tv_hud" style="position:absolute; top:8px; right:76px; z-index:4; background:rgba(15,23,42,0.85); border:1px solid #334155; border-radius:6px; padding:5px 10px; font-family:monospace; font-size:11px; color:#e2e8f0; pointer-events:none;"></div>
+      <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
       <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:130px; height:460px; pointer-events:none; z-index:2;"></canvas>
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
       <div id="tv_cvd" style="width:100%; height:{130 if show_cvd else 0}px; border-top:{'1px solid #2a2e39' if show_cvd else '0'};"></div>
+      <div id="tv_bii" style="width:100%; height:{130 if show_bii else 0}px; border-top:{'1px solid #2a2e39' if show_bii else '0'};"></div>
       <div id="tv_macd" style="width:100%; height:{130 if show_macd else 0}px; border-top:{'1px solid #2a2e39' if show_macd else '0'};"></div>
       <div id="tv_rsi" style="width:100%; height:{130 if show_rsi else 0}px; border-top:{'1px solid #2a2e39' if show_rsi else '0'};"></div>
     </div>
@@ -1069,7 +1091,29 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
       // VPVR + 좌측 Call(초록)/Put(빨강) 가로 막대 그리기
       const vpCv = document.getElementById("tv_vpvr");
+      const clCv = document.getElementById("tv_cloud");
+      function drawCloud() {{
+        const mh = elMain.clientHeight || 460;
+        clCv.width = elMain.clientWidth; clCv.height = mh;
+        const cctx = clCv.getContext("2d");
+        cctx.clearRect(0, 0, clCv.width, mh);
+        if (!d.cloud || d.cloud.length < 2) return;
+        for (let i = 0; i < d.cloud.length - 1; i++) {{
+          const p1 = d.cloud[i], p2 = d.cloud[i+1];
+          const x1 = chart.timeScale().timeToCoordinate(p1.time);
+          const x2 = chart.timeScale().timeToCoordinate(p2.time);
+          const ya1 = cs.priceToCoordinate(p1.a), yb1 = cs.priceToCoordinate(p1.b);
+          const ya2 = cs.priceToCoordinate(p2.a), yb2 = cs.priceToCoordinate(p2.b);
+          if ([x1,x2,ya1,yb1,ya2,yb2].some(v => v === null)) continue;
+          cctx.beginPath();
+          cctx.moveTo(x1, ya1); cctx.lineTo(x2, ya2); cctx.lineTo(x2, yb2); cctx.lineTo(x1, yb1);
+          cctx.closePath();
+          cctx.fillStyle = p1.a >= p1.b ? "rgba(16,185,129,0.14)" : "rgba(239,68,68,0.14)";
+          cctx.fill();
+        }}
+      }}
       function drawVpvr() {{
+        drawCloud();
         const mh = elMain.clientHeight || 460;
         vpCv.width = 160; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
@@ -1107,6 +1151,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
         sCvd.setData(d.cvd);
         subCharts.push(cCvd);
       }}
+      if (d.bii.length) {{
+        const cBii = LightweightCharts.createChart(document.getElementById("tv_bii"), baseOpt);
+        const sBii = cBii.addLineSeries({{ color:"#2563eb", lineWidth:2, title:"BII (Intraday Intensity)" }});
+        sBii.setData(d.bii);
+        sBii.createPriceLine({{ price:0, color:"rgba(148,163,184,0.4)", lineStyle:2 }});
+        subCharts.push(cBii);
+      }}
       if (d.macd.length) {{
         const cMacd = LightweightCharts.createChart(document.getElementById("tv_macd"), baseOpt);
         cMacd.addHistogramSeries({{ title:"MACD Hist" }}).setData(d.macd_hist);
@@ -1122,6 +1173,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
         sRsi.createPriceLine({{ price:30, color:"rgba(16,185,129,0.6)", lineStyle:2, title:"30" }});
         subCharts.push(cRsi);
       }}
+      const hudEl = document.getElementById("tv_hud");
+      if (hudEl) {{
+        const cTxt = d.candles.length ? d.candles[d.candles.length-1].close : "-";
+        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 종가 <b style="color:#f8fafc;">$${{cTxt}}</b>` +
+          (d.cw ? ` · <span style="color:#10b981;">CW $${{d.cw}}</span>` : "") +
+          (d.pw ? ` · <span style="color:#ef4444;">PW $${{d.pw}}</span>` : "") +
+          (d.zg ? ` · <span style="color:#f59e0b;">γ $${{d.zg}}</span>` : "");
+      }}
+      chart.subscribeCrosshairMove(param => {{
+        if (!hudEl || !param || !param.time) return;
+        const bar = param.seriesData.get(cs);
+        if (!bar) return;
+        const chgP = bar.open ? (((bar.close - bar.open) / bar.open) * 100).toFixed(2) : "0.00";
+        const colP = bar.close >= bar.open ? "#10b981" : "#ef4444";
+        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 <b>${{bar.open}}</b> 고 <b>${{bar.high}}</b> 저 <b>${{bar.low}}</b> 종 <b style="color:${{colP}};">${{bar.close}} (${{chgP}}%)</b>`;
+      }});
       chart.timeScale().fitContent();
       subCharts.forEach(sc => sc.timeScale().fitContent());
       chart.timeScale().subscribeVisibleLogicalRangeChange(r => {{
@@ -1281,6 +1348,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             "LEVEL": lv_lbl,
             "C/P": cp_c,
             "B/S": "BUY" if "A" in str(rf[4]) else str(rf[4]),
+            "SIDE": "Ask(매수)" if "A" in str(rf[4]) else ("Bid(매도)" if "B" in str(rf[4]) else str(rf[4])),
             "PREM": rf[14],
             "Volume": f"{int(oi_info.get('거래량', 0)):,}" if oi_info else "-",
             "OI": f"{int(oi_info.get('OI', 0)):,}" if oi_info else "-",
