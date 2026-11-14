@@ -3002,9 +3002,11 @@ if nav_menu == MENU_ITEMS[15]:
 # ================= TAB: SILPI ARCHIVE =================
 if nav_menu == "📚 실피 자료실":
     st.title("📚 실피 자료실 (전략 · 지표 · 매매 복기 아카이브)")
-    st.caption("옵션·차트 핵심 이론, 나만의 매매 기준, 종목별 메모 및 참고 링크를 한곳에 모아두고 검색합니다.")
+    st.caption("옵션·차트 핵심 이론, 나만의 매매 기준, 파일·메모 및 참고 링크를 서버에 영구 저장하고 검색합니다.")
 
     SILPI_PATH = os.path.expanduser("~/.optionhub_silpi_vault.json")
+    SILPI_DIR = os.path.expanduser("~/.optionhub_silpi_files")
+    os.makedirs(SILPI_DIR, exist_ok=True)
     default_silpi = [
         {
             "id": "init_1",
@@ -3035,33 +3037,48 @@ if nav_menu == "📚 실피 자료실":
         }
     ]
     silpi_items = load_json_file(SILPI_PATH, default_silpi)
+    if st.session_state.pop("silpi_saved_ok", False):
+        st.success("✅ 실피 자료실에 정상 저장되었습니다!")
 
-    with st.expander("➕ 새 자료 / 메모 추가하기", expanded=False):
+    with st.expander("➕ 새 자료 / 메모 / 파일 추가하기", expanded=True):
         with st.form("silpi_add_form", clear_on_submit=True):
             fc1, fc2, fc3 = st.columns([1.2, 1.0, 2.0])
             s_cat = fc1.selectbox("카테고리", ["옵션 전략", "차트 패턴", "매매 복기", "자금 관리", "참고 링크/PDF"])
             s_tk = fc2.text_input("관련 종목", "공통", placeholder="예: SOXL, NVDA, 공통").strip().upper() or "공통"
-            s_title = fc3.text_input("제목", placeholder="예: 11/14 SOXL 58C/60C 매집 복기")
-            s_body = st.text_area("상세 내용 / 메모", height=120, placeholder="핵심 수치, 진입/손절 기준, 복기 내용을 입력하세요.")
-            s_link = st.text_input("참고 URL (선택)", placeholder="https://...")
+            s_title = fc3.text_input("제목 (비워두면 내용 첫 줄 자동 입력)", placeholder="예: 11/14 SOXL 58C/60C 매집 복기")
+            s_body = st.text_area("상세 내용 / 메모", height=110, placeholder="핵심 수치, 진입/손절 기준, 복기 내용을 입력하세요.")
+            fc4, fc5 = st.columns([1.5, 1.5])
+            s_link = fc4.text_input("참고 URL (선택)", placeholder="https://...")
+            s_file = fc5.file_uploader("파일 첨부 (PDF·이미지·TXT·CSV 등)", type=None)
             submitted_s = st.form_submit_button("💾 자료실에 저장", type="primary")
             if submitted_s:
-                if s_title.strip():
+                saved_file_path = ""
+                saved_file_name = ""
+                if s_file is not None:
+                    safe_name = f"{int(time.time())}_{os.path.basename(s_file.name)}"
+                    saved_file_path = os.path.join(SILPI_DIR, safe_name)
+                    with open(saved_file_path, "wb") as fw:
+                        fw.write(s_file.getbuffer())
+                    saved_file_name = s_file.name
+                auto_title = s_title.strip() or (s_body.strip().splitlines()[0][:50] if s_body.strip() else "") or saved_file_name or s_link.strip()
+                if auto_title:
                     new_entry = {
                         "id": f"sp_{int(time.time()*1000)}",
                         "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
                         "카테고리": s_cat,
                         "종목": s_tk,
-                        "제목": s_title.strip(),
+                        "제목": auto_title,
                         "내용": s_body.strip(),
                         "링크": s_link.strip(),
+                        "파일경로": saved_file_path,
+                        "파일명": saved_file_name,
                     }
                     silpi_items.insert(0, new_entry)
                     save_json_file(SILPI_PATH, silpi_items)
-                    st.success("✅ 실피 자료실에 저장되었습니다!")
+                    st.session_state["silpi_saved_ok"] = True
                     st.rerun()
                 else:
-                    st.warning("제목을 입력해 주세요.")
+                    st.warning("제목, 내용, 파일, 또는 링크 중 하나는 입력해 주세요.")
 
     sc1, sc2, sc3 = st.columns([1.2, 1.2, 2.0])
     cats_all = ["전체"] + sorted(list({x.get("카테고리", "기타") for x in silpi_items}))
@@ -3095,3 +3112,7 @@ if nav_menu == "📚 실피 자료실":
                 st.markdown(item_sp["내용"].replace("\n", "  \n"))
             if item_sp.get("링크"):
                 st.markdown(f"🔗 참고 링크: [{item_sp['링크']}]({item_sp['링크']})")
+            fp_sp = item_sp.get("파일경로", "")
+            if fp_sp and os.path.exists(fp_sp):
+                with open(fp_sp, "rb") as fr:
+                    st.download_button(f"📥 {item_sp.get('파일명', '첨부파일')}", fr.read(), file_name=item_sp.get("파일명", "file"), key=f"dl_sp_{item_sp.get('id', idx_sp)}")
