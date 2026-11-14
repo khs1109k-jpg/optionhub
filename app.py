@@ -272,7 +272,7 @@ if nav_menu == "📝 오늘의 종합평":
     <div class='morning-banner'>
         <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>
             <span style='font-size:16px; font-weight:800; color:#60a5fa;'>☀️ AI 옵션 모닝 1분 핵심 브리핑 (장전 체크포인트)</span>
-            <span style='background:#2563eb; color:white; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px;'>2026-11-11 최신본</span>
+            <span style='background:#2563eb; color:white; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px;'>2026-11-13 최신본</span>
         </div>
         <div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size:13px; color:#e2e8f0; line-height:1.5;'>
             <div style='background:rgba(239,68,68,0.1); border-left:3px solid #ef4444; padding:8px 10px; border-radius:4px;'>
@@ -425,6 +425,16 @@ DAILY_REVIEW_2026_11_11 = """📊 [OptionHub 오늘의 종합평] 2026-11-11 (�
 
 
 DAILY_METRICS_BY_DATE = {
+    "2026-11-13": {
+        "SNDK": {"trades": 6, "put_flow": "0%", "otm": "7% Sweep OTM", "contracts": "3K Sweep Contracts", "prem": "$2.5M Sweep Premium"},
+        "VKTX": {"trades": 8, "put_flow": "0%", "otm": "2% Sweep OTM (7.8x)", "contracts": "4K Sweep Contracts", "prem": "$220K Sweep / $465K Total"},
+        "CIFR": {"trades": 1, "put_flow": "0%", "otm": "38% Unusual OTM", "contracts": "8K Unusual Contracts", "prem": "$308K Unusual Premium"},
+        "GNLX": {"trades": 1, "put_flow": "0%", "otm": "34% Unusual OTM", "contracts": "265 Unusual Contracts", "prem": "$12K Unusual Premium"},
+        "RDW": {"trades": 1, "put_flow": "0%", "otm": "29% Unusual OTM", "contracts": "1K Unusual Contracts", "prem": "$16K Unusual Premium"},
+        "CCC": {"trades": 6, "put_flow": "0%", "otm": "-3% Sweep OTM (6.7x)", "contracts": "7K Sweep Contracts", "prem": "$174K Sweep Premium"},
+        "NIO": {"trades": 6, "put_flow": "100%", "otm": "15.5x Momentum", "contracts": "26K Total Contracts", "prem": "$292K Total Premium"},
+        "SO": {"trades": 4, "put_flow": "100%", "otm": "13.6x Momentum", "contracts": "3K Total Contracts", "prem": "$415K Total Premium"},
+    },
     "2026-11-11": {
         "SNDK": {"trades": 9, "put_flow": "12%", "otm": "31% Unusual OTM", "contracts": "6K Unusual Contracts", "prem": "$6.8M Sweep / $3.0M Unusual"},
         "KGC": {"trades": 11, "put_flow": "0%", "otm": "2% Sweep OTM (11.2x)", "contracts": "7K Contracts", "prem": "$1.2M Premium"},
@@ -460,7 +470,29 @@ DAILY_METRICS_BY_DATE = {
 }
 
 DEFAULT_FLOWS = [
-    # ================= 2026-11-11 (최신 Evening Edge) =================
+    # ================= 2026-11-13 (최신 Evening Edge) =================
+    ("2026-11-13", "BA", "03:19 PM", "Put", "• A", "2027-01-15", "-", "$230", "Top Pos", "-", "-", "-", "-", "BLOCK", "$30.9M", "52"),
+    ("2026-11-13", "GOOG", "03:17 PM", "Put", "• A", "2027-01-15", "-", "$480", "Top Pos", "-", "-", "-", "-", "SPLIT", "$26.3M", "50"),
+    ("2026-11-13", "MRVL", "01:50 PM", "Put", "• A", "2027-01-15", "-", "$145", "Top Pos", "-", "-", "-", "-", "SPLIT", "$19.0M", "49"),
+    ("2026-11-13", "GLW", "03:10 PM", "Put", "• A", "2026-12-18", "-", "$200", "-", "-", "-", "-", "-", "SPLIT", "$18.3M", "46"),
+    ("2026-11-13", "MU", "09:35 AM", "Put", "• A", "2027-03-19", "-", "$650", "-", "-", "-", "-", "-", "SWEEP", "$9.6M", "45"),
+    ("2026-11-13", "GOOGL", "10:35 AM", "Call", "• A", "2027-12-17", "-", "$440", "Top Pos", "-", "-", "-", "-", "SPLIT", "$8.4M", "44"),
+    ("2026-11-13", "NVDA", "09:34 AM", "Call", "• A", "2027-03-19", "-", "$250", "-", "-", "-", "-", "-", "SWEEP", "$7.9M", "43"),
+    ("2026-11-13", "TSLA", "10:19 AM", "Put", "• A", "2026-12-11", "-", "$320", "Unusual", "-", "-", "-", "-", "GOLDEN SWEEP", "$2.6M", "48"),
+    ("2026-11-13", "PCG", "10:05 AM", "Call", "• A", "2026-12-31", "-", "$15", "Top Pos", "-", "-", "-", "-", "BLOCK", "$1.2M", "42"),
+    ("2026-11-13", "SNDK", "10:46 AM", "Call", "• A", "2026-11-20", "-", "$1000", "Unusual", "-", "-", "-", "-", "SWEEP", "$1.0M", "47"),
+    ("2026-11-13", "SNDK", "10:13 AM", "Call", "• A", "2026-11-13", "-", "$850", "-", "-", "-", "-", "-", "SWEEP", "$671K", "44"),
+    ("2026-11-13", "SNDK", "02:40 PM", "Call", "• A", "2026-11-20", "-", "$1060", "Unusual", "-", "-", "-", "-", "BLOCK", "$270K", "41"),
+    ("2026-11-13", "BABA", "10:07 AM", "Call", "• A", "2027-01-15", "-", "$120", "-", "-", "-", "-", "-", "BLOCK", "$1.5M", "43"),
+    ("2026-11-13", "CRWV", "03:47 PM", "Call", "• A", "2026-12-18", "-", "$65", "Unusual", "-", "-", "-", "-", "SPLIT", "$771K", "44"),
+    ("2026-11-13", "CIFR", "09:56 AM", "Call", "• A", "2026-12-18", "-", "$9", "Unusual", "-", "-", "-", "-", "BLOCK", "$308K", "40"),
+    ("2026-11-13", "VKTX", "12:59 PM", "Call", "• A", "2026-11-13", "-", "$27", "Top Pos", "-", "-", "-", "-", "BLOCK", "$145K", "41"),
+    ("2026-11-13", "VKTX", "02:45 PM", "Call", "• A", "2026-12-18", "-", "$30", "Above Ask", "-", "-", "-", "-", "SWEEP", "$98K", "40"),
+    ("2026-11-13", "NIO", "12:39 PM", "Put", "• A", "2027-01-15", "-", "$3", "-", "-", "-", "-", "-", "BLOCK", "$96K", "39"),
+    ("2026-11-13", "SO", "12:08 PM", "Put", "• A", "2027-09-17", "-", "$75", "Top Pos", "-", "-", "-", "-", "SWEEP", "$119K", "39"),
+    ("2026-11-13", "SPX", "11:57 AM", "Put", "• A", "2027-02-19", "-", "$8000", "-", "-", "-", "-", "-", "SPLIT", "$279.0M", "55"),
+    ("2026-11-13", "SPX", "12:56 PM", "Call", "• A", "2026-11-20", "-", "$7000", "-", "-", "-", "-", "-", "SPLIT", "$126.3M", "52"),
+    # ================= 2026-11-11 (이전 Evening Edge) =================
     ("2026-11-11", "SNDK", "10:53 AM", "Call", "• A", "2026-11-13", "-", "$1225", "Unusual", "-", "-", "-", "-", "SWEEP", "$45K", "42"),
     ("2026-11-11", "SNDK", "10:32 AM", "Call", "• A", "2026-11-20", "-", "$1030", "Golden", "-", "-", "-", "-", "GOLDEN SWEEP", "$1.5M", "48"),
     ("2026-11-11", "SNDK", "10:03 AM", "Call", "• A", "2026-11-20", "-", "$1260", "Unusual", "-", "-", "-", "-", "SWEEP", "$261K", "40"),
@@ -705,8 +737,26 @@ if nav_menu == "⚡ 무무 실시간 차트":
             pw_lv = max(puts_m, key=lambda x: x.get("OI", 0)).get("행사가")
         zg_lv = calc_zero_gamma(det_m, float(snap_m.get("Spot", cur["px"] or 0)))
 
-    # Build OHLCV candles from moomoo bars -> quote_hist -> yfinance fallback
+    # Build OHLCV candles: yfinance 5d 15m base + moomoo bars & live quote_hist overlay
     candles = []
+    try:
+        import yfinance as yf
+        df_yf = yf.Ticker(clean_tk).history(period="5d", interval="15m")
+        if not df_yf.empty:
+            for idx_t, r_y in df_yf.iterrows():
+                candles.append({
+                    "time": int(idx_t.timestamp()),
+                    "open": round(float(r_y["Open"]), 2),
+                    "high": round(float(r_y["High"]), 2),
+                    "low": round(float(r_y["Low"]), 2),
+                    "close": round(float(r_y["Close"]), 2),
+                    "volume": float(r_y["Volume"]),
+                })
+            if cur["px"] == 0:
+                cur["px"] = candles[-1]["close"]
+    except Exception:
+        pass
+
     aux_map = {}
     if con is not None:
         try:
@@ -718,7 +768,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             bars_data = aux_map.get("bars")
             if isinstance(bars_data, dict):
                 bars_data = bars_data.get("bars") or bars_data.get("data") or bars_data.get("items")
-            if isinstance(bars_data, list) and len(bars_data) >= 5 and isinstance(bars_data[0], dict):
+            if isinstance(bars_data, list) and bars_data and isinstance(bars_data[0], dict):
                 for b in bars_data:
                     t_raw = b.get("time_key") or b.get("time") or b.get("ts") or b.get("t")
                     ts_sec = int(pd.Timestamp(t_raw).timestamp()) if isinstance(t_raw, str) else int(float(t_raw))
@@ -730,39 +780,19 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         "close": float(b.get("close", b.get("c", 0))),
                         "volume": float(b.get("volume", b.get("vol", b.get("v", 0))) or 0),
                     })
-            if len(candles) < 5:
-                hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? ORDER BY ts ASC", (sel_syn,)).fetchall()
-                if len(hist_rows) >= 5:
-                    df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
-                    df_h["min_ts"] = (df_h["ts"] // 60).astype(int) * 60
-                    for m_ts, g in df_h.groupby("min_ts"):
-                        candles.append({
-                            "time": int(m_ts),
-                            "open": float(g["px"].iloc[0]),
-                            "high": float(g["px"].max()),
-                            "low": float(g["px"].min()),
-                            "close": float(g["px"].iloc[-1]),
-                            "volume": float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0)),
-                        })
-        except Exception:
-            pass
-
-    if len(candles) < 5:
-        try:
-            import yfinance as yf
-            df_yf = yf.Ticker(clean_tk).history(period="5d", interval="15m")
-            if not df_yf.empty:
-                for idx_t, r_y in df_yf.iterrows():
+            hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? ORDER BY ts ASC", (sel_syn,)).fetchall()
+            if hist_rows:
+                df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
+                df_h["min_ts"] = (df_h["ts"] // 60).astype(int) * 60
+                for m_ts, g in df_h.groupby("min_ts"):
                     candles.append({
-                        "time": int(idx_t.timestamp()),
-                        "open": round(float(r_y["Open"]), 2),
-                        "high": round(float(r_y["High"]), 2),
-                        "low": round(float(r_y["Low"]), 2),
-                        "close": round(float(r_y["Close"]), 2),
-                        "volume": float(r_y["Volume"]),
+                        "time": int(m_ts),
+                        "open": float(g["px"].iloc[0]),
+                        "high": float(g["px"].max()),
+                        "low": float(g["px"].min()),
+                        "close": float(g["px"].iloc[-1]),
+                        "volume": float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0)),
                     })
-                if cur["px"] == 0:
-                    cur["px"] = candles[-1]["close"]
         except Exception:
             pass
 
@@ -1341,7 +1371,17 @@ if nav_menu == MENU_ITEMS[0]:
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.subheader("📊 Barchart 특이옵션 & Menthor Q 그릭스/GEX 리포트 (구글 시트 실시간 연동)")
+    st.subheader("📊 Barchart 특이옵션 & Menthor Q 그릭스/GEX 리포트 (구글 시트 & 최신 메일 연동)")
+    st.markdown("""
+    <div style="background:#0f172a; border:1px solid #334155; border-radius:8px; padding:12px 16px; margin-bottom:10px; font-size:13px; color:#e2e8f0;">
+      <div style="font-weight:800; color:#38bdf8; margin-bottom:6px;">📐 Menthor Q · Greeks 최신 리포트 (2026-11-13 메일 기준)</div>
+      <ul style="margin:0; padding-left:18px; line-height:1.6;">
+        <li><strong>NVDA ($166.19, -4.34%)</strong>: Net GEX <span style="color:#ef4444;">-$172.03M</span> (총 감마 $1.63B · Negative-Gamma) · HVL 감마 플립 <strong>$182</strong> · Put Support <strong>$150</strong> / Call Resistance <strong>$200</strong> · 1D 예상변동 <strong>$160.38~$172.00</strong> · 1M IV <strong>59.7%</strong> (HV 52.7%, IV Rank 92.4%)</li>
+        <li><strong>QQQ ($688.17)</strong>: Net GEX <span style="color:#ef4444;">-$274.55M</span> (Bearish Swing) · 5일 상단밴드 <strong>$710.81</strong>(-3.3%) / 20일 상단밴드 <strong>$733.42</strong>(-6.6%) · 리스크 트리거 5일 <strong>$665.61</strong>(+3.3%) / 20일 <strong>$643.00</strong>(+6.6%)</li>
+        <li><strong>SBUX (Barchart 최신 시트)</strong>: 12/18 <strong>75 Call</strong> $96.3M (Deep ITM Stock Replacement 29,500건, 델타 0.9933, 거래량 5배) · 11/20 100 Call $647K 블록 연속</li>
+      </ul>
+    </div>
+    """, unsafe_allow_html=True)
     df_bm = load_ai_notes_sheet()
     if not df_bm.empty and "섹션" in df_bm.columns:
         df_bm_sub = df_bm[df_bm["섹션"].astype(str).str.contains("바차트|맨도큐|Barchart|Menthor|GeeksOfFinance|SpotGamma|UnusualWhales", case=False, na=False)].iloc[::-1].head(12)
