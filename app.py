@@ -710,7 +710,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         except Exception:
             pass
 
-    sel_c1, sel_c2 = st.columns([2, 3])
+    sel_c1, sel_c2, sel_c3 = st.columns([1.5, 1.4, 2.9])
     if q_map:
         with col_r1:
             st.success(f"🟢 무무 실시간 수신 중 · {len(parsed_q)}종목 · 최근 갱신: {parsed_q[0]['수신시각(KST)']} KST")
@@ -726,21 +726,53 @@ if nav_menu == "⚡ 무무 실시간 차트":
         sel_syn = f"US.{clean_tk}"
         cur = {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"}
     with sel_c2:
+        search_tk = st.text_input("🔍 종목 검색", "", placeholder="예: SMH, PLTR, MU").strip().upper()
+    if search_tk:
+        clean_tk = search_tk
+        sel_syn = f"US.{clean_tk}"
+        cur = q_map.get(sel_syn, {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"})
+    with sel_c3:
         tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=1, horizontal=True, key="mm_tf")
 
-    # OptionHub GEX Wall lookup
+    # OptionHub GEX Wall + SIG_H/L + DELTA + GEX CALL/PUT + Left Call/Put Bars lookup
     oi_hist_m = load_json_file(OI_PATH, {})
-    cw_lv = pw_lv = zg_lv = None
+    cw_lv = pw_lv = zg_lv = sig_h_lv = sig_l_lv = delta_lv = gex_c_lv = gex_p_lv = None
+    opt_bars = []
     if clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
         snap_m = oi_hist_m[clean_tk][-1]
         det_m = snap_m.get("상세", [])
+        spot_m = float(snap_m.get("Spot", cur["px"] or 0) or 0)
         calls_m = [x for x in det_m if x.get("구분") == "Call"]
         puts_m = [x for x in det_m if x.get("구분") == "Put"]
         if calls_m:
             cw_lv = max(calls_m, key=lambda x: x.get("OI", 0)).get("행사가")
+            gex_c_lv = max(calls_m, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
         if puts_m:
             pw_lv = max(puts_m, key=lambda x: x.get("OI", 0)).get("행사가")
-        zg_lv = calc_zero_gamma(det_m, float(snap_m.get("Spot", cur["px"] or 0)))
+            gex_p_lv = max(puts_m, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
+        zg_lv = calc_zero_gamma(det_m, spot_m)
+        if det_m:
+            df_dm = pd.DataFrame(det_m)
+            if "DEX($M)" in df_dm.columns and not df_dm.empty:
+                dex_s = df_dm.groupby("행사가")["DEX($M)"].sum().abs()
+                if not dex_s.empty:
+                    delta_lv = float(dex_s.idxmax())
+            if "IV(%)" in df_dm.columns and spot_m > 0:
+                atm_iv_m = float(df_dm.iloc[(df_dm["행사가"] - spot_m).abs().argsort()[:4]]["IV(%)"].mean() or 0)
+                if atm_iv_m > 0:
+                    mv_1d = spot_m * (atm_iv_m / 100.0) / math.sqrt(252.0)
+                    sig_h_lv = round(spot_m + mv_1d, 2)
+                    sig_l_lv = round(spot_m - mv_1d, 2)
+            # 행사가별 Call/Put 강도 (거래량·|GEX| 기반 좌측 가로 막대)
+            grp_c = df_dm[df_dm["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum().abs() if "GEX($M)" in df_dm.columns else pd.Series(dtype=float)
+            grp_p = df_dm[df_dm["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum().abs() if "GEX($M)" in df_dm.columns else pd.Series(dtype=float)
+            all_ks = sorted(set(grp_c.index.tolist()) | set(grp_p.index.tolist()))
+            mx_cp = max([float(grp_c.get(k, 0)) + float(grp_p.get(k, 0)) for k in all_ks] + [1e-6])
+            for k in all_ks:
+                cv = float(grp_c.get(k, 0))
+                pv = float(grp_p.get(k, 0))
+                if cv + pv > 0:
+                    opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 2), "p_m": round(pv, 2)})
 
     # Build OHLCV candles: yfinance base (1m/5m/10m/15m/1d) + moomoo live overlay
     tf_map = {
@@ -927,6 +959,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
             if pd.notna(r_c["rsi"]):
                 rsi_pts.append({"time": t_i, "value": round(float(r_c["rsi"]), 2)})
 
+    if sig_h_lv is None and candles and len(candles) >= 20:
+        df_tmp_s = pd.DataFrame(candles)
+        rv_std = float(df_tmp_s["close"].pct_change().dropna().tail(20).std() or 0)
+        last_c = float(df_tmp_s["close"].iloc[-1])
+        if rv_std > 0 and last_c > 0:
+            sig_h_lv = round(last_c * (1.0 + rv_std * 2.0), 2)
+            sig_l_lv = round(last_c * (1.0 - rv_std * 2.0), 2)
+
     pane_cnt = int(show_cvd) + int(show_macd) + int(show_rsi)
     total_h = 520 + pane_cnt * 135
 
@@ -953,6 +993,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "cw": cw_lv if show_walls else None,
         "pw": pw_lv if show_walls else None,
         "zg": zg_lv if show_walls else None,
+        "sig_h": sig_h_lv if show_walls else None,
+        "sig_l": sig_l_lv if show_walls else None,
+        "delta_k": delta_lv if show_walls else None,
+        "gex_c_k": gex_c_lv if show_walls else None,
+        "gex_p_k": gex_p_lv if show_walls else None,
+        "opt_bars": opt_bars if show_vpvr else [],
     })
 
     tv_html = f"""
@@ -1012,20 +1058,41 @@ if nav_menu == "⚡ 무무 실시간 차트":
         chart.addLineSeries({{ color:"rgba(239,68,68,0.55)", lineWidth:1, title:"선행B" }}).setData(d.span_b);
         chart.addLineSeries({{ color:"rgba(148,163,184,0.6)", lineWidth:1, lineStyle:2, title:"후행" }}).setData(d.chikou);
       }}
-      if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"Call Wall" }});
-      if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"Put Wall" }});
-      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"Zero Gamma" }});
+      if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"CALL WALL" }});
+      if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"PUT WALL" }});
+      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"GAMMA" }});
+      if (d.sig_h) cs.createPriceLine({{ price:d.sig_h, color:"#f87171", lineWidth:1, lineStyle:2, title:"SIG_H" }});
+      if (d.sig_l) cs.createPriceLine({{ price:d.sig_l, color:"#38bdf8", lineWidth:1, lineStyle:2, title:"SIG_L" }});
+      if (d.delta_k) cs.createPriceLine({{ price:d.delta_k, color:"#eab308", lineWidth:1, lineStyle:3, title:"DELTA" }});
+      if (d.gex_c_k) cs.createPriceLine({{ price:d.gex_c_k, color:"#22c55e", lineWidth:1, lineStyle:3, title:"GEX CALL" }});
+      if (d.gex_p_k) cs.createPriceLine({{ price:d.gex_p_k, color:"#fb7185", lineWidth:1, lineStyle:3, title:"GEX PUT" }});
 
-      // VPVR 좌측 매물대 그리기
+      // VPVR + 좌측 Call(초록)/Put(빨강) 가로 막대 그리기
       const vpCv = document.getElementById("tv_vpvr");
       function drawVpvr() {{
-        vpCv.width = 130; vpCv.height = 460;
+        const mh = elMain.clientHeight || 460;
+        vpCv.width = 160; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
-        ctx.clearRect(0, 0, 130, 460);
+        ctx.clearRect(0, 0, 160, mh);
+        if (d.opt_bars && d.opt_bars.length) {{
+          d.opt_bars.forEach(b => {{
+            const y = cs.priceToCoordinate(b.p);
+            if (y === null || y < 0 || y > mh) return;
+            const wc = Math.round(b.c * 130);
+            const wp = Math.round(b.put * 130);
+            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.8)"; ctx.fillRect(0, y - 4, wp, 8); }}
+            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.85)"; ctx.fillRect(wp, y - 4, wc, 8); }}
+            if (wc + wp > 38) {{
+              ctx.font = "10px monospace"; ctx.fillStyle = "#e2e8f0";
+              ctx.fillText("C " + b.c_m + "M · P " + b.p_m + "M", wc + wp + 3, y + 3);
+            }}
+          }});
+          return;
+        }}
         if (!d.vpvr.length) return;
         d.vpvr.forEach(b => {{
           const y = cs.priceToCoordinate(b.p);
-          if (y === null || y < 0 || y > 460) return;
+          if (y === null || y < 0 || y > mh) return;
           const w = Math.max(2, b.pct * 115);
           ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.55)" : "rgba(56,189,248,0.35)";
           ctx.fillRect(0, y - 4, w, 8);
