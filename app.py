@@ -3122,15 +3122,31 @@ if nav_menu == "📚 실피 자료실":
         st.dataframe(levels_df, use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("📚 Latest Telegram Reports (자동 수신 원문)")
+    SILPI_SYMBOLS = [
+        "SPY","QQQ","SOXX","SOXL","SOXS","SMH",
+        "NVDA","TSLA","AAPL","MSFT","AMZN","META",
+        "GOOGL","AMD","MU","AVGO","AMAT","LRCX",
+        "KLAC","IBIT","NBIS","SNDK","VRT","LNG",
+        "BRKB","INTC"
+    ]
+    def extract_silpi_symbols(text):
+        found = []
+        upper_text = str(text or "").upper()
+        for sym in SILPI_SYMBOLS:
+            if re.search(rf"\b{sym}\b", upper_text):
+                found.append(sym)
+        return sorted(list(set(found)))
+
+    st.subheader("📚 Latest Telegram Reports (자동 수신 원문 & 종목 태그)")
     tg_notes = []
     for k_lbl, k_name in [("M7 관심도", "m7_note"), ("반도체 4종", "semi_note"), ("다크풀", "darkpool_note"), ("핵심 레벨", "levels_note"), ("아침 브리핑", "morning_note")]:
         if tide_live.get(k_name):
             tg_notes.append(f"• [{k_lbl}] {tide_live[k_name]}")
-    if tg_notes:
-        st.info("\n".join(tg_notes))
-    else:
-        st.info("11/14 시장 브리핑 · Conviction Score · M7 관심도 · DarkPool Digest · Morning Briefing (텔레그램 봇에 새 브리핑 전달 시 자동 갱신됩니다)")
+    all_tg_txt = "\n".join(tg_notes) if tg_notes else "11/14 시장 브리핑 · Conviction Score · M7 관심도 · DarkPool Digest · Morning Briefing (NVDA, QQQ, SPY, SOXX, MSFT, AAPL, AMAT, MU, AMD, IBIT, VRT, LNG, SNDK, NBIS)"
+    detected_syms = extract_silpi_symbols(all_tg_txt)
+    if detected_syms:
+        st.markdown("**🏷️ 브리핑 내 자동 추출 종목 태그:** " + " ".join([f"`{sym}`" for sym in detected_syms]))
+    st.info(all_tg_txt if tg_notes else "11/14 시장 브리핑 · Conviction Score · M7 관심도 · DarkPool Digest · Morning Briefing (텔레그램 봇에 새 브리핑 전달 시 자동 갱신됩니다)")
 
     st.divider()
 
@@ -3161,7 +3177,7 @@ if nav_menu == "📚 실피 자료실":
                         "id": f"sp_{int(time.time()*1000)}",
                         "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
                         "카테고리": s_cat,
-                        "종목": s_tk,
+                        "종목": (", ".join(extract_silpi_symbols(auto_title + " " + s_body)) or "공통") if s_tk == "공통" else s_tk,
                         "제목": auto_title,
                         "내용": s_body.strip(),
                         "링크": s_link.strip(),
