@@ -654,7 +654,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if os.path.exists(db_path):
         try:
             con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
-            q_rows = con.execute("SELECT syn, ts, data FROM quotes ORDER BY ts DESC").fetchall()
+            q_rows = con.execute("SELECT sym, ts, data FROM quotes ORDER BY ts DESC").fetchall()
             for syn, ts_val, d_txt in q_rows:
                 try:
                     d = json.loads(d_txt) if d_txt else {}
@@ -710,7 +710,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     aux_map = {}
     if con is not None:
         try:
-            for k_a, d_a in con.execute("SELECT kind, data FROM aux WHERE syn=?", (sel_syn,)).fetchall():
+            for k_a, d_a in con.execute("SELECT kind, data FROM aux WHERE sym=?", (sel_syn,)).fetchall():
                 try:
                     aux_map[k_a] = json.loads(d_a)
                 except Exception:
@@ -731,7 +731,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         "volume": float(b.get("volume", b.get("vol", b.get("v", 0))) or 0),
                     })
             if len(candles) < 5:
-                hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE syn=? ORDER BY ts ASC", (sel_syn,)).fetchall()
+                hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? ORDER BY ts ASC", (sel_syn,)).fetchall()
                 if len(hist_rows) >= 5:
                     df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
                     df_h["min_ts"] = (df_h["ts"] // 60).astype(int) * 60
