@@ -1395,27 +1395,143 @@ if nav_menu == "📊 OI(미결제약정) 수집":
             sel_oi_exp = st.selectbox("만기일별 OI · GEX · 델타 분포 보기", exp_list)
             df_e = df_det if sel_oi_exp == "전체 3만기 합산" else df_det[df_det["만기"] == sel_oi_exp]
 
-            # GEX 차트 (행사가별 Net GEX)
+            # GEX 대시보드 차트 (Call/Put/Net GEX + 하단 PREM + 집중 가격 + EST HEDGE 게이지)
             if "GEX($M)" in df_e.columns:
-                gex_by_k = df_e.groupby("행사가")["GEX($M)"].sum().reset_index()
-                call_wall = gex_by_k.loc[gex_by_k["GEX($M)"].idxmax(), "행사가"] if not gex_by_k.empty else 0
-                put_wall = gex_by_k.loc[gex_by_k["GEX($M)"].idxmin(), "행사가"] if not gex_by_k.empty else 0
-                zero_g = calc_zero_gamma(gex_by_k, spot_val)
-                zg_txt = f"**${zero_g:g}**" if zero_g else "없음(단일 부호)"
-                st.info(f"🧱 **핵심 감마 레벨** — Zero Gamma(감마 플립): {zg_txt} | Call Wall(저항): **${call_wall:g}** | Put Wall(지지): **${put_wall:g}**")
-
-                gex_by_k["색상"] = gex_by_k["GEX($M)"].apply(lambda x: "Positive (+GEX)" if x >= 0 else "Negative (-GEX)")
-                fig_gex = px.bar(
-                    gex_by_k, x="행사가", y="GEX($M)", color="색상",
-                    color_discrete_map={"Positive (+GEX)": "#00e676", "Negative (-GEX)": "#f23645"},
-                    title=f"<b>{oi_tk} ({sel_oi_exp}) 행사가별 Net GEX (감마 익스포저, $M)</b>"
-                )
+                from plotly.subplots import make_subplots
+                c_gex = df_e[df_e["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum()
+                p_gex = df_e[df_e["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum()
+                n_gex = df_e.groupby("행사가")["GEX($M)"].sum()
+                v_sum = df_e.groupby("행사가")["거래량"].sum() if "거래량" in df_e.columns else pd.Series(dtype=float)
+                strikes_all = sorted(n_gex.index.tolist())
+                gex_by_k = pd.DataFrame({
+                    "행사가": strikes_all,
+                    "Call_GEX": [float(c_gex.get(k, 0.0)) for k in strikes_all],
+                    "Put_GEX": [float(p_gex.get(k, 0.0)) for k in strikes_all],
+                    "GEX($M)": [float(n_gex.get(k, 0.0)) for k in strikes_all],
+                    "VOL": [float(v_sum.get(k, 0.0)) for k in strikes_all],
+                })
                 if spot_val and spot_val > 0:
-                    fig_gex.add_vline(x=spot_val, line_dash="dash", line_color="#fbbf24", annotation_text=f"Spot ${spot_val}")
+                    gex_win = gex_by_k[(gex_by_k["행사가"] >= spot_val * 0.7) & (gex_by_k["행사가"] <= spot_val * 1.35)]
+                    if len(gex_win) >= 5:
+                        gex_by_k = gex_win.reset_index(drop=True)
+
+                call_wall = gex_by_k.loc[gex_by_k["Call_GEX"].idxmax(), "행사가"] if not gex_by_k.empty else 0
+                put_wall = gex_by_k.loc[gex_by_k["Put_GEX"].idxmin(), "행사가"] if not gex_by_k.empty else 0
+                zero_g = calc_zero_gamma(gex_by_k, spot_val)
+                tot_call_g = gex_by_k["Call_GEX"].sum()
+                tot_put_g = gex_by_k["Put_GEX"].sum()
+                tot_net_g = gex_by_k["GEX($M)"].sum()
+                cw_vol = int(df_e[(df_e["행사가"] == call_wall) & (df_e["구분"] == "Call")]["거래량"].sum()) if "거래량" in df_e.columns else 0
+                cw_oi = int(df_e[(df_e["행사가"] == call_wall) & (df_e["구분"] == "Call")]["OI"].sum()) if "OI" in df_e.columns else 0
+                pw_vol = int(df_e[(df_e["행사가"] == put_wall) & (df_e["구분"] == "Put")]["거래량"].sum()) if "거래량" in df_e.columns else 0
+                pw_oi = int(df_e[(df_e["행사가"] == put_wall) & (df_e["구분"] == "Put")]["OI"].sum()) if "OI" in df_e.columns else 0
+
+                st.markdown(f"""
+                <div style="background:#0b1220; border:1px solid #1e293b; border-radius:8px; padding:10px 14px; margin-bottom:8px; font-family:monospace;">
+                  <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:13px; font-weight:700; border-bottom:1px solid #1e293b; padding-bottom:6px; margin-bottom:6px;">
+                    <span style="color:#94a3b8;">{oi_tk} · {sel_oi_exp}</span>
+                    <span style="color:#10b981;">CALL GEX {tot_call_g:+.2f}M</span>
+                    <span style="color:#ef4444;">PUT GEX {tot_put_g:+.2f}M</span>
+                    <span style="color:#f59e0b;">NET GEX {tot_net_g:+.2f}M</span>
+                    <span style="color:#38bdf8;">LAST CLOSE ${spot_val:,.2f}</span>
+                  </div>
+                  <div style="display:grid; grid-template-columns:1.1fr 0.8fr 0.9fr 0.9fr 1.1fr; font-size:12px; color:#cbd5e1; gap:4px;">
+                    <div style="color:#64748b;">LEVEL</div><div style="color:#64748b;">STRIKE</div><div style="color:#64748b;">VOL</div><div style="color:#64748b;">OI</div><div style="color:#64748b;">GEX</div>
+                    <div style="color:#10b981; font-weight:700;">CALL WALL</div><div style="color:#10b981;">${call_wall:g}</div><div>{cw_vol:,}</div><div>{cw_oi:,}</div><div style="color:#10b981;">${gex_by_k.loc[gex_by_k["행사가"]==call_wall, "Call_GEX"].sum():+.2f}M</div>
+                    <div style="color:#ef4444; font-weight:700;">PUT WALL</div><div style="color:#ef4444;">${put_wall:g}</div><div>{pw_vol:,}</div><div>{pw_oi:,}</div><div style="color:#ef4444;">${gex_by_k.loc[gex_by_k["행사가"]==put_wall, "Put_GEX"].sum():+.2f}M</div>
+                    <div style="color:#f59e0b; font-weight:700;">GEX FLIP</div><div style="color:#f59e0b;">{"$"+f"{zero_g:g}" if zero_g else "-"}</div><div>-</div><div>-</div><div style="color:#f59e0b;">Net {tot_net_g:+.2f}M</div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                fig_gex = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.78, 0.22])
+                fig_gex.add_trace(go.Bar(x=gex_by_k["행사가"], y=gex_by_k["Call_GEX"], name="CALL GEX", marker_color="#10b981"), row=1, col=1)
+                fig_gex.add_trace(go.Bar(x=gex_by_k["행사가"], y=gex_by_k["Put_GEX"], name="PUT GEX", marker_color="#ef4444"), row=1, col=1)
+                fig_gex.add_trace(go.Scatter(x=gex_by_k["행사가"], y=gex_by_k["GEX($M)"], name="NET GEX", mode="lines+markers", line=dict(color="#f8fafc", width=1.6), marker=dict(size=4)), row=1, col=1)
+                fig_gex.add_trace(go.Bar(x=gex_by_k["행사가"], y=gex_by_k["VOL"], name="STRIKE VOL", marker_color="#cbd5e1", showlegend=False), row=2, col=1)
+                if spot_val and spot_val > 0:
+                    fig_gex.add_vline(x=spot_val, line_dash="dash", line_color="#f8fafc", annotation_text=f"LAST CLOSE {spot_val:.2f}", annotation_position="top")
+                if call_wall:
+                    fig_gex.add_vline(x=call_wall, line_dash="dot", line_color="#10b981", annotation_text=f"CALL WALL {call_wall:g}", annotation_position="top left")
+                if put_wall:
+                    fig_gex.add_vline(x=put_wall, line_dash="dot", line_color="#ef4444", annotation_text=f"PUT WALL {put_wall:g}", annotation_position="bottom left")
                 if zero_g:
-                    fig_gex.add_vline(x=zero_g, line_dash="dot", line_color="#38bdf8", annotation_text=f"Zero Gamma ${zero_g:g}")
-                fig_gex.update_layout(plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc")
+                    fig_gex.add_vline(x=zero_g, line_dash="dashdot", line_color="#f59e0b", annotation_text=f"FLIP {zero_g:g}", annotation_position="bottom right")
+                fig_gex.update_layout(
+                    height=500, barmode="relative", plot_bgcolor="#080d17", paper_bgcolor="#080d17",
+                    font_color="#e2e8f0", margin=dict(l=12, r=12, t=30, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0)
+                )
+                fig_gex.update_yaxes(title_text="GEX ($M)", gridcolor="rgba(148,163,184,0.12)", row=1, col=1)
+                fig_gex.update_yaxes(title_text="VOL", gridcolor="rgba(148,163,184,0.1)", row=2, col=1)
+                fig_gex.update_xaxes(gridcolor="rgba(148,163,184,0.1)")
                 st.plotly_chart(fig_gex, use_container_width=True)
+
+                atm_iv = 0.0
+                if "IV(%)" in df_e.columns and spot_val > 0:
+                    atm_sub = df_e.iloc[(df_e["행사가"] - spot_val).abs().argsort()[:4]]
+                    atm_iv = float(atm_sub["IV(%)"].mean())
+                exp_mv_1d = round(spot_val * (atm_iv / 100.0) / math.sqrt(252.0), 2) if (spot_val > 0 and atm_iv > 0) else 0.0
+                st.markdown(f"""
+                <div style="background:#0b1220; border:1px solid #1e293b; border-radius:6px; padding:8px 14px; text-align:center; font-size:13px; font-weight:700; color:#cbd5e1; margin-bottom:10px;">
+                  EXPIRY IV · <span style="color:#38bdf8;">ATM IV {atm_iv:.1f}%</span> · <span style="color:#f59e0b;">1D EXP MOVE ±${exp_mv_1d:.2f}</span> · <span style="color:#a855f7;">CALL/PUT WALL {call_wall:g} / {put_wall:g}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+                gex_by_k["ABS_GEX"] = gex_by_k["Call_GEX"].abs() + gex_by_k["Put_GEX"].abs()
+                tot_abs_g = max(gex_by_k["ABS_GEX"].sum(), 1e-6)
+                below_k = gex_by_k[gex_by_k["행사가"] <= spot_val].sort_values("ABS_GEX", ascending=False).head(2) if spot_val > 0 else pd.DataFrame()
+                above_k = gex_by_k[gex_by_k["행사가"] > spot_val].sort_values("ABS_GEX", ascending=False).head(2) if spot_val > 0 else pd.DataFrame()
+                conc_rows = []
+                for lbl, sub_c in [("아래 집중 가격", below_k), ("위 집중 가격", above_k)]:
+                    for _, rc in sub_c.iterrows():
+                        dist_p = ((rc["행사가"] - spot_val) / spot_val * 100) if spot_val > 0 else 0.0
+                        share_p = rc["ABS_GEX"] / tot_abs_g * 100
+                        conc_rows.append({
+                            "위치": lbl,
+                            "가격($)": f"${rc['행사가']:g}",
+                            "기준가와 거리": f"{dist_p:+.2f}%",
+                            "총 |GEX| (비중)": f"${rc['ABS_GEX']:.2f}M ({share_p:.1f}%)",
+                            "Call / Put GEX": f"+${rc['Call_GEX']:.2f}M / ${rc['Put_GEX']:.2f}M",
+                        })
+                if conc_rows:
+                    st.markdown("**📌 옵션 집중 가격 · 관찰 포인트**")
+                    st.dataframe(pd.DataFrame(conc_rows), use_container_width=True, hide_index=True)
+
+                hedge_spot_1p = round(tot_net_g * 0.01 * 1000.0, 1)
+                st.markdown("<div style='text-align:center; font-size:12px; font-weight:700; color:#94a3b8; margin-top:6px;'>EST HEDGE · CALL+/PUT- ASSUMPTION</div>", unsafe_allow_html=True)
+                hg1, hg2, hg3 = st.columns(3)
+                g_lim = max(abs(hedge_spot_1p) * 2.0, 500.0)
+                with hg1:
+                    fig_h1 = go.Figure(go.Indicator(
+                        mode="gauge+number", value=hedge_spot_1p,
+                        number={"prefix": "$", "suffix": "K", "font": {"size": 18, "color": "#10b981" if hedge_spot_1p >= 0 else "#ef4444"}},
+                        title={"text": "SPOT +1% (LINEAR GEX)", "font": {"size": 12, "color": "#cbd5e1"}},
+                        gauge={"axis": {"range": [-g_lim, g_lim]}, "bar": {"color": "#f8fafc"},
+                               "steps": [{"range": [-g_lim, 0], "color": "rgba(239,68,68,0.28)"}, {"range": [0, g_lim], "color": "rgba(16,185,129,0.28)"}]}
+                    ))
+                    fig_h1.update_layout(height=180, margin=dict(l=15, r=15, t=35, b=5), paper_bgcolor="#080d17", font_color="#e2e8f0")
+                    st.plotly_chart(fig_h1, use_container_width=True)
+                with hg2:
+                    fig_h2 = go.Figure(go.Indicator(
+                        mode="gauge+number", value=round(tot_call_g + tot_put_g, 2),
+                        number={"prefix": "$", "suffix": "M", "font": {"size": 18, "color": "#38bdf8"}},
+                        title={"text": "NET GAMMA ($M)", "font": {"size": 12, "color": "#cbd5e1"}},
+                        gauge={"axis": {"range": [-max(abs(tot_net_g)*2, 5), max(abs(tot_net_g)*2, 5)]}, "bar": {"color": "#38bdf8"},
+                               "steps": [{"range": [-max(abs(tot_net_g)*2, 5), 0], "color": "rgba(239,68,68,0.2)"}, {"range": [0, max(abs(tot_net_g)*2, 5)], "color": "rgba(16,185,129,0.2)"}]}
+                    ))
+                    fig_h2.update_layout(height=180, margin=dict(l=15, r=15, t=35, b=5), paper_bgcolor="#080d17", font_color="#e2e8f0")
+                    st.plotly_chart(fig_h2, use_container_width=True)
+                with hg3:
+                    fig_h3 = go.Figure(go.Indicator(
+                        mode="gauge+number", value=round(net_dex_val, 2),
+                        number={"prefix": "$", "suffix": "M", "font": {"size": 18, "color": "#f59e0b"}},
+                        title={"text": "NET DELTA (DEX $M)", "font": {"size": 12, "color": "#cbd5e1"}},
+                        gauge={"axis": {"range": [-max(abs(net_dex_val)*2, 5), max(abs(net_dex_val)*2, 5)]}, "bar": {"color": "#f59e0b"},
+                               "steps": [{"range": [-max(abs(net_dex_val)*2, 5), 0], "color": "rgba(239,68,68,0.2)"}, {"range": [0, max(abs(net_dex_val)*2, 5)], "color": "rgba(16,185,129,0.2)"}]}
+                    ))
+                    fig_h3.update_layout(height=180, margin=dict(l=15, r=15, t=35, b=5), paper_bgcolor="#080d17", font_color="#e2e8f0")
+                    st.plotly_chart(fig_h3, use_container_width=True)
 
             # Call vs Put OI 막대그래프 + DEX 차트 나란히 배치
             ch1, ch2 = st.columns(2)
