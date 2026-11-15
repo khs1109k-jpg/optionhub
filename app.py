@@ -2323,15 +2323,14 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
     flow_prem_sum = sum(f["prem"] for f in tk_flows)
     disp_prem_m = round(max(tot_prem_usd, flow_prem_sum) / 1e6, 2)
 
-    # Conviction Score (0~100): OI증가(20) + Vol/OI(20) + Premium(20) + DTE(10) + Ask/Bid(10) + Sweep(10) + GEX(10)
-    sc_oi = min(20.0, max(0.0, (chg_1d or 0.0) * 1.0)) if (chg_1d or 0.0) > 0 else 8.0
+    # Conviction Score (0~100): OI 증가율 25% + Vol/OI 20% + Premium 20% + Ask/Bid 15% + Sweep/Block 10% + DTE 10%
+    sc_oi = min(25.0, max(0.0, (chg_1d or 0.0) * 1.25)) if (chg_1d or 0.0) > 0 else 10.0
     sc_voi = min(20.0, vol_oi * 4.0)
     sc_prem = min(20.0, disp_prem_m * 4.0)
-    sc_dte = 8.0
-    sc_ab = 10.0 if has_above_ask_sweep else (7.0 if tk_flows else 5.0)
-    sc_swp = 10.0 if has_sweep else 4.0
-    sc_gex = 10.0 if (net_gex_m >= 0 and spot_val >= gex_flip) else 5.0
-    conviction = int(min(100, max(10, round(sc_oi + sc_voi + sc_prem + sc_dte + sc_ab + sc_swp + sc_gex))))
+    sc_ab = 15.0 if has_above_ask_sweep else (11.0 if tk_flows else 7.0)
+    sc_swp = 10.0 if has_sweep else (7.0 if any(f["type"] == "Block" for f in tk_flows) else 4.0)
+    sc_dte = 10.0 if (not df_det.empty and "DTE" in df_det.columns and (df_det["DTE"] <= 35).any()) else 7.0
+    conviction = int(min(100, max(10, round(sc_oi + sc_voi + sc_prem + sc_ab + sc_swp + sc_dte))))
 
     # AI 판독
     reasons = []
@@ -2357,13 +2356,21 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
 
     if bull_pts >= bear_pts + 2:
         ai_emo, ai_dir, ai_prob = "🟢", "강세", min(92, 55 + (bull_pts - bear_pts) * 5)
+        p_up, p_flat = ai_prob, max(5, round((100 - ai_prob) * 0.65))
+        p_down = max(0, 100 - p_up - p_flat)
         ai_intent = "기관 매집 가능성 높음"
     elif bear_pts >= bull_pts + 2:
         ai_emo, ai_dir, ai_prob = "🔴", "약세", min(92, 55 + (bear_pts - bull_pts) * 5)
+        p_down, p_flat = ai_prob, max(5, round((100 - ai_prob) * 0.65))
+        p_up = max(0, 100 - p_down - p_flat)
         ai_intent = "하방 헷지·매도 압력 우위"
     else:
         ai_emo, ai_dir, ai_prob = "🟡", "중립", 52
+        p_flat, p_up, p_down = 52, 24, 24
         ai_intent = "콜·풋 양방향 대치 (박스권/돌파 대기)"
+
+    voi_badge = "🟢 Vol/OI > 3 (신규포지션)" if vol_oi > 3 else ("⚪ Vol/OI < 1 (기존포지션)" if vol_oi < 1 else "🟡 Vol/OI 1~3 (회전)")
+    dealer_lbl = "양감마 (+GEX)" if net_gex_m >= 0 else "음감마 (-GEX)"
 
     return {
         "spot": spot_val,
@@ -2374,6 +2381,8 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
         "net_gex_m": net_gex_m, "disp_prem_m": disp_prem_m,
         "has_above_ask_sweep": has_above_ask_sweep, "has_sweep": has_sweep,
         "conviction": conviction,
+        "p_up": p_up, "p_flat": p_flat, "p_down": p_down,
+        "voi_badge": voi_badge, "dealer_lbl": dealer_lbl,
         "ai_emo": ai_emo, "ai_dir": ai_dir, "ai_prob": ai_prob,
         "ai_intent": ai_intent, "reasons": reasons or ["실시간 OI·Vol/OI 균형 유지"],
         "tk_flows": tk_flows,
@@ -2394,8 +2403,10 @@ def _compute_top10_oi_surge(oi_hist, all_raw_flows, saved_big_flows):
         rows.append({
             "티커": tk,
             "현재가": f"${m['spot']:.2f}" if m["spot"] else "-",
-            "1일 OI증가": f"{m['chg_1d']:+.1f}%" if m["chg_1d"] is not None else "신규스냅샷",
-            "Vol/OI": m["vol_oi"],
+            "전일대비": f"{m['chg_1d']:+.1f}%" if m["chg_1d"] is not None else "신규",
+            "3일": f"{m['chg_3d']:+.1f}%" if m["chg_3d"] is not None else "-",
+            "5일": f"{m['chg_5d']:+.1f}%" if m["chg_5d"] is not None else "-",
+            "Vol/OI": f"{'🟢' if m['vol_oi']>3 else ('⚪' if m['vol_oi']<1 else '🟡')} {m['vol_oi']:.1f}",
             "프리미엄($M)": m["disp_prem_m"],
             "기관점수": m["conviction"],
             "AI 판정": f"{m['ai_emo']} {m['ai_dir']} {m['ai_prob']}%",
@@ -2443,8 +2454,10 @@ def _compute_top10_oi_surge(oi_hist, all_raw_flows, saved_big_flows):
         rows.append({
             "티커": tk,
             "현재가": "-",
-            "1일 OI증가": f"체결 {g['cnt']}건",
-            "Vol/OI": round(1.5 + min(6.0, g["cnt"] * 0.4), 1),
+            "전일대비": f"체결 {g['cnt']}건",
+            "3일": "-",
+            "5일": "-",
+            "Vol/OI": f"{'🟢' if (1.5+min(6.0,g['cnt']*0.4))>3 else '🟡'} {round(1.5 + min(6.0, g['cnt'] * 0.4), 1):.1f}",
             "프리미엄($M)": prem_m,
             "기관점수": conv,
             "AI 판정": ai_s,
@@ -2456,6 +2469,21 @@ def _compute_top10_oi_surge(oi_hist, all_raw_flows, saved_big_flows):
 if nav_menu == "📝 오늘의 종합평":
     st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
     st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
+
+    with st.container(border=True):
+        _hm_t1, _hm_t2 = st.columns([3, 1])
+        _hm_t1.subheader("🔥 오늘의 OI 급증 TOP10")
+        _hm_top10 = _compute_top10_oi_surge(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _hm_t2.button("📩 TOP10 텔레그램", use_container_width=True, key="btn_home_top10_tg_main"):
+            if _hm_top10:
+                _hm_msg = "🔥 *오늘의 OI 급증 TOP10*\n\n" + "\n".join(
+                    f"{i+1}. *{r['티커']}* | {r['기관점수']}/100 | {r['Vol/OI']} | {r['AI 판정']}"
+                    for i, r in enumerate(_hm_top10)
+                )
+                if send_telegram_msg(tg_token, tg_chat_id, _hm_msg)[0]:
+                    st.toast("✅ TOP10 텔레그램 전송 완료!")
+        if _hm_top10:
+            st.dataframe(pd.DataFrame(_hm_top10), hide_index=True, use_container_width=True)
 
 
     col_r1, col_r2 = st.columns([4, 1])
@@ -2880,21 +2908,26 @@ if nav_menu == "📊 OI(미결제약정) 수집":
             _sc_c3.metric("5일 평균 대비 OI", f"{_pro['chg_5d']:+.2f}%" if _pro["chg_5d"] is not None else "-")
             _sc_c4.metric("20일 평균 대비 OI", f"{_pro['chg_20d']:+.2f}%" if _pro["chg_20d"] is not None else "-")
 
-            _voi_lbl = "🆕 신규포지션 가능성 (Vol/OI > 3)" if _pro["vol_oi"] > 3 else ("📌 기존포지션 가능성 (Vol/OI < 1)" if _pro["vol_oi"] < 1 else "⚡ 포지션 회전/추가 (1~3)")
+            _gex_s_str = f"+{_pro['net_gex_m']/1000:.2f}B" if _pro['net_gex_m'] >= 1000 else (f"{_pro['net_gex_m']/1000:.2f}B" if _pro['net_gex_m'] <= -1000 else f"{_pro['net_gex_m']:+.1f}M")
+            _gex_em = "🟢" if _pro["net_gex_m"] >= 0 else "🔴"
             st.markdown(
-                f"**{_pro['ai_emo']} {_pro['ai_dir']} ({_pro['ai_prob']}%)** — {' · '.join(_pro['reasons'])} → **{_pro['ai_intent']}**  \n"
-                f"**Volume/OI**: `{_pro['vol_oi']:.2f}` (`{_voi_lbl}`) · Call Vol/OI `{_pro['call_vol_oi']:.2f}` · Put Vol/OI `{_pro['put_vol_oi']:.2f}`  \n"
+                f"**{_pro['ai_emo']} AI 판정: {_pro['ai_dir']}** (상승 `{_pro['p_up']}%` · 횡보 `{_pro['p_flat']}%` · 하락 `{_pro['p_down']}%`) — {' · '.join(_pro['reasons'])} → **{_pro['ai_intent']}**  \n"
+                f"**Dealer**: `{_pro['dealer_lbl']}` ({_gex_em} Net GEX `{_gex_s_str}`) · **Volume/OI**: `{_pro['vol_oi']:.2f}` (`{_pro['voi_badge']}`)  \n"
                 f"🟢 **Call Wall** `{_pro['call_wall']:g}` · 🔴 **Put Wall** `{_pro['put_wall']:g}` · 🎯 **Max Pain** `{_pro['max_pain']:g}` · 🟡 **GEX Flip** `{_pro['gex_flip']:.1f}`  \n"
                 f"**Call OI 집중**: `{', '.join(_pro['call_top3']) or '-'}` | **Put OI 집중**: `{', '.join(_pro['put_top3']) or '-'}`"
             )
             _tg_oi_txt = (
-                f"🎯 *{oi_tk}*\n"
+                f"🎯 {oi_tk}\n"
                 f"Spot {_pro['spot']:.2f}\n"
-                f"🟢 Call Wall {_pro['call_wall']:g} 🔴 Put Wall {_pro['put_wall']:g} 🟡 GEX Flip {_pro['gex_flip']:.1f}\n"
-                f"Vol/OI {_pro['vol_oi']:.1f} · Premium ${_pro['disp_prem_m']:.1f}M"
-                + (" · Above Ask Sweep" if _pro["has_above_ask_sweep"] else (" · Sweep 포착" if _pro["has_sweep"] else ""))
-                + f"\n기관매집점수 {_pro['conviction']}/100\n"
-                f"AI 최종판정 {_pro['ai_dir']} {_pro['ai_prob']}%"
+                f"{_gex_em} Net GEX {_gex_s_str}\n"
+                f"🟢 Call Wall {_pro['call_wall']:g}\n"
+                f"🔴 Put Wall {_pro['put_wall']:g}\n"
+                f"🟡 GEX Flip {_pro['gex_flip']:.1f}\n"
+                f"Vol/OI {_pro['vol_oi']:.1f}\n"
+                f"Premium ${_pro['disp_prem_m']:.1f}M\n"
+                + ("Above Ask Sweep\n" if _pro["has_above_ask_sweep"] else ("Sweep 포착\n" if _pro["has_sweep"] else ""))
+                + f"기관매집점수\n{_pro['conviction']}/100\n"
+                f"AI 최종판정\n{_pro['ai_dir']} (상승 {_pro['p_up']}% · 횡보 {_pro['p_flat']}% · 하락 {_pro['p_down']}%)"
             )
             _tg_b1, _tg_b2 = st.columns([2, 1])
             _tg_b1.code(_tg_oi_txt, language="text")
