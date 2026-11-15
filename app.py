@@ -3928,6 +3928,8 @@ if nav_menu == "🎯 행사가별·동반 체결":
 
     # 2) 야후 옵션 체인 정리
     df_yf_f = pd.DataFrame(yf_rows) if yf_rows else pd.DataFrame()
+    if not df_yf_f.empty and "만기" in df_yf_f.columns and "만기일" not in df_yf_f.columns:
+        df_yf_f["만기일"] = df_yf_f["만기"]
 
     # 텔레그램 아카이브 내 해당 종목 메시지
     tg_arch_f = load_json_file(os.path.expanduser("~/.optionhub_tg_archive.json"), [])
