@@ -264,6 +264,7 @@ MENU_ITEMS = [
     "⚡ 무무 실시간 차트",
     "📌 다음 주·원월 포지션",
     "🎯 행사가별·동반 체결",
+    "📬 인사이더 파이낸셜",
     "📚 실피 자료실",
     "📂 옵션자료실"
 ]
@@ -4687,6 +4688,162 @@ if nav_menu == "🎯 행사가별·동반 체결":
             st.success("✅ 전체 리포트 텔레그램 전송 완료!")
         else:
             st.warning("⚠️ 텔레그램 설정을 확인해 주세요.")
+
+
+if nav_menu == "📬 인사이더 파이낸셜":
+    st.title("📬 인사이더 파이낸셜 (InsiderFinance · 아침 메일 자동 피드)")
+    st.caption("아침에 수신되는 InsiderFinance · MenthorQ · Barchart · SpotGamma 메일을 Oracle DB 및 서버 수신함에서 불러와 Gemini AI 한국어 요약과 함께 표시합니다.")
+
+    INSIDER_MAIL_PATH = os.path.expanduser("~/.optionhub_insider_mails.json")
+    ORDS_MAIL_URL = "https://g8aaf2fcbd18708-optionhub.adb.ap-tokyo-1.oraclecloudapps.com/ords/optionhub/insider/mail/"
+    local_mails = load_json_file(INSIDER_MAIL_PATH, [])
+
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _fetch_ords_mails():
+        import urllib.request
+        try:
+            req = urllib.request.Request(ORDS_MAIL_URL, headers={"User-Agent": "OptionHub/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+            items = raw.get("items") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+            out = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                subj = it.get("subject") or it.get("title") or it.get("mail_subject") or "InsiderFinance 리포트"
+                body = it.get("body") or it.get("content") or it.get("mail_body") or it.get("summary") or ""
+                dt = it.get("received_at") or it.get("created_at") or it.get("mail_date") or "-"
+                src_n = it.get("source") or it.get("sender") or "InsiderFinance"
+                mid = str(it.get("id") or f"ords_{hash(str(subj)+str(dt))}")
+                out.append({
+                    "id": mid,
+                    "날짜": str(dt)[:16],
+                    "출처": str(src_n),
+                    "제목": str(subj),
+                    "원문": str(body),
+                    "요약": str(it.get("ko_summary") or ""),
+                    "종목": ", ".join(extract_silpi_symbols(str(subj) + " " + str(body))[:5]) or "공통",
+                })
+            return out, True
+        except Exception as _e:
+            return [], False
+
+    im_c1, im_c2 = st.columns([3.0, 1.0])
+    if im_c2.button("🔄 메일 새로고침", use_container_width=True, key="btn_ins_refresh"):
+        _fetch_ords_mails.clear()
+        st.rerun()
+
+    ords_mails, ords_ok = _fetch_ords_mails()
+    # 로컬 수신함 + ORDS 통합 (중복 제목 제거)
+    merged_mails = list(local_mails)
+    seen_titles = {m.get("제목", "") for m in merged_mails}
+    for om in ords_mails:
+        if om.get("제목") not in seen_titles:
+            merged_mails.append(om)
+            seen_titles.add(om.get("제목", ""))
+
+    im_c1.info(
+        f"📡 Oracle ORDS 연동: **{'정상' if ords_ok else '로컬 수신함 모드'}** · "
+        f"총 **{len(merged_mails)}건** (로컬 {len(local_mails)}건 + ORDS {len(ords_mails)}건)"
+    )
+
+    with st.expander("➕ 아침 메일 수동 붙여넣기 → AI 한국어 번역·저장", expanded=(len(merged_mails) == 0)):
+        mi_subj = st.text_input("메일 제목", "", placeholder="예: Evening Edge - Unusual Options Activity (11/15)", key="ins_in_subj")
+        mi_body = st.text_area("메일 본문 붙여넣기", height=120, placeholder="InsiderFinance 메일 본문을 그대로 붙여넣으세요...", key="ins_in_body")
+        mi_b1, mi_b2 = st.columns(2)
+        if mi_b1.button("🤖 AI 한국어 요약 후 저장", type="primary", use_container_width=True, key="btn_ins_add_ai"):
+            if mi_body.strip() or mi_subj.strip():
+                with st.spinner("Gemini AI가 메일을 한국어로 요약 중입니다..."):
+                    _tks_m = ", ".join(extract_silpi_symbols(mi_subj + " " + mi_body)[:5]) or "공통"
+                    _pr_m = (
+                        "다음 미국 옵션 메일(InsiderFinance 등)을 트레이더용으로 한국어 요약해 주세요.\n"
+                        "1) 핵심 3줄 요약\n2) 주요 종목·행사가·콜/풋·프리미엄\n3) 주목할 방향성/레벨\n\n제목: "
+                        + mi_subj + "\n본문:\n" + mi_body[:6000]
+                    )
+                    _, _ko_m = run_ai_analysis(_pr_m)
+                    local_mails.insert(0, {
+                        "id": f"ins_{int(time.time()*1000)}",
+                        "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
+                        "출처": "InsiderFinance",
+                        "제목": mi_subj.strip() or (mi_body.strip().splitlines()[0][:55] if mi_body.strip() else "InsiderFinance 메일"),
+                        "원문": mi_body.strip(),
+                        "요약": _ko_m,
+                        "종목": _tks_m,
+                    })
+                    save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
+                    st.success("✅ AI 요약과 함께 저장되었습니다!")
+                    st.rerun()
+        if mi_b2.button("💾 원문만 바로 저장", use_container_width=True, key="btn_ins_add_raw"):
+            if mi_body.strip() or mi_subj.strip():
+                _tks_m = ", ".join(extract_silpi_symbols(mi_subj + " " + mi_body)[:5]) or "공통"
+                local_mails.insert(0, {
+                    "id": f"ins_{int(time.time()*1000)}",
+                    "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
+                    "출처": "InsiderFinance",
+                    "제목": mi_subj.strip() or (mi_body.strip().splitlines()[0][:55] if mi_body.strip() else "InsiderFinance 메일"),
+                    "원문": mi_body.strip(),
+                    "요약": "",
+                    "종목": _tks_m,
+                })
+                save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
+                st.success("✅ 저장되었습니다!")
+                st.rerun()
+
+    # 검색 필터
+    f_ins1, f_ins2 = st.columns([2.5, 1.0])
+    ins_kw = f_ins1.text_input("🔍 메일 검색 (종목 · 제목 · 내용)", "", key="ins_kw").strip().lower()
+    ins_tk_filter = f_ins2.text_input("티커 필터", "", placeholder="예: SOXL, NVDA", key="ins_tk_f").strip().upper()
+
+    shown_mails = []
+    for mm in merged_mails:
+        blob = (mm.get("제목", "") + " " + mm.get("요약", "") + " " + mm.get("원문", "") + " " + mm.get("종목", "")).lower()
+        if ins_kw and ins_kw not in blob:
+            continue
+        if ins_tk_filter and ins_tk_filter not in blob.upper():
+            continue
+        shown_mails.append(mm)
+
+    st.caption(f"표시 중인 메일: {len(shown_mails)}건")
+    for idx_m, mm in enumerate(shown_mails[:30]):
+        mid = mm.get("id", str(idx_m))
+        with st.container(border=True):
+            mc1, mc2, mc3, mc4 = st.columns([4.0, 1.2, 1.0, 0.8])
+            mc1.markdown(f"**[{mm.get('출처','InsiderFinance')}] {mm.get('제목','')}**  `{mm.get('종목','공통')}` · {mm.get('날짜','')}")
+            if mc2.button("🤖 AI 요약", key=f"ins_ai_{mid}"):
+                with st.spinner("Gemini AI로 한국어 요약 중..."):
+                    _pr_i = (
+                        "다음 옵션 메일을 한국어로 핵심만 요약해 주세요(3줄 요약 + 주요 종목·행사가·프리미엄 + 매매 포인트):\n"
+                        + mm.get("제목", "") + "\n" + mm.get("원문", "")[:6000]
+                    )
+                    _, _ko_i = run_ai_analysis(_pr_i)
+                    mm["요약"] = _ko_i
+                    # 로컬 목록에 반영
+                    found_l = False
+                    for lm in local_mails:
+                        if lm.get("id") == mid or lm.get("제목") == mm.get("제목"):
+                            lm["요약"] = _ko_i
+                            found_l = True
+                            break
+                    if not found_l:
+                        local_mails.insert(0, mm)
+                    save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
+                    st.rerun()
+            if mc3.button("📩 텔레그램", key=f"ins_tg_{mid}"):
+                _tg_m = f"📬 *[{mm.get('출처','InsiderFinance')}] {mm.get('제목','')}*\n종목: {mm.get('종목','')}\n\n{(mm.get('요약') or mm.get('원문',''))[:3200]}"
+                if send_telegram_msg(tg_token, tg_chat_id, _tg_m)[0]:
+                    st.toast("✅ 텔레그램 전송 완료!")
+                else:
+                    st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
+            if mc4.button("🗑️", key=f"ins_del_{mid}"):
+                local_mails = [z for z in local_mails if z.get("id") != mid]
+                save_json_file(INSIDER_MAIL_PATH, local_mails)
+                st.rerun()
+
+            if mm.get("요약"):
+                st.markdown(mm["요약"].replace("\n", "  \n"))
+            if mm.get("원문"):
+                with st.expander("📄 메일 원문 보기", expanded=(not bool(mm.get("요약")))):
+                    st.text(mm["원문"][:5000])
 
 
 if nav_menu == "📂 옵션자료실":
