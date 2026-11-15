@@ -815,12 +815,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 dex_s = df_dm.groupby("행사가")["DEX($M)"].sum().abs()
                 if not dex_s.empty:
                     delta_lv = float(dex_s.idxmax())
-            if "IV(%)" in df_dm.columns and spot_m > 0:
-                atm_iv_m = float(df_dm.iloc[(df_dm["행사가"] - spot_m).abs().argsort()[:4]]["IV(%)"].mean() or 0)
+            ref_px_sig = float(cur["px"] or spot_m or 0)
+            if "IV(%)" in df_dm.columns and ref_px_sig > 0:
+                atm_iv_m = float(df_dm.iloc[(df_dm["행사가"] - ref_px_sig).abs().argsort()[:4]]["IV(%)"].mean() or 0)
                 if atm_iv_m > 0:
-                    mv_1d = spot_m * (atm_iv_m / 100.0) / math.sqrt(252.0)
-                    sig_h_lv = round(spot_m + mv_1d, 2)
-                    sig_l_lv = round(spot_m - mv_1d, 2)
+                    mv_1d = ref_px_sig * (atm_iv_m / 100.0) / math.sqrt(252.0)
+                    sig_h_lv = round(ref_px_sig + mv_1d, 2)
+                    sig_l_lv = round(ref_px_sig - mv_1d, 2)
             # 행사가별 Call/Put 강도 (거래량·|GEX| 기반 좌측 가로 막대)
             grp_c = df_dm[df_dm["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum().abs() if "GEX($M)" in df_dm.columns else pd.Series(dtype=float)
             grp_p = df_dm[df_dm["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum().abs() if "GEX($M)" in df_dm.columns else pd.Series(dtype=float)
@@ -849,6 +850,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         pw_lv = float(df_yd[df_yd["구분"] == "Put"].sort_values("OI", ascending=False).iloc[0]["행사가"])
                     if zg_lv is None:
                         zg_lv = calc_zero_gamma(df_yd, sp_ref)
+                    if sig_h_lv is None and "IV(%)" in df_yd.columns and sp_ref > 0:
+                        atm_iv_y = float(df_yd.iloc[(df_yd["행사가"] - sp_ref).abs().argsort()[:4]]["IV(%)"].mean() or 0)
+                        if atm_iv_y > 0:
+                            mv_y = sp_ref * (atm_iv_y / 100.0) / math.sqrt(252.0)
+                            sig_h_lv = round(sp_ref + mv_y, 2)
+                            sig_l_lv = round(sp_ref - mv_y, 2)
                     yc = df_yd[df_yd["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum().abs()
                     yp = df_yd[df_yd["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum().abs()
                     yks = sorted(set(yc.index.tolist()) | set(yp.index.tolist()))
@@ -1054,7 +1061,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_vpvr_opt = c_s3.checkbox("좌측 콜/풋 막대", value=True, key="ed_vpvr_opt")
             show_rail_gex = c_s4.checkbox("우측 GEX 레일", value=True, key="ed_rail_gex")
             show_rail_nf = c_s5.checkbox("우측 Net Flow 레일", value=True, key="ed_rail_nf")
-            vpvr_scale = st.slider("좌측 막대 길이 (%)", 20, 100, 45, step=5, key="ed_vpvr_scale")
+            vpvr_scale = st.slider("좌측 막대 길이 (%)", 20, 250, 120, step=10, key="ed_vpvr_scale")
             show_cvd = "CVD(누적델타)" in sub_order
             show_bii = "BII(체결강도)" in sub_order
             show_macd = "MACD" in sub_order
@@ -1298,7 +1305,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <div id="tv_main" style="width:100%; height:460px;"></div>
       <div id="tv_hud" style="position:absolute; top:8px; right:76px; z-index:4; background:rgba(15,23,42,0.85); border:1px solid #334155; border-radius:6px; padding:5px 10px; font-family:monospace; font-size:11px; color:#e2e8f0; pointer-events:none;"></div>
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
-      <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:130px; height:460px; pointer-events:none; z-index:2;"></canvas>
+      <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:380px; height:460px; pointer-events:none; z-index:2;"></canvas>
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
       </div>
       <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
@@ -1374,9 +1381,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
       if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"CALL WALL" }});
       if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"PUT WALL" }});
-      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"GAMMA" }});
-      if (d.sig_h) cs.createPriceLine({{ price:d.sig_h, color:"#f87171", lineWidth:1, lineStyle:2, title:"SIG_H" }});
-      if (d.sig_l) cs.createPriceLine({{ price:d.sig_l, color:"#38bdf8", lineWidth:1, lineStyle:2, title:"SIG_L" }});
+      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"FLIP GAMMA" }});
+      if (d.sig_h) cs.createPriceLine({{ price:d.sig_h, color:"#f87171", lineWidth:1, lineStyle:2, title:"1σ 상단" }});
+      if (d.sig_l) cs.createPriceLine({{ price:d.sig_l, color:"#38bdf8", lineWidth:1, lineStyle:2, title:"1σ 하단" }});
       if (d.open_px) cs.createPriceLine({{ price:d.open_px, color:"#e2e8f0", lineWidth:1.5, lineStyle:0, title:"OPEN" }});
       if (d.delta_k) cs.createPriceLine({{ price:d.delta_k, color:"#eab308", lineWidth:1, lineStyle:3, title:"DELTA" }});
       if (d.gex_c_k) cs.createPriceLine({{ price:d.gex_c_k, color:"#22c55e", lineWidth:1, lineStyle:3, title:"GEX CALL" }});
@@ -1409,30 +1416,34 @@ if nav_menu == "⚡ 무무 실시간 차트":
         drawCloud();
         drawRail();
         const mh = elMain.clientHeight || 460;
-        vpCv.width = 160; vpCv.height = mh;
+        vpCv.width = 380; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
-        ctx.clearRect(0, 0, 160, mh);
-        const sc = d.bar_scale || 0.45;
+        ctx.clearRect(0, 0, 380, mh);
+        const sc = d.bar_scale || 1.2;
         if (d.show_vpvr && d.vpvr && d.vpvr.length) {{
           d.vpvr.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
-            const w = Math.max(2, Math.round(b.pct * 110 * sc));
-            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.32)" : "rgba(56,189,248,0.20)";
-            ctx.fillRect(0, y - 4, w, 8);
+            const w = Math.max(3, Math.round(b.pct * 150 * sc));
+            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.38)" : "rgba(56,189,248,0.24)";
+            ctx.fillRect(0, y - 5, w, 10);
+            if (b.pct >= 0.99) {{
+              ctx.font = "bold 9px monospace"; ctx.fillStyle = "#fbbf24";
+              ctx.fillText("POC $" + b.p, w + 4, y + 3);
+            }}
           }});
         }}
         if (d.show_vpvr_opt && d.opt_bars && d.opt_bars.length) {{
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
-            const wc = Math.round(b.c * 105 * sc);
-            const wp = Math.round(b.put * 105 * sc);
-            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.85)"; ctx.fillRect(0, y - 3, wp, 5); }}
-            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.9)"; ctx.fillRect(wp, y - 3, wc, 5); }}
-            if (wc + wp > Math.max(18, Math.round(32 * sc))) {{
-              ctx.font = "9px monospace"; ctx.fillStyle = "#e2e8f0";
-              ctx.fillText("C" + b.c_m + "/P" + b.p_m, wc + wp + 3, y + 3);
+            const wc = Math.round(b.c * 145 * sc);
+            const wp = Math.round(b.put * 145 * sc);
+            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.88)"; ctx.fillRect(0, y - 3, wp, 6); }}
+            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.92)"; ctx.fillRect(wp, y - 3, wc, 6); }}
+            if (wc + wp > Math.max(22, Math.round(32 * sc))) {{
+              ctx.font = "10px monospace"; ctx.fillStyle = "#e2e8f0";
+              ctx.fillText("C" + b.c_m + "/P" + b.p_m, wc + wp + 4, y + 3);
             }}
           }});
         }}
