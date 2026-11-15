@@ -5062,10 +5062,7 @@ if nav_menu == "📬 인사이더 파이낸셜":
 
 
 if nav_menu == "📅 구글 캘린더":
-    import calendar as _pycal
-    import html as _htmllib
-    st.title("📅 구글 캘린더 (옵션 만기 · 헷지 · 레벨 동기화)")
-    st.caption("구글 캘린더(khs1109k@gmail.com)에 저장된 옵션 만기·헷지·MenthorQ/SpotGamma 레벨 일정을 구글 캘린더와 동일한 월간 달력 뷰로 조회합니다.")
+    st.title("📅 구글 캘린더")
 
     GCAL_EVENTS_PATH = os.path.expanduser("~/.optionhub_gcal_events.json")
     GCAL_ICS_PATH = os.path.expanduser("~/.optionhub_gcal_ics.txt")
@@ -5111,7 +5108,6 @@ if nav_menu == "📅 구글 캘린더":
                         "date": d_str,
                         "summary": sm.group(1).strip(),
                         "description": desc_v,
-                        "htmlLink": "https://calendar.google.com/calendar/u/0/r",
                     })
             return out
         except Exception:
@@ -5125,209 +5121,410 @@ if nav_menu == "📅 구글 캘린더":
         except Exception:
             pass
 
-    with st.expander("🔗 구글 캘린더 실시간 ICS 동기화 & ➕ 새 일정 추가", expanded=False):
+    _ics_evs = _fetch_ics_events(_saved_ics) if _saved_ics else []
+    _all_gcal_map = {}
+    for _e in (local_gcal + _ics_evs):
+        _eid = _e.get("id") or f"ev_{hash(str(_e.get('date',''))+str(_e.get('summary','')))}"
+        _all_gcal_map[_eid] = {
+            "id": _eid,
+            "date": str(_e.get("date", ""))[:10],
+            "summary": str(_e.get("summary", "")),
+            "description": str(_e.get("description", "")),
+        }
+    all_gcal_events = sorted(_all_gcal_map.values(), key=lambda x: (x["date"], x["summary"]))
+    _events_json = json.dumps(all_gcal_events, ensure_ascii=False).replace("</", "<\/")
+
+    _gcal_html = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #131314; color: #e8eaed; font-family: 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; overflow: hidden; }
+.g-shell { display: flex; flex-direction: column; height: 830px; border: 1px solid #2d2f31; border-radius: 12px; overflow: hidden; background: #131314; }
+/* Top Bar */
+.g-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: #1b1c1e; border-bottom: 1px solid #2d2f31; gap: 10px; flex-wrap: wrap; }
+.g-top-l { display: flex; align-items: center; gap: 10px; }
+.g-logo { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: #e8eaed; margin-right: 8px; }
+.g-logo-box { width: 28px; height: 28px; border-radius: 6px; background: #1a73e8; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+.g-btn { background: transparent; color: #e8eaed; border: 1px solid #5f6368; border-radius: 20px; padding: 6px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.g-btn:hover { background: #282a2c; }
+.g-icon-btn { background: transparent; color: #bdc1c6; border: none; border-radius: 50%; width: 32px; height: 32px; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.g-icon-btn:hover { background: #282a2c; color: #fff; }
+.g-cur-title { font-size: 20px; font-weight: 500; color: #e8eaed; min-width: 170px; }
+.g-top-r { display: flex; align-items: center; gap: 8px; }
+.g-search { background: #282a2c; color: #e8eaed; border: 1px solid #3c4043; border-radius: 20px; padding: 6px 14px; font-size: 13px; width: 200px; outline: none; }
+.g-search:focus { border-color: #8ab4f8; }
+.g-view-grp { display: flex; border: 1px solid #5f6368; border-radius: 20px; overflow: hidden; }
+.g-vbtn { background: transparent; color: #bdc1c6; border: none; padding: 6px 13px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.g-vbtn:hover { background: #282a2c; }
+.g-vbtn.active { background: #c2e7ff; color: #001d35; }
+
+/* Main Body */
+.g-body { display: flex; flex: 1; overflow: hidden; }
+/* Left Sidebar */
+.g-side { width: 224px; min-width: 224px; background: #18191b; border-right: 1px solid #2d2f31; padding: 14px 12px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+.g-create-btn { display: inline-flex; align-items: center; gap: 8px; background: #282a2c; color: #e8eaed; border: 1px solid #3c4043; border-radius: 16px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.35); width: fit-content; }
+.g-create-btn:hover { background: #333538; }
+
+/* Mini Calendar */
+.mini-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding: 0 4px; }
+.mini-ym { font-size: 13px; font-weight: 600; color: #e8eaed; }
+.mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; row-gap: 3px; }
+.mini-dow { font-size: 10.5px; color: #9aa0a6; font-weight: 600; padding-bottom: 4px; }
+.mini-day { font-size: 11.5px; width: 26px; height: 26px; line-height: 26px; margin: 0 auto; border-radius: 50%; cursor: pointer; color: #e8eaed; position: relative; }
+.mini-day:hover { background: #282a2c; }
+.mini-day.other { color: #5f6368; }
+.mini-day.today { background: #1a73e8; color: #fff; font-weight: 700; }
+.mini-day.sel:not(.today) { background: #394457; color: #a8c7fa; font-weight: 700; }
+.mini-dot { width: 4px; height: 4px; border-radius: 50%; background: #e67c73; position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%); }
+
+/* My Calendars */
+.cal-sec-t { font-size: 12.5px; font-weight: 600; color: #e8eaed; margin-bottom: 8px; padding-left: 4px; }
+.cal-chk { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 12.5px; color: #d2d6dc; user-select: none; }
+.cal-chk:hover { background: #282a2c; }
+.cal-box { width: 15px; height: 15px; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }
+
+/* Main Content Area */
+.g-main { flex: 1; overflow-y: auto; background: #131314; position: relative; }
+
+/* Day View (matches screenshot!) */
+.dv-head { display: flex; align-items: flex-start; border-bottom: 1px solid #2d2f31; background: #18191b; padding: 10px 14px 8px 0; position: sticky; top: 0; z-index: 10; }
+.dv-gmt { width: 64px; min-width: 64px; font-size: 11px; color: #9aa0a6; text-align: right; padding-right: 10px; padding-top: 42px; }
+.dv-daycol { flex: 1; }
+.dv-dow { font-size: 11.5px; font-weight: 600; color: #8ab4f8; margin-bottom: 2px; }
+.dv-num { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 50%; font-size: 22px; font-weight: 500; background: #1a73e8; color: #fff; margin-bottom: 8px; }
+.dv-allday { display: flex; flex-direction: column; gap: 3px; }
+.dv-bar { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dv-bar:hover { filter: brightness(1.12); }
+.dv-bar.expiry { background: #e67c73; color: #1b0a09; }
+.dv-bar.hedge { background: #d93025; color: #fff; }
+.dv-bar.level { background: #4285f4; color: #fff; }
+.dv-hours { display: flex; flex-direction: column; }
+.dv-hrow { display: flex; height: 42px; }
+.dv-hlbl { width: 64px; min-width: 64px; text-align: right; padding-right: 10px; font-size: 11px; color: #9aa0a6; transform: translateY(-7px); }
+.dv-hcell { flex: 1; border-top: 1px solid #26282a; border-left: 1px solid #2d2f31; }
+
+/* Month View */
+.mv-grid { display: flex; flex-direction: column; height: 100%; }
+.mv-dow { display: grid; grid-template-columns: repeat(7, 1fr); background: #18191b; border-bottom: 1px solid #2d2f31; }
+.mv-dow div { text-align: center; padding: 7px 4px; font-size: 11.5px; font-weight: 600; color: #9aa0a6; }
+.mv-dow div:first-child { color: #f28b82; }
+.mv-dow div:last-child { color: #8ab4f8; }
+.mv-wk { display: grid; grid-template-columns: repeat(7, 1fr); flex: 1; border-bottom: 1px solid #2d2f31; min-height: 118px; }
+.mv-cell { border-right: 1px solid #2d2f31; padding: 5px; cursor: pointer; overflow: hidden; }
+.mv-cell:last-child { border-right: none; }
+.mv-cell:hover { background: #1a1c1f; }
+.mv-cell.other { background: #0e0f10; color: #5f6368; }
+.mv-dnum { font-size: 12px; font-weight: 600; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; margin-bottom: 3px; }
+.mv-dnum.today { background: #1a73e8; color: #fff; }
+.mv-pill { font-size: 11px; padding: 2px 6px; margin-bottom: 2px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; cursor: pointer; }
+.mv-pill.expiry { background: #e67c73; color: #1b0a09; }
+.mv-pill.hedge { background: #b3261e; color: #fce8e6; }
+.mv-pill.level { background: #1b4d89; color: #d2e3fc; }
+.mv-more { font-size: 11px; color: #9aa0a6; font-weight: 600; padding-left: 3px; }
+
+/* Week View */
+.wv-grid { display: grid; grid-template-columns: repeat(7, 1fr); min-height: 100%; }
+.wv-col { border-right: 1px solid #2d2f31; padding: 8px 6px; }
+.wv-col:last-child { border-right: none; }
+.wv-head { text-align: center; padding-bottom: 8px; border-bottom: 1px solid #2d2f31; margin-bottom: 8px; cursor: pointer; }
+
+/* Schedule View */
+.sv-row { display: flex; gap: 16px; padding: 12px 18px; border-bottom: 1px solid #2d2f31; }
+.sv-dt { min-width: 115px; font-size: 13px; font-weight: 600; color: #8ab4f8; cursor: pointer; }
+.sv-list { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+
+/* Google Calendar Event Detail Popover Modal */
+.modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.48); z-index: 9999; align-items: center; justify-content: center; padding: 16px; }
+.modal-bg.open { display: flex; }
+.g-card { background: #282a2c; border: 1px solid #3c4043; border-radius: 18px; width: 100%; max-width: 460px; box-shadow: 0 12px 36px rgba(0,0,0,0.65); overflow: hidden; }
+.g-card-bar { display: flex; justify-content: flex-end; padding: 10px 14px 0; }
+.g-card-body { padding: 4px 22px 22px; }
+.g-card-row { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+.g-sq { width: 14px; height: 14px; border-radius: 4px; margin-top: 5px; flex-shrink: 0; }
+.g-card-title { font-size: 20px; font-weight: 500; color: #e8eaed; line-height: 1.35; }
+.g-card-date { font-size: 13.5px; color: #bdc1c6; margin-top: 4px; }
+.g-card-desc { font-size: 13.5px; line-height: 1.6; color: #e8eaed; white-space: pre-wrap; max-height: 360px; overflow-y: auto; }
+@media (max-width: 768px) { .g-side { display: none; } }
+</style>
+</head>
+<body>
+<div class="g-shell">
+  <div class="g-top">
+    <div class="g-top-l">
+      <div class="g-logo"><div class="g-logo-box">16</div>Calendar</div>
+      <button class="g-btn" onclick="goToday()">오늘</button>
+      <button class="g-icon-btn" onclick="step(-1)">‹</button>
+      <button class="g-icon-btn" onclick="step(1)">›</button>
+      <div class="g-cur-title" id="mainTitle"></div>
+    </div>
+    <div class="g-top-r">
+      <input class="g-search" id="qInput" type="text" placeholder="🔍 검색 (NVDA, SPX, 풋...)" oninput="renderAll()"/>
+      <div class="g-view-grp">
+        <button class="g-vbtn active" id="vbDay" onclick="setView('day')">일</button>
+        <button class="g-vbtn" id="vbWeek" onclick="setView('week')">주</button>
+        <button class="g-vbtn" id="vbMonth" onclick="setView('month')">월</button>
+        <button class="g-vbtn" id="vbSched" onclick="setView('sched')">일정</button>
+      </div>
+    </div>
+  </div>
+  <div class="g-body">
+    <div class="g-side">
+      <button class="g-create-btn" onclick="openHint()">＋ 만들기</button>
+      <div>
+        <div class="mini-hdr">
+          <span class="mini-ym" id="miniYm"></span>
+          <div>
+            <button class="g-icon-btn" style="display:inline-flex;width:24px;height:24px;font-size:14px;" onclick="stepMini(-1)">‹</button>
+            <button class="g-icon-btn" style="display:inline-flex;width:24px;height:24px;font-size:14px;" onclick="stepMini(1)">›</button>
+          </div>
+        </div>
+        <div class="mini-grid" id="miniGrid"></div>
+      </div>
+      <div>
+        <div class="cal-sec-t">내 캘린더</div>
+        <div class="cal-chk" onclick="toggleCat('expiry')"><span class="cal-box" id="chkExpiry" style="background:#e67c73;">✓</span> 옵션 만기 (콜/전략)</div>
+        <div class="cal-chk" onclick="toggleCat('hedge')"><span class="cal-box" id="chkHedge" style="background:#d93025;">✓</span> 옵션 헷지 (풋)</div>
+        <div class="cal-chk" onclick="toggleCat('level')"><span class="cal-box" id="chkLevel" style="background:#4285f4;">✓</span> 옵션 레벨 (MenthorQ)</div>
+      </div>
+    </div>
+    <div class="g-main" id="mainRoot"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="g-card">
+    <div class="g-card-bar"><button class="g-icon-btn" onclick="closeModal()">✕</button></div>
+    <div class="g-card-body">
+      <div class="g-card-row">
+        <div class="g-sq" id="mDot"></div>
+        <div>
+          <div class="g-card-title" id="mTitle"></div>
+          <div class="g-card-date" id="mDate"></div>
+        </div>
+      </div>
+      <div class="g-card-row">
+        <div style="width:14px;text-align:center;color:#9aa0a6;font-size:16px;">≡</div>
+        <div class="g-card-desc" id="mDesc"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const EVENTS = __EVENTS_JSON__;
+const TODAY = "2026-11-16";
+let selDate = "2026-11-20";
+let miniYear = 2026, miniMonth = 10; // 10 = Nov
+let viewMode = 'day'; // default Day view like screenshot, switchable to week/month/sched
+let cats = { expiry: true, hedge: true, level: true };
+let collapseAllDay = false;
+
+function classify(sm) {
+  const u = (sm || '').toUpperCase();
+  if (sm.includes('[옵션 레벨]') || u.includes('MENTHOR Q') || u.includes('SPOTGAMMA') || u.includes('UNUSUAL WHALES') || sm.includes('[매크로 헷지]')) return 'level';
+  if (sm.includes('[옵션 헷지]') || u.includes('PUT') || sm.includes('풋') || sm.includes('🔴') || sm.includes('🛡️')) return 'hedge';
+  return 'expiry';
+}
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function parseIso(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
+function toIso(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function korDow(d) { return ['일','월','화','수','목','금','토'][d.getDay()]; }
+
+function getFiltered() {
+  const q = (document.getElementById('qInput').value || '').trim().toLowerCase();
+  return EVENTS.filter(e => {
+    const c = classify(e.summary);
+    if (!cats[c]) return false;
+    if (q && !(e.summary + ' ' + e.description + ' ' + e.date).toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function toggleCat(c) {
+  cats[c] = !cats[c];
+  const el = document.getElementById(c==='expiry'?'chkExpiry':c==='hedge'?'chkHedge':'chkLevel');
+  el.textContent = cats[c] ? '✓' : '';
+  el.style.opacity = cats[c] ? '1' : '0.35';
+  renderAll();
+}
+function setView(v) {
+  viewMode = v;
+  ['vbDay','vbWeek','vbMonth','vbSched'].forEach(id => document.getElementById(id).classList.remove('active'));
+  document.getElementById(v==='day'?'vbDay':v==='week'?'vbWeek':v==='month'?'vbMonth':'vbSched').classList.add('active');
+  renderAll();
+}
+function goToday() {
+  selDate = TODAY; miniYear = 2026; miniMonth = 10;
+  renderAll();
+}
+function selectDay(ds) {
+  selDate = ds;
+  const dt = parseIso(ds);
+  miniYear = dt.getFullYear(); miniMonth = dt.getMonth();
+  renderAll();
+}
+function stepMini(dir) {
+  miniMonth += dir;
+  if (miniMonth < 0) { miniMonth = 11; miniYear--; }
+  if (miniMonth > 11) { miniMonth = 0; miniYear++; }
+  renderMini();
+}
+function step(dir) {
+  const dt = parseIso(selDate);
+  if (viewMode === 'day') dt.setDate(dt.getDate() + dir);
+  else if (viewMode === 'week') dt.setDate(dt.getDate() + dir * 7);
+  else dt.setMonth(dt.getMonth() + dir);
+  selectDay(toIso(dt));
+}
+function openEvent(id) {
+  const ev = EVENTS.find(x => x.id === id);
+  if (!ev) return;
+  const c = classify(ev.summary);
+  const dt = parseIso(ev.date);
+  document.getElementById('mDot').style.background = c==='expiry'?'#e67c73':c==='hedge'?'#d93025':'#4285f4';
+  document.getElementById('mTitle').textContent = ev.summary;
+  document.getElementById('mDate').textContent = `${dt.getMonth()+1}월 ${dt.getDate()}일 (${korDow(dt)}요일)`;
+  document.getElementById('mDesc').textContent = ev.description || '(상세 내용 없음)';
+  document.getElementById('modalBg').classList.add('open');
+}
+function closeModal() { document.getElementById('modalBg').classList.remove('open'); }
+function openHint() { alert('아래 "⚙️ ICS 실시간 동기화 · ➕ 새 일정 추가"를 열어 새 일정을 추가할 수 있습니다.'); }
+
+function renderMini() {
+  const filtered = getFiltered();
+  const hasMap = {};
+  filtered.forEach(e => { hasMap[e.date] = true; });
+  document.getElementById('miniYm').textContent = `${miniYear}년 ${miniMonth+1}월`;
+  const first = new Date(miniYear, miniMonth, 1);
+  const start = new Date(first); start.setDate(1 - first.getDay());
+  let html = ['일','월','화','수','목','금','토'].map(d => `<div class="mini-dow">${d}</div>`).join('');
+  let d = new Date(start);
+  for (let i=0; i<42; i++) {
+    const ds = toIso(d);
+    const cls = ['mini-day'];
+    if (d.getMonth() !== miniMonth) cls.push('other');
+    if (ds === TODAY) cls.push('today');
+    else if (ds === selDate) cls.push('sel');
+    const dot = hasMap[ds] ? '<span class="mini-dot"></span>' : '';
+    html += `<div class="${cls.join(' ')}" onclick="selectDay('${ds}')">${d.getDate()}${dot}</div>`;
+    d.setDate(d.getDate()+1);
+  }
+  document.getElementById('miniGrid').innerHTML = html;
+}
+
+function renderMain() {
+  const filtered = getFiltered();
+  const byDate = {};
+  filtered.forEach(e => { (byDate[e.date] = byDate[e.date] || []).push(e); });
+  const root = document.getElementById('mainRoot');
+  const curDt = parseIso(selDate);
+
+  if (viewMode === 'day') {
+    document.getElementById('mainTitle').textContent = `${curDt.getFullYear()}년 ${curDt.getMonth()+1}월 ${curDt.getDate()}일`;
+    const evs = byDate[selDate] || [];
+    const shown = collapseAllDay ? evs.slice(0, 5) : evs;
+    const bars = shown.map(ev => `<div class="dv-bar ${classify(ev.summary)}" onclick="openEvent('${esc(ev.id)}')">${esc(ev.summary)}</div>`).join('') || '<div style="color:#9aa0a6;font-size:12.5px;padding:6px 0;">이 날짜에 등록된 일정이 없습니다.</div>';
+    const tog = evs.length > 5 ? `<div style="font-size:11.5px;color:#8ab4f8;cursor:pointer;margin-top:4px;font-weight:600;" onclick="collapseAllDay=!collapseAllDay;renderMain()">${collapseAllDay ? '▼ 모두 펼치기 ('+evs.length+'건)' : '▲ 접기'}</div>` : '';
+    let hours = '';
+    for (let h=1; h<=11; h++) hours += `<div class="dv-hrow"><div class="dv-hlbl">오전 ${h}시</div><div class="dv-hcell"></div></div>`;
+    hours += `<div class="dv-hrow"><div class="dv-hlbl">오후 12시</div><div class="dv-hcell"></div></div>`;
+    for (let h=1; h<=11; h++) hours += `<div class="dv-hrow"><div class="dv-hlbl">오후 ${h}시</div><div class="dv-hcell"></div></div>`;
+    root.innerHTML = `<div class="dv-head"><div class="dv-gmt">GMT+9</div><div class="dv-daycol"><div class="dv-dow">${korDow(curDt)}</div><div class="dv-num">${curDt.getDate()}</div><div class="dv-allday">${bars}</div>${tog}</div></div><div class="dv-hours">${hours}</div>`;
+  } else if (viewMode === 'week') {
+    const startW = new Date(curDt); startW.setDate(curDt.getDate() - curDt.getDay());
+    const endW = new Date(startW); endW.setDate(startW.getDate() + 6);
+    document.getElementById('mainTitle').textContent = `${startW.getMonth()+1}/${startW.getDate()} ~ ${endW.getMonth()+1}/${endW.getDate()}`;
+    let html = '<div class="wv-grid">';
+    let d = new Date(startW);
+    for (let i=0; i<7; i++) {
+      const ds = toIso(d);
+      const evs = byDate[ds] || [];
+      const pills = evs.map(ev => `<div class="mv-pill ${classify(ev.summary)}" style="white-space:normal;" onclick="openEvent('${esc(ev.id)}')">${esc(ev.summary)}</div>`).join('');
+      html += `<div class="wv-col"><div class="wv-head" onclick="selectDay('${ds}');setView('day')"><div style="font-size:11px;color:#9aa0a6;">${korDow(d)}</div><div class="mv-dnum ${ds===TODAY?'today':''}" style="margin:4px auto 0;">${d.getDate()}</div></div>${pills}</div>`;
+      d.setDate(d.getDate()+1);
+    }
+    html += '</div>';
+    root.innerHTML = html;
+  } else if (viewMode === 'month') {
+    const y = curDt.getFullYear(), m = curDt.getMonth();
+    document.getElementById('mainTitle').textContent = `${y}년 ${m+1}월`;
+    const first = new Date(y, m, 1);
+    const start = new Date(first); start.setDate(1 - first.getDay());
+    let html = '<div class="mv-grid"><div class="mv-dow"><div>일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div>토</div></div>';
+    let d = new Date(start);
+    for (let w=0; w<6; w++) {
+      if (w>=4 && d.getMonth()!==m) break;
+      html += '<div class="mv-wk">';
+      for (let i=0; i<7; i++) {
+        const ds = toIso(d);
+        const evs = byDate[ds] || [];
+        const pills = evs.slice(0,3).map(ev => `<div class="mv-pill ${classify(ev.summary)}" onclick="event.stopPropagation();openEvent('${esc(ev.id)}')">${esc(ev.summary)}</div>`).join('');
+        const more = evs.length > 3 ? `<div class="mv-more">+${evs.length-3}개 더보기</div>` : '';
+        html += `<div class="mv-cell ${d.getMonth()!==m?'other':''}" onclick="selectDay('${ds}');setView('day')"><div class="mv-dnum ${ds===TODAY?'today':''}">${d.getDate()}</div>${pills}${more}</div>`;
+        d.setDate(d.getDate()+1);
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    root.innerHTML = html;
+  } else {
+    const ym = `${curDt.getFullYear()}-${String(curDt.getMonth()+1).padStart(2,'0')}`;
+    document.getElementById('mainTitle').textContent = `${curDt.getFullYear()}년 ${curDt.getMonth()+1}월 일정`;
+    const dates = Object.keys(byDate).filter(dt => dt.startsWith(ym)).sort();
+    root.innerHTML = dates.length ? dates.map(dt => {
+      const items = byDate[dt].map(ev => `<div class="mv-pill ${classify(ev.summary)}" style="white-space:normal;padding:5px 8px;" onclick="openEvent('${esc(ev.id)}')">${esc(ev.summary)}</div>`).join('');
+      return `<div class="sv-row"><div class="sv-dt" onclick="selectDay('${dt}');setView('day')">${dt}</div><div class="sv-list">${items}</div></div>`;
+    }).join('') : '<div style="padding:36px;text-align:center;color:#9aa0a6;">이번 달 일정이 없습니다.</div>';
+  }
+}
+
+function renderAll() { renderMini(); renderMain(); }
+renderAll();
+</script>
+</body>
+</html>"""
+
+    _gcal_html = _gcal_html.replace("__EVENTS_JSON__", _events_json)
+    components.html(_gcal_html, height=820, scrolling=True)
+
+    with st.expander("⚙️ ICS 실시간 동기화 · ➕ 새 일정 추가 · 📩 텔레그램 전송", expanded=False):
         _ic1, _ic2 = st.columns([3.0, 1.0])
         _ics_in = _ic1.text_input("구글 캘린더 비공개 iCal 주소 (.ics)", _saved_ics, placeholder="https://calendar.google.com/calendar/ical/.../basic.ics", key="gcal_ics_in")
-        if _ic2.button("💾 주소 저장 & 동기화", use_container_width=True, key="btn_gcal_ics_save"):
+        if _ic2.button("💾 동기화", use_container_width=True, key="btn_gcal_ics_save"):
             with open(GCAL_ICS_PATH, "w", encoding="utf-8") as _fics:
                 _fics.write(_ics_in.strip())
             _fetch_ics_events.clear()
-            st.success("✅ 저장 및 동기화 완료!")
+            st.success("✅ 동기화 완료!")
             st.rerun()
 
-        st.markdown("---")
         _na1, _na2 = st.columns([1.2, 2.8])
         _new_dt = _na1.date_input("날짜", value=pd.Timestamp("2026-11-20").date(), key="gcal_new_dt")
         _new_sum = _na2.text_input("일정 제목", "", placeholder="예: [옵션 만기] NVDA $180 Call ($5.0M 스윕)", key="gcal_new_sum")
-        _new_desc = st.text_area("상세 내용", height=80, placeholder="행사가, 프리미엄, 전략 메모...", key="gcal_new_desc")
-        if st.button("➕ 캘린더에 일정 추가", type="primary", key="btn_gcal_add"):
+        _new_desc = st.text_area("상세 내용", height=70, placeholder="행사가, 프리미엄, 전략 메모...", key="gcal_new_desc")
+        _bc1, _bc2 = st.columns(2)
+        if _bc1.button("➕ 캘린더에 일정 추가", type="primary", use_container_width=True, key="btn_gcal_add"):
             if _new_sum.strip():
                 local_gcal.append({
                     "id": f"local_{int(time.time()*1000)}",
                     "date": _new_dt.strftime("%Y-%m-%d"),
                     "summary": _new_sum.strip(),
                     "description": _new_desc.strip(),
-                    "htmlLink": "https://calendar.google.com/calendar/u/0/r",
                 })
                 save_json_file(GCAL_EVENTS_PATH, local_gcal)
-                st.success("✅ 일정이 추가되었습니다!")
+                st.success("✅ 추가되었습니다!")
                 st.rerun()
-
-    _ics_evs = _fetch_ics_events(_saved_ics) if _saved_ics else []
-    _all_gcal_map = {e.get("id"): e for e in local_gcal}
-    for _ie in _ics_evs:
-        _all_gcal_map[_ie.get("id")] = _ie
-    all_gcal_events = sorted(_all_gcal_map.values(), key=lambda x: (x.get("date", ""), x.get("summary", "")))
-
-    if "gcal_year" not in st.session_state:
-        st.session_state["gcal_year"] = 2026
-    if "gcal_month" not in st.session_state:
-        st.session_state["gcal_month"] = 11
-    if "gcal_sel_date" not in st.session_state:
-        st.session_state["gcal_sel_date"] = "2026-11-20"
-
-    _tb1, _tb2, _tb3, _tb4, _tb5 = st.columns([0.9, 0.7, 1.4, 0.7, 1.5])
-    if _tb1.button("오늘 (11/16)", use_container_width=True, key="gcal_today"):
-        st.session_state["gcal_year"] = 2026
-        st.session_state["gcal_month"] = 11
-        st.session_state["gcal_sel_date"] = "2026-11-16"
-        st.rerun()
-    if _tb2.button("◀ 이전 달", use_container_width=True, key="gcal_prev"):
-        if st.session_state["gcal_month"] == 1:
-            st.session_state["gcal_year"] -= 1
-            st.session_state["gcal_month"] = 12
-        else:
-            st.session_state["gcal_month"] -= 1
-        st.rerun()
-    _tb3.markdown(f"<div style='text-align:center;font-size:22px;font-weight:700;padding-top:4px;color:#e8eaed;'>{st.session_state['gcal_year']}년 {st.session_state['gcal_month']}월</div>", unsafe_allow_html=True)
-    if _tb4.button("다음 달 ▶", use_container_width=True, key="gcal_next"):
-        if st.session_state["gcal_month"] == 12:
-            st.session_state["gcal_year"] += 1
-            st.session_state["gcal_month"] = 1
-        else:
-            st.session_state["gcal_month"] += 1
-        st.rerun()
-    _gcal_view = _tb5.radio("보기", ["🗓️ 월간 달력", "📋 일정 목록"], horizontal=True, label_visibility="collapsed", key="gcal_view_mode")
-
-    _fc1, _fc2 = st.columns([2.2, 2.0])
-    _gcal_kw = _fc1.text_input("🔍 티커·키워드 검색", "", placeholder="예: NVDA, SOXL, SPX, TSLA, MU, PUT", key="gcal_kw").strip().lower()
-    _gcal_cat = _fc2.selectbox("카테고리 필터", ["전체", "📈 옵션 만기 (콜/전략)", "🛡️ 옵션 헷지 (풋)", "📊 옵션 레벨 (MenthorQ/SpotGamma)"], key="gcal_cat")
-
-    def _classify_gcal(sm):
-        s_u = sm.upper()
-        if "[옵션 레벨]" in sm or "MENTHOR Q" in s_u or "SPOTGAMMA" in s_u or "UNUSUAL WHALES" in s_u or "[매크로 헷지]" in sm:
-            return "level"
-        if "[옵션 헷지]" in sm or "PUT" in s_u or "풋" in sm or "🔴" in sm or "🛡️" in sm:
-            return "hedge"
-        return "expiry"
-
-    _filtered_gcal = []
-    for _ev in all_gcal_events:
-        _blob = (_ev.get("summary", "") + " " + _ev.get("description", "")).lower()
-        if _gcal_kw and _gcal_kw not in _blob:
-            continue
-        _c = _classify_gcal(_ev.get("summary", ""))
-        if _gcal_cat.startswith("📈") and _c != "expiry":
-            continue
-        if _gcal_cat.startswith("🛡️") and _c != "hedge":
-            continue
-        if _gcal_cat.startswith("📊") and _c != "level":
-            continue
-        _filtered_gcal.append(_ev)
-
-    st.caption(f"표시 중인 일정: **{len(_filtered_gcal)}건** (전체 {len(all_gcal_events)}건) · 🟢 만기/콜  🔴 헷지/풋  🔵 레벨/매크로")
-
-    if _gcal_view == "🗓️ 월간 달력":
-        _yr = st.session_state["gcal_year"]
-        _mo = st.session_state["gcal_month"]
-        _pycal.setfirstweekday(_pycal.SUNDAY)
-        _weeks = _pycal.monthcalendar(_yr, _mo)
-        _by_date = {}
-        for _ev in _filtered_gcal:
-            _by_date.setdefault(_ev.get("date", ""), []).append(_ev)
-
-        _css_cal = """
-        <style>
-        .gcal-wrap { width:100%; border:1px solid #3c4043; border-radius:10px; overflow:hidden; background:#131314; font-family:'Inter',Arial,sans-serif; }
-        .gcal-hdr { display:grid; grid-template-columns:repeat(7,1fr); background:#1e1f20; border-bottom:1px solid #3c4043; }
-        .gcal-hdr div { text-align:center; padding:8px 4px; font-size:12px; font-weight:700; color:#9aa0a6; }
-        .gcal-hdr div:first-child { color:#f28b82; }
-        .gcal-hdr div:last-child { color:#8ab4f8; }
-        .gcal-row { display:grid; grid-template-columns:repeat(7,1fr); border-bottom:1px solid #2d2f31; }
-        .gcal-row:last-child { border-bottom:none; }
-        .gcal-cell { min-height:118px; padding:6px; border-right:1px solid #2d2f31; background:#131314; overflow:hidden; }
-        .gcal-cell:last-child { border-right:none; }
-        .gcal-cell.empty { background:#0e0f10; }
-        .gcal-cell.sel { background:#1c2536; box-shadow: inset 0 0 0 1px #8ab4f8; }
-        .gcal-daynum { font-size:12px; font-weight:700; color:#e8eaed; margin-bottom:4px; display:inline-block; width:24px; height:24px; line-height:24px; text-align:center; border-radius:50%; }
-        .gcal-daynum.today { background:#8ab4f8; color:#0b0e14; }
-        .gcal-pill { font-size:11px; line-height:1.25; padding:2px 5px; margin-bottom:3px; border-radius:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
-        .gcal-pill.expiry { background:#144d29; color:#a8dab5; border-left:3px solid #6be594; }
-        .gcal-pill.hedge { background:#5c1916; color:#f2b8b5; border-left:3px solid #f28b82; }
-        .gcal-pill.level { background:#0f366e; color:#a8c7fa; border-left:3px solid #8ab4f8; }
-        .gcal-more { font-size:11px; color:#9aa0a6; font-weight:700; padding-left:2px; }
-        </style>
-        """
-        _html_rows = [_css_cal, '<div class="gcal-wrap"><div class="gcal-hdr"><div>일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div>토</div></div>']
-        for _wk in _weeks:
-            _html_rows.append('<div class="gcal-row">')
-            for _d in _wk:
-                if _d == 0:
-                    _html_rows.append('<div class="gcal-cell empty"></div>')
+        if _bc2.button("📩 선택한 날짜 일정 텔레그램 전송", use_container_width=True, key="btn_gcal_tg_day"):
+            _sel_d = _new_dt.strftime("%Y-%m-%d")
+            _sel_evs = [e for e in all_gcal_events if e.get("date") == _sel_d]
+            if _sel_evs:
+                _tg_lines = [f"📅 *구글 캘린더 ({_sel_d} · {len(_sel_evs)}건)*\n"] + [f"• {_se.get('summary','')}" for _se in _sel_evs[:35]]
+                if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_tg_lines))[0]:
+                    st.toast("✅ 텔레그램 전송 완료!")
                 else:
-                    _d_iso = f"{_yr:04d}-{_mo:02d}-{_d:02d}"
-                    _is_today = (_d_iso == "2026-11-16")
-                    _is_sel = (_d_iso == st.session_state.get("gcal_sel_date", ""))
-                    _evs_d = _by_date.get(_d_iso, [])
-                    _cls_c = "gcal-cell sel" if _is_sel else "gcal-cell"
-                    _cls_n = "gcal-daynum today" if _is_today else "gcal-daynum"
-                    _pills = []
-                    for _ev in _evs_d[:4]:
-                        _ct = _classify_gcal(_ev.get("summary", ""))
-                        _sm_esc = _htmllib.escape(_ev.get("summary", ""))
-                        _pills.append(f'<div class="gcal-pill {_ct}" title="{_sm_esc}">{_sm_esc}</div>')
-                    if len(_evs_d) > 4:
-                        _pills.append(f'<div class="gcal-more">+{len(_evs_d)-4}개 더보기</div>')
-                    _html_rows.append(f'<div class="{_cls_c}"><div class="{_cls_n}">{_d}</div>{"".join(_pills)}</div>')
-            _html_rows.append('</div>')
-        _html_rows.append('</div>')
-        st.markdown("".join(_html_rows), unsafe_allow_html=True)
-
-        st.markdown("#### 📌 날짜별 상세 일정 (구글 캘린더 원문)")
-        _qb1, _qb2, _qb3, _qb4, _qb5 = st.columns([1.3, 1.0, 1.0, 1.0, 1.0])
-        _picked = _qb1.date_input("날짜 선택", value=pd.Timestamp(st.session_state["gcal_sel_date"]).date(), key="gcal_pick_dt", label_visibility="collapsed")
-        if _picked.strftime("%Y-%m-%d") != st.session_state["gcal_sel_date"]:
-            st.session_state["gcal_sel_date"] = _picked.strftime("%Y-%m-%d")
-            st.rerun()
-        if _qb2.button("오늘 11/16", use_container_width=True, key="gcal_q1"):
-            st.session_state["gcal_sel_date"] = "2026-11-16"
-            st.rerun()
-        if _qb3.button("11/20 메인만기", use_container_width=True, key="gcal_q2"):
-            st.session_state["gcal_sel_date"] = "2026-11-20"
-            st.rerun()
-        if _qb4.button("11/27 만기", use_container_width=True, key="gcal_q3"):
-            st.session_state["gcal_sel_date"] = "2026-11-27"
-            st.rerun()
-        if _qb5.button("12/18 쿼드러플", use_container_width=True, key="gcal_q4"):
-            st.session_state["gcal_sel_date"] = "2026-12-18"
-            st.session_state["gcal_year"] = 2026
-            st.session_state["gcal_month"] = 12
-            st.rerun()
-
-        _sel_d = st.session_state["gcal_sel_date"]
-        _sel_evs = [e for e in _filtered_gcal if e.get("date") == _sel_d]
-        _sc1, _sc2 = st.columns([3.0, 1.2])
-        _sc1.markdown(f"**🗓️ {_sel_d} 일정: 총 {len(_sel_evs)}건**")
-        if _sel_evs and _sc2.button("📩 이 날짜 일정 텔레그램 전송", use_container_width=True, key="btn_gcal_tg_day"):
-            _tg_lines = [f"📅 *구글 캘린더 ({_sel_d} · {len(_sel_evs)}건)*\n"]
-            for _se in _sel_evs[:30]:
-                _tg_lines.append(f"• {_se.get('summary','')}")
-            if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_tg_lines))[0]:
-                st.toast("✅ 텔레그램 전송 완료!")
+                    st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
             else:
-                st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
-
-        if not _sel_evs:
-            st.info(f"{_sel_d}에 해당하는 일정이 없습니다.")
-        for _ei, _ev in enumerate(_sel_evs):
-            _ct = _classify_gcal(_ev.get("summary", ""))
-            _badge = "🟢 만기/콜" if _ct == "expiry" else ("🔴 헷지/풋" if _ct == "hedge" else "🔵 레벨/매크로")
-            with st.container(border=True):
-                _ec1, _ec2 = st.columns([4.0, 1.0])
-                _ec1.markdown(f"**{_badge} · {_ev.get('summary','')}**")
-                if _ev.get("htmlLink"):
-                    _ec2.markdown(f"[🔗 구글캘린더]({_ev['htmlLink']})")
-                if _ev.get("description"):
-                    st.text(_ev["description"])
-    else:
-        for _ev in _filtered_gcal[:120]:
-            _ct = _classify_gcal(_ev.get("summary", ""))
-            _badge = "🟢" if _ct == "expiry" else ("🔴" if _ct == "hedge" else "🔵")
-            with st.expander(f"{_ev.get('date','')} | {_badge} {_ev.get('summary','')}", expanded=False):
-                if _ev.get("description"):
-                    st.text(_ev["description"])
-                if _ev.get("htmlLink"):
-                    st.markdown(f"[🔗 구글 캘린더에서 열기]({_ev['htmlLink']})")
+                st.toast("해당 날짜에 일정이 없습니다.")
 
 
 if nav_menu == "📂 옵션자료실":
