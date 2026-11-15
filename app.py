@@ -3964,8 +3964,12 @@ if nav_menu == "🎯 행사가별·동반 체결":
         _pc_vol = round(_p_vol / max(_c_vol, 1), 2)
         _pc_oi = round(_p_oi / max(_c_oi, 1), 2)
         _tot_gex = round(float(df_yf_f["GEX($M)"].sum()), 2)
-        _cw_f = float(_c_all.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _c_all.empty else 0.0
-        _pw_f = float(_p_all.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _p_all.empty else 0.0
+        _c_near = _c_all[(_c_all["행사가"] >= spot_live * 0.60) & (_c_all["행사가"] <= spot_live * 1.40)] if spot_live > 0 else _c_all
+        _p_near = _p_all[(_p_all["행사가"] >= spot_live * 0.60) & (_p_all["행사가"] <= spot_live * 1.40)] if spot_live > 0 else _p_all
+        if _c_near.empty: _c_near = _c_all
+        if _p_near.empty: _p_near = _p_all
+        _cw_f = float(_c_near.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _c_near.empty else 0.0
+        _pw_f = float(_p_near.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _p_near.empty else 0.0
         _zg_f = calc_zero_gamma(df_yf_f, spot_live)
         _gex_regime = "+GEX (변동성 억제 · 박스권)" if _tot_gex >= 0 else "-GEX (변동성 증폭 · 추세추종)"
         _gex_col = "#10b981" if _tot_gex >= 0 else "#ef4444"
@@ -4263,10 +4267,36 @@ if nav_menu == "🎯 행사가별·동반 체결":
             st.success("✅ 과거 NOTE가 저장되었습니다!")
             st.rerun()
 
-    if st.button(f"📩 {tk_f} ({sel_k_lbl}) 요약 텔레그램 전송", key="flow_tg_send"):
-        msg_f = f"🎯 *[{tk_f} 행사가별·동반 체결]* ({sel_k_lbl})\n• 무무 LV3 현재가: ${spot_live:,.2f} ({lv3_bias})\n• Bid/Ask Top5: {b_qty:,} / {a_qty:,}"
-        if send_telegram_msg(tg_token, tg_chat_id, msg_f)[0]:
-            st.success("✅ 텔레그램 전송 완료!")
+    if st.button(f"📩 {tk_f} 전체 상황 + 체결 텔레그램 전송", type="primary", key="flow_tg_send"):
+        _tg_lines = [
+            f"🎯 *[{tk_f} 전체 옵션 상황 · 동반 체결 리포트]*",
+            f"• 무무 LV3 현재가: ${spot_live:,.2f}" + (f" ({qm['chg']:+.2f}%)" if qm.get("chg") is not None else "") + f" · {lv3_bias} (Bid {b_qty:,} / Ask {a_qty:,})",
+        ]
+        if not df_yf_f.empty:
+            _tg_lines.extend([
+                "",
+                "📊 *전체 수급·감마 구조*",
+                f"• 콜 거래량/OI: {_c_vol:,} / {_c_oi:,}",
+                f"• 풋 거래량/OI: {_p_vol:,} / {_p_oi:,} (P/C Vol {_pc_vol} · OI {_pc_oi})",
+                f"• 🟢Call Wall: ${_cw_f:g} | 🔴Put Wall: ${_pw_f:g} | 🟡Flip: {f'${_zg_f:g}' if _zg_f else '-'}",
+                f"• 총 Net GEX: ${_tot_gex:+.2f}M ({_gex_regime})",
+                "",
+                "🔥 *활성 행사가 TOP 8 (±30%)*",
+            ])
+            for _, _rt in df_top10.head(8).iterrows():
+                _vq_t = int(_rt["거래량"]); _oi_t = int(_rt["OI"])
+                _voi_t = f"{round(_vq_t / max(_oi_t, 1) * 100)}%" if _oi_t > 0 else "-"
+                _tag_t = " [CW]" if (_cw_f and float(_rt["행사가"]) == _cw_f and _rt["구분"] == "Call") else (" [PW]" if (_pw_f and float(_rt["행사가"]) == _pw_f and _rt["구분"] == "Put") else "")
+                _tg_lines.append(f"• {_rt['만기일'][5:]} {_rt['행사가']:g}{_rt['구분'][0].upper()}{_tag_t}: Vol {_vq_t:,} / OI {_oi_t:,} ({_voi_t}) · GEX ${_rt['GEX($M)']:+.2f}M")
+        if saved_notes:
+            _tg_lines.append("")
+            _tg_lines.append(f"📝 *과거 NOTE ({sel_k_lbl})*")
+            for _sn in saved_notes[:3]:
+                _tg_lines.append(f"• [{_sn.get('date','-')}] {_sn.get('record','')} ({_sn.get('ratio','')})")
+        _tg_lines.append("\n🌐 OptionHub: http://132.226.3.145:8501")
+        _full_tg = "\n".join(_tg_lines)
+        if send_telegram_msg(tg_token, tg_chat_id, _full_tg[:4000])[0]:
+            st.success("✅ 전체 리포트 텔레그램 전송 완료!")
         else:
             st.warning("⚠️ 텔레그램 설정을 확인해 주세요.")
 
