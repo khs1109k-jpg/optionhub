@@ -2201,7 +2201,7 @@ if nav_menu == "📌 다음 주·원월 포지션":
     else:
         st.caption(f"구글 시트 `전체` 탭에 저장된 {target_tk} 플로우가 아직 없습니다.")
 
-if nav_menu == MENU_ITEMS[0]:
+if nav_menu == "📝 오늘의 종합평":
     st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
     st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
 
@@ -2301,7 +2301,7 @@ if nav_menu == MENU_ITEMS[0]:
         st.caption("구글 시트 AI노트_뉴스시황 탭을 불러오는 중입니다.")
 
 # ================= TAB 1: TOP TICKER =================
-if nav_menu == MENU_ITEMS[1]:
+if nav_menu == "🔥 Top Ticker + 차트/P&L":
     rows = [r for r in date_filtered_flows if r[1] == sel_tk]
     if sort_dir.startswith("과거"):
         rows = rows[::-1]
@@ -2819,7 +2819,7 @@ if nav_menu == "📊 OI(미결제약정) 수집":
             st.success(f"✅ {m_tk} 수동 OI 스냅샷 저장 완료!")
 
 # ================= TAB WATCH: PERSONAL WATCHLIST =================
-if nav_menu == MENU_ITEMS[4]:
+if nav_menu == "⭐ 내 관심종목":
     st.title("⭐ 내 관심종목 (Watchlist) 전용 모아보기")
     st.caption("보유 중이거나 주시하는 종목만 골라 수급과 뉴스를 한눈에 확인하고 텔레그램으로 바로 받아보세요.")
 
@@ -2857,7 +2857,7 @@ if nav_menu == MENU_ITEMS[4]:
         st.info(f"선택하신 날짜({sel_date})에는 등록된 관심종목 체결이 없습니다.")
 
 # ================= TAB OPEX: EXPIRATION CONCENTRATION =================
-if nav_menu == MENU_ITEMS[6]:
+if nav_menu == "📆 만기 집중도(OPEX)":
     st.title("📆 옵션 만기일별 물량 집중도 (OPEX 캘린더)")
     st.caption(f"선택된 날짜({sel_date}) 기준 어느 만기일에 콜/풋 자금이 가장 많이 몰려 있는지 확인합니다.")
 
@@ -2902,7 +2902,7 @@ if nav_menu == MENU_ITEMS[6]:
         st.info("표시할 만기 데이터가 없습니다.")
 
 # ================= TAB CAL: MACRO & EARNINGS CALENDAR =================
-if nav_menu == MENU_ITEMS[7]:
+if nav_menu == "🗓️ 거시·실적 캘린더":
     st.title("🗓️ 주요 거시경제(FOMC·CPI) & 실적·IPO 촉매 캘린더")
     st.caption("TradingView 실시간 경제 지표 캘린더와 InsiderFinance 주요 이벤트 일정을 함께 확인하세요.")
 
@@ -2949,7 +2949,7 @@ if nav_menu == MENU_ITEMS[7]:
             """, unsafe_allow_html=True)
 
 # ================= TAB TRACK: PERFORMANCE & JOURNAL =================
-if nav_menu == MENU_ITEMS[8]:
+if nav_menu == "📈 포착 사후 추적":
     st.title("📈 포착 종목 사후 추적 & 내 매매 복기 트래커")
     st.caption("이전 일자(11/10) AI 포착 종목들의 익일(11/11) 후속 흐름 추적 및 개인 매매 일지 기록")
 
@@ -2991,7 +2991,7 @@ if nav_menu == MENU_ITEMS[8]:
         st.info("아직 기록된 매매 일지가 없습니다. 위 폼에서 첫 거래를 기록해 보세요!")
 
 # ================= TAB SCAN: SMART SCANNER =================
-if nav_menu == MENU_ITEMS[5]:
+if nav_menu == "🔍 조건별 스캐너":
     st.title("🔍 전종목 조건별 스마트 스캐너")
     st.caption(f"현재 선택된 날짜({sel_date})의 전체 거래 중 원하는 조건만 3초 만에 필터링합니다.")
 
@@ -3038,7 +3038,7 @@ if nav_menu == MENU_ITEMS[5]:
         st.info("조건에 일치하는 옵션 체결 내역이 없습니다.")
 
 # ================= TAB MULTI: MULTI-SOURCE CONSENSUS =================
-if nav_menu == MENU_ITEMS[9]:
+if nav_menu == "🔗 멀티 소스 검증":
     st.title("🔗 멀티 소스 교차 검증 (구글 시트 실시간 통합)")
     st.caption("InsiderFinance · Menthor Q · Unusual Options · Sweep · Momentum 등 구글 시트에 누적된 전체 소스를 교차 분석합니다.")
 
@@ -3064,7 +3064,7 @@ if nav_menu == MENU_ITEMS[9]:
         st.warning("구글 시트 멀티 소스 데이터를 불러오는 중입니다.")
 
 # ================= TAB 2: TOP 10 MOONSHOT FLOWS =================
-if nav_menu == MENU_ITEMS[10]:
+if nav_menu == "🚀 Top 10 문샷":
     st.title("🚀 Top 10 Moonshot & Momentum 급등주 포착")
     st.caption("출처: InsiderFinance Top 10 Moonshot Flows & Momentum Options Activity (2026-11-11)")
 
@@ -3121,7 +3121,7 @@ if nav_menu == MENU_ITEMS[10]:
         st.info("💡 **트레이딩 팁:** KGC(킨로스 골드, 11.2배)와 BW(6.0배), ACHR(5.3배) 모두 0% Put Flow로 전량 콜옵션 매집이 포착되었습니다.")
 
 # ================= TAB 3: 5-DAY FLOW & GEX SUPPORT/RESISTANCE =================
-if nav_menu == MENU_ITEMS[11]:
+if nav_menu == "📅 5일 수급 & GEX":
     st.title("📅 5일 누적 기관 수급 추세 & 핵심 지지·저항선 (GEX)")
     st.caption("출처: InsiderFinance Equities 5-Day Flow & Gamma Exposure Analysis (2026-11-11)")
 
@@ -3204,7 +3204,7 @@ if nav_menu == MENU_ITEMS[11]:
         """, unsafe_allow_html=True)
 
 # ================= TAB 4: AI OPTIONS PLAYS & NOTEWORTHY =================
-if nav_menu == MENU_ITEMS[12]:
+if nav_menu == "⚡ AI Plays & Note":
     st.title("⚡ AI Options Plays & Noteworthy Trades")
     st.caption("출처: InsiderFinance AI Options Plays BETA & AI Noteworthy Trades (2026-11-11)")
 
@@ -3302,7 +3302,7 @@ if nav_menu == MENU_ITEMS[12]:
         """, unsafe_allow_html=True)
 
 # ================= TAB 5: OPTIONS TOP TICKERS CHARTS =================
-if nav_menu == MENU_ITEMS[13]:
+if nav_menu == "📊 Options Top 차트":
     st.title("📊 Options Top Tickers 차트 및 데이터 해석")
     st.caption("출처: InsiderFinance Evening Edge Options Top Tickers (2026-11-11)")
     
@@ -3369,7 +3369,7 @@ if nav_menu == MENU_ITEMS[13]:
         """, unsafe_allow_html=True)
 
 # ================= TAB 6: TREEMAP & THEMES =================
-if nav_menu == MENU_ITEMS[14]:
+if nav_menu == "🗺️ 히트맵 & 테마":
     st.title("🗺️ 섹터별 기관 수급 히트맵 & 핵심 테마 분석")
     st.caption("출처: InsiderFinance AI Market Insights BETA (2026-11-11)")
 
@@ -3441,7 +3441,7 @@ if nav_menu == MENU_ITEMS[14]:
         """, unsafe_allow_html=True)
 
 # ================= TAB 7: TRENDING NEWS =================
-if nav_menu == MENU_ITEMS[15]:
+if nav_menu == "📰 뉴스 (7선)":
     st.title("📰 Evening Edge 트레이딩 뉴스 전문 (7선 전체)")
     st.caption("출처: InsiderFinance Trending News (2026-11-11 발행)")
 
