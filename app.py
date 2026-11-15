@@ -2457,26 +2457,6 @@ if nav_menu == "📝 오늘의 종합평":
     st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
     st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
 
-    with st.container(border=True):
-        _t10_h1, _t10_h2 = st.columns([3, 1])
-        _t10_h1.subheader("🔥 오늘의 OI 급증 TOP10")
-        _oi_hist_home = load_json_file(OI_PATH, {})
-        _big_home = load_json_file(BIG_FLOWS_PATH, [])
-        _top10_rows = _compute_top10_oi_surge(_oi_hist_home, all_raw_flows, _big_home)
-        if _t10_h2.button("📩 TOP10 텔레그램", use_container_width=True, key="btn_home_top10_tg"):
-            if _top10_rows:
-                _t10_msg = "🔥 *오늘의 OI 급증 TOP10*\n\n" + "\n".join(
-                    f"{i+1}. *{r['티커']}* | 점수 {r['기관점수']}/100 | ${r['프리미엄($M)']}M | {r['AI 판정']}"
-                    for i, r in enumerate(_top10_rows)
-                )
-                if send_telegram_msg(tg_token, tg_chat_id, _t10_msg)[0]:
-                    st.toast("✅ TOP10 텔레그램 전송 완료!")
-                else:
-                    st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
-        if _top10_rows:
-            st.dataframe(pd.DataFrame(_top10_rows), hide_index=True, use_container_width=True)
-        else:
-            st.info("수집된 OI/대형 체결 데이터가 없습니다. `📊 OI(미결제약정) 수집`에서 스냅샷을 저장해 보세요.")
 
     col_r1, col_r2 = st.columns([4, 1])
     with col_r2:
@@ -2809,6 +2789,27 @@ if nav_menu == "🎯 실발·OI 매집 스캐너":
 if nav_menu == "📊 OI(미결제약정) 수집":
     st.title("📊 OI · GEX(감마 익스포저) · Delta/Gamma 실시간 수집기")
     st.caption("종목별 행사가별 미결제약정(OI)과 Black-Scholes 기반 감마(Gamma)·델타(Delta)·GEX·DEX를 실시간 산출하고 누적 저장합니다.")
+
+    with st.container(border=True):
+        _t10_h1, _t10_h2 = st.columns([3, 1])
+        _t10_h1.subheader("🔥 오늘의 OI 급증 TOP10")
+        _oi_hist_home = load_json_file(OI_PATH, {})
+        _big_home = load_json_file(BIG_FLOWS_PATH, [])
+        _top10_rows = _compute_top10_oi_surge(_oi_hist_home, all_raw_flows, _big_home)
+        if _t10_h2.button("📩 TOP10 텔레그램", use_container_width=True, key="btn_home_top10_tg"):
+            if _top10_rows:
+                _t10_msg = "🔥 *오늘의 OI 급증 TOP10*\n\n" + "\n".join(
+                    f"{i+1}. *{r['티커']}* | 점수 {r['기관점수']}/100 | ${r['프리미엄($M)']}M | {r['AI 판정']}"
+                    for i, r in enumerate(_top10_rows)
+                )
+                if send_telegram_msg(tg_token, tg_chat_id, _t10_msg)[0]:
+                    st.toast("✅ TOP10 텔레그램 전송 완료!")
+                else:
+                    st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
+        if _top10_rows:
+            st.dataframe(pd.DataFrame(_top10_rows), hide_index=True, use_container_width=True)
+        else:
+            st.info("수집된 OI/대형 체결 데이터가 없습니다. `📊 OI(미결제약정) 수집`에서 스냅샷을 저장해 보세요.")
 
     oi_c1, oi_c2 = st.columns([2, 1])
     with oi_c1:
