@@ -246,6 +246,7 @@ st.markdown("""
 
 MENU_ITEMS = [
     "📝 오늘의 종합평",
+    "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
     "🎯 실발·OI 매집 스캐너",
@@ -3948,6 +3949,19 @@ def parse_tg_big_flows(raw_text):
     return records, flip_val
 
 
+
+
+if nav_menu == "🎯 AI GEX 분석":
+    try:
+        from gex_dashboard import render_ai_gex_dashboard
+        render_ai_gex_dashboard(
+            run_ai_fn=run_ai_analysis,
+            send_tg_fn=send_telegram_msg,
+            tg_token=tg_token,
+            tg_chat_id=tg_chat_id,
+        )
+    except Exception as _gex_err:
+        st.error(f"🎯 AI GEX 분석 모듈 로드 오류: {_gex_err}")
 
 if nav_menu == "📰 대형 옵션 체결":
     st.title("📰 대형 옵션 체결 · 신규/증가")
