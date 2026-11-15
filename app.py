@@ -298,9 +298,10 @@ with st.sidebar.expander("🛠️ 메뉴 순서·이름 편집 (상하 수정)",
         _menu_cfg["order"] = _saved_order
         save_json_file(MENU_CFG_PATH, _menu_cfg)
         st.rerun()
-    _new_alias = st.text_input("표시 이름 수정", value=_aliases.get(_sel_ed_m, _sel_ed_m), key="m_alias_in")
-    _is_hid = st.checkbox("이 메뉴 숨기기", value=(_sel_ed_m in _hidden_set), key="m_hid_chk")
-    if st.button("💾 메뉴 설정 저장", use_container_width=True, key="m_save_btn"):
+    _new_alias = st.text_input("표시 이름 수정", value=_aliases.get(_sel_ed_m, _sel_ed_m), key=f"m_alias_in_{_sel_ed_m}")
+    _is_hid = st.checkbox("이 메뉴 숨기기", value=(_sel_ed_m in _hidden_set), key=f"m_hid_chk_{_sel_ed_m}")
+    _sv1, _sv2 = st.columns(2)
+    if _sv1.button("💾 저장", use_container_width=True, key="m_save_btn"):
         if _new_alias.strip() and _new_alias.strip() != _sel_ed_m:
             _aliases[_sel_ed_m] = _new_alias.strip()
         else:
@@ -313,6 +314,9 @@ with st.sidebar.expander("🛠️ 메뉴 순서·이름 편집 (상하 수정)",
         _menu_cfg["hidden"] = list(_hidden_set)
         _menu_cfg["aliases"] = _aliases
         save_json_file(MENU_CFG_PATH, _menu_cfg)
+        st.rerun()
+    if _sv2.button("🔄 초기화", use_container_width=True, key="m_reset_btn"):
+        save_json_file(MENU_CFG_PATH, {"order": list(MENU_ITEMS), "hidden": [], "aliases": {}})
         st.rerun()
 
 if nav_menu == "📝 오늘의 종합평":
