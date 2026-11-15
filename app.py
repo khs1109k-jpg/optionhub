@@ -1012,7 +1012,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_bb = c_o2.checkbox("볼린저", value=False, key="ed_bb")
             show_ma = c_o3.checkbox("이동평균(MA)", value=False, key="ed_ma")
             c_o4, c_o5, c_o6 = st.columns(3)
-            show_walls = c_o4.checkbox("옵션 레벨(벽·플립·1σ)", value=True, key="ed_walls")
+            show_cw = c_o4.checkbox("콜월 (Call Wall)", value=True, key="ed_cw")
+            c_l1, c_l2, c_l3, c_l4 = st.columns(4)
+            show_pw = c_l1.checkbox("풋월 (Put Wall)", value=True, key="ed_pw")
+            show_1sig = c_l2.checkbox("1시그마 (1σ)", value=True, key="ed_1sig")
+            show_zg = c_l3.checkbox("감마플립", value=True, key="ed_zg")
+            show_open_px = c_l4.checkbox("Open (시가)", value=True, key="ed_open_px")
             show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR)", value=True, key="ed_vpvr_vol")
             show_ichi = c_o6.checkbox("일목 구름·후행", value=True, key="ed_ichi")
             st.markdown("**아래 보조지표 (위로 ⬆️ · 아래로 ⬇️ · 빼기 ❌)**")
@@ -1247,14 +1252,15 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "macd": cur_bundle["macd"],
         "macd_sig": cur_bundle["macd_sig"],
         "macd_hist": cur_bundle["macd_hist"],
-        "rsi": cur_bundle["rsi"],        "cw": cw_lv if (show_walls and cw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(cw_lv) <= 1.45 * cur["px"])) else None,
-        "pw": pw_lv if (show_walls and pw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(pw_lv) <= 1.45 * cur["px"])) else None,
-        "zg": zg_lv if (show_walls and zg_lv and (not cur["px"] or 0.55 * cur["px"] <= float(zg_lv) <= 1.45 * cur["px"])) else None,
-        "sig_h": sig_h_lv if show_walls else None,
-        "sig_l": sig_l_lv if show_walls else None,
-        "delta_k": delta_lv if (show_walls and delta_lv and (not cur["px"] or 0.55 * cur["px"] <= float(delta_lv) <= 1.45 * cur["px"])) else None,
-        "gex_c_k": gex_c_lv if (show_walls and gex_c_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_c_lv) <= 1.45 * cur["px"])) else None,
-        "gex_p_k": gex_p_lv if (show_walls and gex_p_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_p_lv) <= 1.45 * cur["px"])) else None,
+        "rsi": cur_bundle["rsi"],        "cw": cw_lv if (show_cw and cw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(cw_lv) <= 1.45 * cur["px"])) else None,
+        "pw": pw_lv if (show_pw and pw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(pw_lv) <= 1.45 * cur["px"])) else None,
+        "zg": zg_lv if (show_zg and zg_lv and (not cur["px"] or 0.55 * cur["px"] <= float(zg_lv) <= 1.45 * cur["px"])) else None,
+        "sig_h": sig_h_lv if show_1sig else None,
+        "sig_l": sig_l_lv if show_1sig else None,
+        "open_px": round(float(merged_tf_sets["1일봉"][-1]["open"]), 2) if (show_open_px and merged_tf_sets.get("1일봉")) else (round(float(candles[-1]["open"]), 2) if (show_open_px and candles) else None),
+        "delta_k": delta_lv if (show_zg and delta_lv and (not cur["px"] or 0.55 * cur["px"] <= float(delta_lv) <= 1.45 * cur["px"])) else None,
+        "gex_c_k": gex_c_lv if (show_cw and gex_c_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_c_lv) <= 1.45 * cur["px"])) else None,
+        "gex_p_k": gex_p_lv if (show_pw and gex_p_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_p_lv) <= 1.45 * cur["px"])) else None,
         "opt_bars": opt_bars if (show_vpvr_opt or show_rail_gex or show_rail_nf) else [],
         "show_vpvr": show_vpvr_vol,
         "show_vpvr_opt": show_vpvr_opt,
@@ -1371,6 +1377,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"GAMMA" }});
       if (d.sig_h) cs.createPriceLine({{ price:d.sig_h, color:"#f87171", lineWidth:1, lineStyle:2, title:"SIG_H" }});
       if (d.sig_l) cs.createPriceLine({{ price:d.sig_l, color:"#38bdf8", lineWidth:1, lineStyle:2, title:"SIG_L" }});
+      if (d.open_px) cs.createPriceLine({{ price:d.open_px, color:"#e2e8f0", lineWidth:1.5, lineStyle:0, title:"OPEN" }});
       if (d.delta_k) cs.createPriceLine({{ price:d.delta_k, color:"#eab308", lineWidth:1, lineStyle:3, title:"DELTA" }});
       if (d.gex_c_k) cs.createPriceLine({{ price:d.gex_c_k, color:"#22c55e", lineWidth:1, lineStyle:3, title:"GEX CALL" }});
       if (d.gex_p_k) cs.createPriceLine({{ price:d.gex_p_k, color:"#fb7185", lineWidth:1, lineStyle:3, title:"GEX PUT" }});
