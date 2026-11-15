@@ -3487,42 +3487,74 @@ if nav_menu == "📚 실피 자료실":
             continue
         filtered_sp.append(x)
 
-    cap_l, cap_r = st.columns([3, 1])
+    cap_l, cap_m, cap_r = st.columns([2.2, 1.0, 1.0])
     cap_l.caption(f"총 {len(filtered_sp)}건의 자료가 표시되고 있습니다.")
+    sp_expand_all = cap_m.toggle("📂 전체 펼치기", value=False, key="sp_exp_all")
     if silpi_items:
         csv_sp = pd.DataFrame(silpi_items).to_csv(index=False).encode("utf-8-sig")
         cap_r.download_button("📥 전체 CSV 백업", csv_sp, file_name="silpi_archive_backup.csv", mime="text/csv", use_container_width=True)
+    edit_id_cur = st.session_state.get("sp_edit_id")
     for idx_sp, item_sp in enumerate(filtered_sp):
-        with st.container(border=True):
-            h_l, h_m, h_r = st.columns([4.2, 1.0, 0.8])
-            with h_l:
-                tr_badge = ""
-                if item_sp.get("매매결과") in ("익절", "손절", "본전"):
-                    pnl_s = f" {item_sp['손익률']:+.2f}%" if item_sp.get("손익률") is not None else ""
-                    tr_badge = f" · `{item_sp.get('포지션','-')} {item_sp['매매결과']}{pnl_s}`"
-                st.markdown(f"**[{item_sp.get('카테고리','')}] {item_sp.get('제목','')}**  `{item_sp.get('종목','')}`{tr_badge} · {item_sp.get('날짜','')}")
-            with h_m:
-                if st.button("📩 텔레그램", key=f"tg_sp_{item_sp.get('id', idx_sp)}"):
-                    if tg_token and tg_chat_id:
-                        tg_txt_sp = f"📚 [실피 자료실] {item_sp.get('제목','')}\n종목: {item_sp.get('종목','')}\n\n{item_sp.get('내용','')}"
-                        ok_s, err_s = send_telegram_msg(tg_token, tg_chat_id, tg_txt_sp)
-                        if ok_s: st.success("전송 완료!")
-                        else: st.error(err_s)
-                    else:
-                        st.warning("텔레그램 설정 필요")
-            with h_r:
-                if st.button("🗑️ 삭제", key=f"del_sp_{item_sp.get('id', idx_sp)}"):
-                    silpi_items = [z for z in silpi_items if z.get("id") != item_sp.get("id")]
-                    save_json_file(SILPI_PATH, silpi_items)
-                    st.rerun()
-            if item_sp.get("내용"):
-                st.markdown(item_sp["내용"].replace("\n", "  \n"))
-            if item_sp.get("링크"):
-                st.markdown(f"🔗 참고 링크: [{item_sp['링크']}]({item_sp['링크']})")
-            fp_sp = item_sp.get("파일경로", "")
-            if fp_sp and os.path.exists(fp_sp):
-                with open(fp_sp, "rb") as fr:
-                    st.download_button(f"📥 {item_sp.get('파일명', '첨부파일')}", fr.read(), file_name=item_sp.get("파일명", "file"), key=f"dl_sp_{item_sp.get('id', idx_sp)}")
+        it_id = item_sp.get("id", f"idx_{idx_sp}")
+        tr_badge = ""
+        if item_sp.get("매매결과") in ("익절", "손절", "본전"):
+            pnl_s = f" {item_sp['손익률']:+.2f}%" if item_sp.get("손익률") is not None else ""
+            tr_badge = f" | {item_sp.get('포지션','-')} {item_sp['매매결과']}{pnl_s}"
+        exp_lbl = f"[{item_sp.get('카테고리','')}] {item_sp.get('제목','')}  ({item_sp.get('종목','')}{tr_badge} · {item_sp.get('날짜','')})"
+        with st.expander(exp_lbl, expanded=(sp_expand_all or edit_id_cur == it_id)):
+            b1, b2, b3, b_sp = st.columns([1.0, 0.9, 0.9, 2.2])
+            if b1.button("📩 텔레그램", key=f"tg_sp_{it_id}"):
+                if tg_token and tg_chat_id:
+                    tg_txt_sp = f"📚 [실피 자료실] {item_sp.get('제목','')}\n종목: {item_sp.get('종목','')}\n\n{item_sp.get('내용','')}"
+                    ok_s, err_s = send_telegram_msg(tg_token, tg_chat_id, tg_txt_sp)
+                    if ok_s: st.success("전송 완료!")
+                    else: st.error(err_s)
+                else:
+                    st.warning("텔레그램 설정 필요")
+            if b2.button("✏️ 수정", key=f"ed_sp_{it_id}"):
+                st.session_state["sp_edit_id"] = None if edit_id_cur == it_id else it_id
+                st.rerun()
+            if b3.button("🗑️ 삭제", key=f"del_sp_{it_id}"):
+                silpi_items = [z for z in silpi_items if z.get("id") != item_sp.get("id")]
+                save_json_file(SILPI_PATH, silpi_items)
+                if edit_id_cur == it_id:
+                    st.session_state["sp_edit_id"] = None
+                st.rerun()
+            if edit_id_cur == it_id:
+                with st.form(f"sp_edit_form_{it_id}"):
+                    ec1, ec2, ec3 = st.columns([1.2, 1.0, 2.0])
+                    cat_opts = ["옵션 전략", "차트 패턴", "매매 복기", "자금 관리", "참고 링크/PDF"]
+                    cur_c_i = cat_opts.index(item_sp.get("카테고리")) if item_sp.get("카테고리") in cat_opts else 0
+                    e_cat = ec1.selectbox("카테고리", cat_opts, index=cur_c_i)
+                    e_tk = ec2.text_input("종목", value=str(item_sp.get("종목", "공통"))).strip().upper() or "공통"
+                    e_title = ec3.text_input("제목", value=str(item_sp.get("제목", "")))
+                    e_body = st.text_area("상세 내용", value=str(item_sp.get("내용", "")), height=140)
+                    e_link = st.text_input("참고 URL", value=str(item_sp.get("링크", "")))
+                    sv_c1, sv_c2 = st.columns(2)
+                    if sv_c1.form_submit_button("💾 수정 저장", type="primary", use_container_width=True):
+                        for z in silpi_items:
+                            if z.get("id") == it_id:
+                                z["카테고리"] = e_cat
+                                z["종목"] = e_tk
+                                z["제목"] = e_title.strip() or z["제목"]
+                                z["내용"] = e_body.strip()
+                                z["링크"] = e_link.strip()
+                        save_json_file(SILPI_PATH, silpi_items)
+                        st.session_state["sp_edit_id"] = None
+                        st.session_state["silpi_saved_ok"] = True
+                        st.rerun()
+                    if sv_c2.form_submit_button("취소", use_container_width=True):
+                        st.session_state["sp_edit_id"] = None
+                        st.rerun()
+            else:
+                if item_sp.get("내용"):
+                    st.markdown(item_sp["내용"].replace("\n", "  \n"))
+                if item_sp.get("링크"):
+                    st.markdown(f"🔗 참고 링크: [{item_sp['링크']}]({item_sp['링크']})")
+                fp_sp = item_sp.get("파일경로", "")
+                if fp_sp and os.path.exists(fp_sp):
+                    with open(fp_sp, "rb") as fr:
+                        st.download_button(f"📥 {item_sp.get('파일명', '첨부파일')}", fr.read(), file_name=item_sp.get("파일명", "file"), key=f"dl_sp_{it_id}")
 
 
 # ================= TAB: OPTIONS ARCHIVE =================
