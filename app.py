@@ -3852,6 +3852,13 @@ if nav_menu == "📂 옵션자료실":
         }
     ]
     opt_items = load_json_file(OPT_VAULT_PATH, default_opt_vault)
+    _id_fixed = False
+    for _oi, _ox in enumerate(opt_items):
+        if not _ox.get("id"):
+            _ox["id"] = f"op_auto_{_oi}_{int(time.time())}"
+            _id_fixed = True
+    if _id_fixed:
+        save_json_file(OPT_VAULT_PATH, opt_items)
     if st.session_state.pop("opt_saved_ok", False):
         st.success("✅ 옵션자료실에 정상 저장되었습니다!")
     if st.session_state.pop("opt_edited_ok", False):
@@ -3924,6 +3931,8 @@ if nav_menu == "📂 옵션자료실":
           });
         </script>
         """, height=215)
+        if st.session_state.pop("opt_clear_paste", False):
+            st.session_state["opt_paste_b64"] = ""
         pasted_b64 = st.text_input("붙여넣기 이미지 데이터", "", key="opt_paste_b64", label_visibility="collapsed", placeholder="Ctrl+V로 이미지를 붙여넣으면 자동으로 채워집니다 (직접 입력 불필요)")
 
         if st.button("💾 옵션자료실에 저장", type="primary", key="opt_save_btn"):
@@ -3961,7 +3970,7 @@ if nav_menu == "📂 옵션자료실":
                     "파일명": saved_fn,
                 })
                 save_json_file(OPT_VAULT_PATH, opt_items)
-                st.session_state["opt_paste_b64"] = ""
+                st.session_state["opt_clear_paste"] = True
                 st.session_state["opt_saved_ok"] = True
                 st.rerun()
             else:
@@ -4016,17 +4025,36 @@ if nav_menu == "📂 옵션자료실":
                     st.rerun()
 
             if edit_op_id == iid_op:
+                fp_ed = item_op.get("파일경로", "")
+                if fp_ed and os.path.exists(fp_ed) and os.path.splitext(fp_ed)[1].lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
+                    st.image(fp_ed, caption=item_op.get("파일명", "첨부 이미지"), use_container_width=True)
+                st.caption("✏️ 아래 칸에 그림 설명/분석을 작성한 뒤 **💾 수정 저장**을 누르세요.")
+                ne_body = st.text_area("상세 내용 (그림 보면서 작성)", item_op.get("내용", ""), height=150, key=f"ne_bod_{iid_op}", placeholder="그림 아래에 분석 내용을 바로 입력하세요...")
                 ec1, ec2, ec3 = st.columns([1.2, 1.0, 2.0])
                 cat_list_o = ["GEX/그릭스", "OI·Wall 분석", "HIRO·다크풀", "스윕·블록", "0DTE·만기 전략", "참고 파일/PDF"]
                 cur_cat_i = cat_list_o.index(item_op.get("카테고리")) if item_op.get("카테고리") in cat_list_o else 0
                 ne_cat = ec1.selectbox("카테고리", cat_list_o, index=cur_cat_i, key=f"ne_cat_{iid_op}")
                 ne_tk = ec2.text_input("관련 종목", item_op.get("종목", "공통"), key=f"ne_tk_{iid_op}").strip().upper() or "공통"
                 ne_title = ec3.text_input("제목", item_op.get("제목", ""), key=f"ne_tit_{iid_op}")
-                ne_body = st.text_area("상세 내용", item_op.get("내용", ""), height=130, key=f"ne_bod_{iid_op}")
                 ne_link = st.text_input("참고 URL", item_op.get("링크", ""), key=f"ne_lnk_{iid_op}")
                 ne_file = st.file_uploader("첨부파일/사진 교체 (선택)", type=None, key=f"ne_fil_{iid_op}")
+                components.html("""
+                <script>
+                  setTimeout(() => {
+                    try {
+                      const ta = window.parent.document.querySelector('textarea[aria-label="상세 내용 (그림 보면서 작성)"]');
+                      if (ta) {
+                        ta.focus({ preventScroll: true });
+                        ta.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                        const len = ta.value.length;
+                        ta.setSelectionRange(len, len);
+                      }
+                    } catch(e) {}
+                  }, 150);
+                </script>
+                """, height=0)
                 sb1, sb2 = st.columns([1, 5])
-                if sb1.button("💾 저장", type="primary", key=f"ne_sav_{iid_op}"):
+                if sb1.button("💾 수정 저장", type="primary", key=f"ne_sav_{iid_op}"):
                     for z in opt_items:
                         if z.get("id") == item_op.get("id"):
                             z["카테고리"] = ne_cat
