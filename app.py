@@ -3823,6 +3823,42 @@ if nav_menu == "🎯 행사가별·동반 체결":
     STRIKE_NOTE_PATH = os.path.expanduser("~/.optionhub_strike_notes.json")
     strike_notes = load_json_file(STRIKE_NOTE_PATH, {})
 
+    def _parse_money_f(val):
+        s = str(val or "").replace("$", "").replace(",", "").strip().upper()
+        if not s or s == "-":
+            return 0.0
+        mul = 1.0
+        if s.endswith("M"):
+            mul = 1_000_000.0; s = s[:-1]
+        elif s.endswith("K"):
+            mul = 1_000.0; s = s[:-1]
+        try:
+            return float(s) * mul
+        except Exception:
+            return 0.0
+
+    _sh_rows = []
+    for _r in (all_raw_flows or []):
+        try:
+            _k_num = float(str(_r[7]).replace("$", "").replace(",", "").strip())
+        except Exception:
+            _k_num = 0.0
+        _sh_rows.append({
+            "날짜": str(_r[0]),
+            "티커": str(_r[1]).upper(),
+            "체결시간": str(_r[2]),
+            "구분": str(_r[3]).capitalize(),
+            "매수/매도": "BUY" if "A" in str(_r[4]) else ("SELL" if "B" in str(_r[4]) else "미정"),
+            "만기일": str(_r[5]),
+            "행사가": _k_num,
+            "유형": str(_r[13]),
+            "프리미엄": _parse_money_f(_r[14]),
+            "수량": int(float(_r[15])) if str(_r[15]).replace(".", "", 1).isdigit() else 0,
+            "OI": 0,
+            "비고": str(_r[13]),
+        })
+    df_all = pd.DataFrame(_sh_rows)
+
     # 무무 실시간 DB 조회
     mm_q = {}
     mm_bk = {}
@@ -4143,7 +4179,7 @@ if nav_menu == "🎯 행사가별·동반 체결":
 
     if st.button(f"📩 {tk_f} ({sel_k_lbl}) 요약 텔레그램 전송", key="flow_tg_send"):
         msg_f = f"🎯 *[{tk_f} 행사가별·동반 체결]* ({sel_k_lbl})\n• 무무 LV3 현재가: ${spot_live:,.2f} ({lv3_bias})\n• Bid/Ask Top5: {b_qty:,} / {a_qty:,}"
-        if send_telegram_msg(msg_f):
+        if send_telegram_msg(tg_token, tg_chat_id, msg_f)[0]:
             st.success("✅ 텔레그램 전송 완료!")
         else:
             st.warning("⚠️ 텔레그램 설정을 확인해 주세요.")
@@ -4348,7 +4384,7 @@ if nav_menu == "📂 옵션자료실":
             with oh_t:
                 if st.button("📩 텔레그램", key=f"tg_op_{iid_op}"):
                     tg_txt = f"📂 *[옵션자료실]* {item_op.get('제목','')}\n종목: {item_op.get('종목','')}\n\n{item_op.get('내용','')[:3200]}"
-                    if send_telegram_msg(tg_txt):
+                    if send_telegram_msg(tg_token, tg_chat_id, tg_txt)[0]:
                         st.toast("✅ 텔레그램 전송 완료!")
                     else:
                         st.toast("⚠️ 텔레그램 설정 확인 필요")
