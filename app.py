@@ -1490,15 +1490,71 @@ if nav_menu == "⚡ 무무 실시간 차트":
     else:
         st.caption(f"{clean_tk} 최근 옵션 체결 내역이 아직 없습니다. (OI 수집 탭에서 스냅샷 수집 시 자동 표시됩니다.)")
 
+    # 1~5 통합 알림 및 n8n Webhook 설정
+    N8N_CFG_PATH = os.path.expanduser("~/.optionhub_n8n_cfg.json")
+    ALERT_SENT_PATH = os.path.expanduser("~/.optionhub_alert_sent.json")
+    FLOW_HIST_PATH = os.path.expanduser("~/.optionhub_moomoo_flow_hist.json")
+    n8n_cfg = load_json_file(N8N_CFG_PATH, {"url": "", "auto": True})
+    sent_alerts = set(load_json_file(ALERT_SENT_PATH, []))
+
+    def push_n8n_and_tg(ev_key, ev_title, ev_msg, payload_extra=None):
+        if ev_key in sent_alerts:
+            return
+        sent_alerts.add(ev_key)
+        save_json_file(ALERT_SENT_PATH, list(sent_alerts)[-400:])
+        if n8n_cfg.get("auto") and tg_token and tg_chat_id:
+            send_telegram_msg(tg_token, tg_chat_id, f"{ev_title}\n{ev_msg}\n🌐 http://132.226.3.145:8501")
+        hook_u = str(n8n_cfg.get("url", "")).strip()
+        if hook_u.startswith("http"):
+            try:
+                body = json.dumps({"title": ev_title, "message": ev_msg, "ticker": clean_tk, "price": cur.get("px", 0), "extra": payload_extra or {}}).encode("utf-8")
+                req = urllib.request.Request(hook_u, data=body, headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+
+    # 3) 핵심 레벨 ±0.3% 터치 경보 + 4) 프리마켓·야간 급변동(±1.5%) 스캐너
+    live_alerts = []
+    px_now = float(cur.get("px", 0) or 0)
+    if px_now > 0:
+        for lv_name, lv_val in [("Call Wall", cw_lv), ("Put Wall", pw_lv), ("Zero Gamma", zg_lv), ("SIG_H", sig_h_lv), ("SIG_L", sig_l_lv)]:
+            if lv_val and float(lv_val) > 0:
+                diff_r = abs(px_now - float(lv_val)) / float(lv_val) * 100.0
+                if diff_r <= 0.3:
+                    t_msg = f"🎯 [{clean_tk}] {lv_name} ${float(lv_val):g} 터치! (현재가 ${px_now:,.2f}, 차이 {diff_r:.2f}%)"
+                    live_alerts.append(t_msg)
+                    push_n8n_and_tg(f"LV|{clean_tk}|{lv_name}|{int(time.time()//1800)}", "🎯 OptionHub 레벨 터치 경보", t_msg, {"level": lv_name, "target": float(lv_val)})
+
+    surge_list = []
+    for pq in parsed_q:
+        chg_p = pq.get("등락률(%)")
+        if chg_p is not None and abs(float(chg_p)) >= 1.5:
+            s_tk_q = str(pq.get("종목", "")).split(".")[-1]
+            s_msg = f"🌅 [{s_tk_q}] 급변동 {float(chg_p):+.2f}% (현재가 ${pq.get('현재가($)', 0)})"
+            surge_list.append(s_msg)
+            push_n8n_and_tg(f"SRG|{s_tk_q}|{int(time.time()//3600)}", "🌅 OptionHub 프리마켓·야간 급변동", s_msg, {"chg_pct": float(chg_p)})
+
     col_b1, col_b2 = st.columns(2)
     with col_b1:
-        st.subheader("🧱 실시간 60호가 매수·매도 벽")
+        st.subheader("🧱 실시간 60호가 매수·매도 벽 & LV3 불균형")
         bk = aux_map.get("book") or {}
         bids = bk.get("Bid") or bk.get("bids") or []
         asks = bk.get("Ask") or bk.get("asks") or []
         if bids or asks:
             b_pts = [(float(x[0]), float(x[1])) for x in bids[:15] if len(x) >= 2]
             a_pts = [(float(x[0]), float(x[1])) for x in asks[:15] if len(x) >= 2]
+            b_tot10 = sum(v for _, v in b_pts[:10])
+            a_tot10 = sum(v for _, v in a_pts[:10])
+            if b_tot10 > 0 and a_tot10 > 0:
+                ba_ratio = b_tot10 / a_tot10
+                if ba_ratio >= 2.0:
+                    st.success(f"🟢 LV3 매수벽 {ba_ratio:.2f}배 우위 (매수 {int(b_tot10):,} vs 매도 {int(a_tot10):,})")
+                    push_n8n_and_tg(f"IMB|B|{clean_tk}|{int(time.time()//1800)}", "🧱 LV3 매수벽 2배 이상 우위", f"[{clean_tk}] 매수잔량 {int(b_tot10):,} vs 매도잔량 {int(a_tot10):,} ({ba_ratio:.2f}배)", {"ratio": round(ba_ratio, 2)})
+                elif ba_ratio <= 0.5:
+                    st.error(f"🔴 LV3 매도벽 {(1/ba_ratio):.2f}배 우위 (매수 {int(b_tot10):,} vs 매도 {int(a_tot10):,})")
+                    push_n8n_and_tg(f"IMB|S|{clean_tk}|{int(time.time()//1800)}", "🧱 LV3 매도벽 2배 이상 우위", f"[{clean_tk}] 매도잔량 {int(a_tot10):,} vs 매수잔량 {int(b_tot10):,} ({1/ba_ratio:.2f}배)", {"ratio": round(ba_ratio, 2)})
+                else:
+                    st.info(f"⚖️ 10호가 잔량 균형: 매수 {int(b_tot10):,} / 매도 {int(a_tot10):,} ({ba_ratio:.2f}x)")
             fig_bk = go.Figure()
             if b_pts:
                 fig_bk.add_trace(go.Bar(y=[f"${p:g}" for p, _ in b_pts], x=[v for _, v in b_pts], orientation="h", name="매수잔량(Bid)", marker_color="#10b981"))
@@ -1507,15 +1563,54 @@ if nav_menu == "⚡ 무무 실시간 차트":
             fig_bk.update_layout(height=340, barmode="relative", plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_bk, use_container_width=True)
         else:
-            st.caption("호가창(book) 데이터가 수신되면 매수/매도 잔량 벽이 표시됩니다.")
+            st.caption("호가창(book) 데이터가 수신되면 매수/매도 잔량 벽과 불균형 신호가 표시됩니다.")
 
     with col_b2:
-        st.subheader("💰 실시간 자금 유입/유출 분포")
+        st.subheader("💰 실시간 자금 유입/유출 분포 & 누적 곡선")
         fl = aux_map.get("flow") or {}
+        flow_hist_all = load_json_file(FLOW_HIST_PATH, {})
+        tk_fh = flow_hist_all.get(clean_tk, [])
         if isinstance(fl, dict) and fl:
+            net_big = float(fl.get("inB", 0) or 0) - float(fl.get("outB", 0) or 0)
+            net_mid = float(fl.get("inM", 0) or 0) - float(fl.get("outM", 0) or 0)
+            net_sml = float(fl.get("inS", fl.get("inSm", 0)) or 0) - float(fl.get("outS", fl.get("outSm", 0)) or 0)
+            t_now_fl = pd.Timestamp.now(tz="Asia/Seoul").strftime("%H:%M")
+            if not tk_fh or tk_fh[-1].get("t") != t_now_fl:
+                tk_fh.append({"t": t_now_fl, "대형": round(net_big, 1), "중형": round(net_mid, 1), "소형": round(net_sml, 1)})
+                flow_hist_all[clean_tk] = tk_fh[-120:]
+                save_json_file(FLOW_HIST_PATH, flow_hist_all)
+            st.markdown(f"**대형 순유입:** `{net_big:+,.0f}` · **중형:** `{net_mid:+,.0f}` · **소형:** `{net_sml:+,.0f}`")
+        if tk_fh:
+            df_fh = pd.DataFrame(tk_fh)
+            fig_fh = go.Figure()
+            fig_fh.add_trace(go.Scatter(x=df_fh["t"], y=df_fh["대형"], mode="lines+markers", name="대형(Big)", line=dict(color="#10b981", width=2)))
+            fig_fh.add_trace(go.Scatter(x=df_fh["t"], y=df_fh["중형"], mode="lines", name="중형(Mid)", line=dict(color="#38bdf8", width=1.5)))
+            fig_fh.add_trace(go.Scatter(x=df_fh["t"], y=df_fh["소형"], mode="lines", name="소형(Small)", line=dict(color="#f59e0b", width=1.5, dash="dot")))
+            fig_fh.update_layout(height=280, plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#d1d4dc", margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.08))
+            st.plotly_chart(fig_fh, use_container_width=True)
+        elif isinstance(fl, dict) and fl:
             st.json(fl)
         else:
             st.caption("자금분포(flow) 데이터 수신 대기 중 (3분 주기)")
+
+    if live_alerts or surge_list:
+        st.warning(" | ".join(live_alerts + surge_list))
+
+    with st.expander("🔗 n8n Webhook & 자동 경보 설정 (레벨 터치 · 매수벽 · 급변동 · 큰손 풋/콜)", expanded=False):
+        n_c1, n_c2, n_c3 = st.columns([2.4, 0.9, 0.9])
+        new_n8n_url = n_c1.text_input("n8n Webhook URL", value=n8n_cfg.get("url", ""), placeholder="http://127.0.0.1:5678/webhook/optionhub", key="n8n_hook_inp")
+        new_n8n_auto = n_c2.checkbox("텔레그램+n8n 자동전송", value=n8n_cfg.get("auto", True), key="n8n_auto_chk")
+        if n_c3.button("💾 저장/테스트", use_container_width=True):
+            save_json_file(N8N_CFG_PATH, {"url": new_n8n_url.strip(), "auto": new_n8n_auto})
+            if new_n8n_url.strip().startswith("http"):
+                try:
+                    req = urllib.request.Request(new_n8n_url.strip(), data=json.dumps({"test": True, "ticker": clean_tk, "price": px_now}).encode("utf-8"), headers={"Content-Type": "application/json"})
+                    urllib.request.urlopen(req, timeout=5)
+                    st.success("✅ n8n Webhook 저장 및 테스트 전송 성공!")
+                except Exception as e_n8n:
+                    st.error(f"n8n 연결 확인 필요: {e_n8n}")
+            else:
+                st.success("✅ 설정이 저장되었습니다!")
 
     # 🐋 무무·실시간 큰손 풋/콜 누적 & 텔레그램 경보
     st.subheader("🐋 무무 · 실시간 큰손 풋/콜 누적 & 텔레그램 경보")
@@ -3167,16 +3262,80 @@ if nav_menu == "📚 실피 자료실":
     else:
         st.caption("텔레그램 봇에 브리핑이 전달되면 종목 태그(symbols)와 함께 자동 누적·검색됩니다.")
 
+    # 3) 종목 태그 -> 실시간 GEX · 무무 현재가 미리보기
+    st.markdown("#### ⚡ 종목 즉시 미리보기 (무무 현재가 · Call/Put Wall · Zero Gamma)")
+    pv_list = sorted(list(set(detected_syms + ["SOXL", "NVDA", "QQQ", "SPY", "SNDK", "MU", "AMD", "TSLA"])))
+    pv_tk = st.selectbox("미리보기 종목 선택", pv_list, index=0, key="sp_pv_tk")
+    pv_px_txt, pv_cw, pv_pw, pv_zg = "-", "-", "-", "-"
+    try:
+        db_p_sp = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+        if os.path.exists(db_p_sp):
+            con_sp = sqlite3.connect(f"file:{db_p_sp}?mode=ro", uri=True, timeout=3)
+            r_sp = con_sp.execute("SELECT data FROM quotes WHERE sym=?", (f"US.{pv_tk}",)).fetchone()
+            con_sp.close()
+            if r_sp and r_sp[0]:
+                d_sp = json.loads(r_sp[0])
+                px_sp = d_sp.get("last_price") or d_sp.get("px")
+                if px_sp:
+                    pv_px_txt = f"${float(px_sp):,.2f}"
+    except Exception:
+        pass
+    try:
+        oi_sp = load_json_file(OI_PATH, {})
+        if pv_tk in oi_sp and oi_sp[pv_tk]:
+            det_sp = oi_sp[pv_tk][-1].get("상세", [])
+            cs_sp = [x for x in det_sp if x.get("구분") == "Call"]
+            ps_sp = [x for x in det_sp if x.get("구분") == "Put"]
+            if cs_sp: pv_cw = f"${max(cs_sp, key=lambda x: x.get('OI', 0)).get('행사가'):g}"
+            if ps_sp: pv_pw = f"${max(ps_sp, key=lambda x: x.get('OI', 0)).get('행사가'):g}"
+            zg_sp = calc_zero_gamma(det_sp, float(oi_sp[pv_tk][-1].get("Spot", 0) or 0))
+            if zg_sp: pv_zg = f"${zg_sp:g}"
+    except Exception:
+        pass
+    pm1, pm2, pm3, pm4 = st.columns(4)
+    pm1.metric(f"{pv_tk} 무무 현재가", pv_px_txt)
+    pm2.metric("Call Wall", pv_cw)
+    pm3.metric("Put Wall", pv_pw)
+    pm4.metric("Zero Gamma", pv_zg)
+
+    # 2) 텔레그램 전달 이미지 & 차트 갤러리
+    tg_p_dir = os.path.expanduser("~/.optionhub_tg_photos")
+    tg_imgs = [os.path.join(tg_p_dir, x) for x in sorted(os.listdir(tg_p_dir), reverse=True) if x.endswith(".jpg")][:6] if os.path.isdir(tg_p_dir) else []
+    with st.expander(f"🖼️ 텔레그램 전달 차트 · 표 갤러리 ({len(tg_imgs)}장)", expanded=False):
+        if tg_imgs:
+            g_cols = st.columns(3)
+            for gi, gp in enumerate(tg_imgs):
+                with g_cols[gi % 3]:
+                    st.image(gp, caption=os.path.basename(gp), use_container_width=True)
+        else:
+            st.caption("텔레그램 봇에 차트나 표 이미지를 전달하면 여기에 자동으로 모입니다.")
+
     st.divider()
 
+    # 1) 매매 복기 · 승률 자동 계산기 요약 바
+    tr_entries = [x for x in silpi_items if x.get("매매결과") in ("익절", "손절", "본전")]
+    if tr_entries:
+        wins_cnt = sum(1 for x in tr_entries if x.get("매매결과") == "익절")
+        win_rate = wins_cnt / len(tr_entries) * 100.0
+        pnl_vals = [float(x.get("손익률", 0) or 0) for x in tr_entries if x.get("손익률") is not None]
+        avg_pnl = (sum(pnl_vals) / len(pnl_vals)) if pnl_vals else 0.0
+        tm1, tm2, tm3 = st.columns(3)
+        tm1.metric("📊 누적 복기 매매", f"{len(tr_entries)}건")
+        tm2.metric("🏆 승률", f"{win_rate:.1f}% ({wins_cnt}승 {len(tr_entries)-wins_cnt}패)")
+        tm3.metric("💹 평균 손익률", f"{avg_pnl:+.2f}%")
 
-    with st.expander("➕ 새 자료 / 메모 / 파일 추가하기", expanded=True):
+    with st.expander("➕ 새 자료 / 메모 / 매매 복기 / 파일 추가하기", expanded=True):
         with st.form("silpi_add_form", clear_on_submit=True):
             fc1, fc2, fc3 = st.columns([1.2, 1.0, 2.0])
             s_cat = fc1.selectbox("카테고리", ["옵션 전략", "차트 패턴", "매매 복기", "자금 관리", "참고 링크/PDF"])
             s_tk = fc2.text_input("관련 종목", "공통", placeholder="예: SOXL, NVDA, 공통").strip().upper() or "공통"
             s_title = fc3.text_input("제목 (비워두면 내용 첫 줄 자동 입력)", placeholder="예: 11/14 SOXL 58C/60C 매집 복기")
             s_body = st.text_area("상세 내용 / 메모", height=110, placeholder="핵심 수치, 진입/손절 기준, 복기 내용을 입력하세요.")
+            tr1, tr2, tr3, tr4 = st.columns(4)
+            s_res = tr1.selectbox("매매결과 (복기용)", ["참고용", "익절", "손절", "본전"])
+            s_pos = tr2.selectbox("포지션", ["-", "Call", "Put", "주식/ETF"])
+            s_entry = tr3.number_input("진입가($)", 0.0, 100000.0, 0.0, step=0.1)
+            s_exit = tr4.number_input("청산가($)", 0.0, 100000.0, 0.0, step=0.1)
             fc4, fc5 = st.columns([1.5, 1.5])
             s_link = fc4.text_input("참고 URL (선택)", placeholder="https://...")
             s_file = fc5.file_uploader("파일 첨부 (PDF·이미지·TXT·CSV 등)", type=None)
@@ -3202,6 +3361,11 @@ if nav_menu == "📚 실피 자료실":
                         "링크": s_link.strip(),
                         "파일경로": saved_file_path,
                         "파일명": saved_file_name,
+                        "매매결과": s_res,
+                        "포지션": s_pos,
+                        "진입가": s_entry,
+                        "청산가": s_exit,
+                        "손익률": round(((s_exit - s_entry) / s_entry * 100.0), 2) if (s_entry > 0 and s_exit > 0) else None,
                     }
                     silpi_items.insert(0, new_entry)
                     save_json_file(SILPI_PATH, silpi_items)
@@ -3227,12 +3391,29 @@ if nav_menu == "📚 실피 자료실":
             continue
         filtered_sp.append(x)
 
-    st.caption(f"총 {len(filtered_sp)}건의 자료가 표시되고 있습니다.")
+    cap_l, cap_r = st.columns([3, 1])
+    cap_l.caption(f"총 {len(filtered_sp)}건의 자료가 표시되고 있습니다.")
+    if silpi_items:
+        csv_sp = pd.DataFrame(silpi_items).to_csv(index=False).encode("utf-8-sig")
+        cap_r.download_button("📥 전체 CSV 백업", csv_sp, file_name="silpi_archive_backup.csv", mime="text/csv", use_container_width=True)
     for idx_sp, item_sp in enumerate(filtered_sp):
         with st.container(border=True):
-            h_l, h_r = st.columns([5, 1])
+            h_l, h_m, h_r = st.columns([4.2, 1.0, 0.8])
             with h_l:
-                st.markdown(f"**[{item_sp.get('카테고리','')}] {item_sp.get('제목','')}**  `{item_sp.get('종목','')}` · {item_sp.get('날짜','')}")
+                tr_badge = ""
+                if item_sp.get("매매결과") in ("익절", "손절", "본전"):
+                    pnl_s = f" {item_sp['손익률']:+.2f}%" if item_sp.get("손익률") is not None else ""
+                    tr_badge = f" · `{item_sp.get('포지션','-')} {item_sp['매매결과']}{pnl_s}`"
+                st.markdown(f"**[{item_sp.get('카테고리','')}] {item_sp.get('제목','')}**  `{item_sp.get('종목','')}`{tr_badge} · {item_sp.get('날짜','')}")
+            with h_m:
+                if st.button("📩 텔레그램", key=f"tg_sp_{item_sp.get('id', idx_sp)}"):
+                    if tg_token and tg_chat_id:
+                        tg_txt_sp = f"📚 [실피 자료실] {item_sp.get('제목','')}\n종목: {item_sp.get('종목','')}\n\n{item_sp.get('내용','')}"
+                        ok_s, err_s = send_telegram_msg(tg_token, tg_chat_id, tg_txt_sp)
+                        if ok_s: st.success("전송 완료!")
+                        else: st.error(err_s)
+                    else:
+                        st.warning("텔레그램 설정 필요")
             with h_r:
                 if st.button("🗑️ 삭제", key=f"del_sp_{item_sp.get('id', idx_sp)}"):
                     silpi_items = [z for z in silpi_items if z.get("id") != item_sp.get("id")]
