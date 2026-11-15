@@ -3880,7 +3880,7 @@ def run_ai_analysis(prompt_text, img_b64=None, img_path=None):
                     raw_b64 = _b64_ai.b64encode(fi.read()).decode("utf-8")
             if raw_b64:
                 parts.append({"inline_data": {"mime_type": mime_t, "data": raw_b64}})
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={g_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={g_key}"
             body = json.dumps({"contents": [{"parts": parts}]}).encode("utf-8")
             req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=25) as resp:
