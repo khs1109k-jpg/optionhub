@@ -5256,7 +5256,8 @@ if nav_menu == "📅 구글 캘린더":
             "description": str(_e.get("description", "")),
         }
     all_gcal_events = sorted(_all_gcal_map.values(), key=lambda x: (x["date"], x["summary"]))
-    _events_json = json.dumps(all_gcal_events, ensure_ascii=False).replace("</", "<\/")
+    import base64 as _b64_ev
+    _events_b64 = _b64_ev.b64encode(json.dumps(all_gcal_events, ensure_ascii=False).encode("utf-8")).decode("ascii")
 
     _gcal_html = """<!DOCTYPE html>
 <html>
@@ -5438,7 +5439,11 @@ body { background: #131314; color: #e8eaed; font-family: 'Google Sans', 'Inter',
 </div>
 
 <script>
-const EVENTS = __EVENTS_JSON__;
+const _evB64 = "__EVENTS_B64__";
+const _evBin = atob(_evB64);
+const _evBytes = new Uint8Array(_evBin.length);
+for (let _bi = 0; _bi < _evBin.length; _bi++) _evBytes[_bi] = _evBin.charCodeAt(_bi);
+const EVENTS = JSON.parse(new TextDecoder("utf-8").decode(_evBytes));
 const TODAY = "2026-11-16";
 let selDate = "2026-11-20";
 let miniYear = 2026, miniMonth = 10; // 10 = Nov
@@ -5471,7 +5476,10 @@ function toggleCat(c) {
   const el = document.getElementById(c==='expiry'?'chkExpiry':c==='hedge'?'chkHedge':'chkLevel');
   el.textContent = cats[c] ? '✓' : '';
   el.style.opacity = cats[c] ? '1' : '0.35';
-  renderAll();
+  try { renderAll(); } catch (e) {
+  const mr = document.getElementById('mainRoot');
+  if (mr) mr.innerHTML = '<div style="padding:24px;color:#f28b82;font-size:14px;">캘린더 렌더링 오류: ' + (e && e.message ? e.message : e) + '</div>';
+}
 }
 function setView(v) {
   viewMode = v;
@@ -5513,10 +5521,15 @@ function openEvent(id) {
   const rawDesc = (ev.description || '(상세 내용 없음)').trim();
   const descEl = document.getElementById('mDesc');
   const escHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const aiMatch = rawDesc.match(/📌\\s*\\[?Gemini(?:\\s*AI)?\\s*해석\\]?[\\s\\S]*?(?=\\n\\n📊|\\n\\n📬|$)/i);
-  if (aiMatch) {
-    const rest = rawDesc.replace(aiMatch[0], '').trim();
-    descEl.innerHTML = `<div class="ev-ai-box">${escHtml(aiMatch[0].trim())}</div>` + (rest ? `<div>${escHtml(rest)}</div>` : '');
+  if (rawDesc.includes('📌')) {
+    const parts = rawDesc.split(String.fromCharCode(10, 10));
+    const aiPart = parts.filter(p => p.includes('📌') || p.includes('Gemini')).slice(0, 1)[0] || '';
+    if (aiPart) {
+      const rest = rawDesc.replace(aiPart, '').trim();
+      descEl.innerHTML = `<div class="ev-ai-box">${escHtml(aiPart.trim())}</div>` + (rest ? `<div>${escHtml(rest)}</div>` : '');
+    } else {
+      descEl.textContent = rawDesc;
+    }
   } else {
     descEl.textContent = rawDesc;
   }
@@ -5619,7 +5632,7 @@ renderAll();
 </body>
 </html>"""
 
-    _gcal_html = _gcal_html.replace("__EVENTS_JSON__", _events_json)
+    _gcal_html = _gcal_html.replace("__EVENTS_B64__", _events_b64)
     components.html(_gcal_html, height=820, scrolling=True)
 
     with st.expander("⚙️ ICS 실시간 동기화 · ➕ 새 일정 추가 · 📩 텔레그램 전송", expanded=False):
