@@ -3817,7 +3817,7 @@ if nav_menu == "📚 실피 자료실":
 # ================= TAB: OPTIONS ARCHIVE =================
 if nav_menu == "📂 옵션자료실":
     st.title("📂 옵션자료실 (GEX · 그릭스 · 옵션 전략 아카이브)")
-    st.caption("옵션 리포트, GEX/HIRO/OI 분석 메모, 전략 파일(PDF·엑셀·이미지) 및 참고 링크를 서버에 영구 저장합니다.")
+    st.caption("옵션 리포트, GEX/HIRO/OI 분석 메모, 스크린샷 복사·붙여넣기(Ctrl+V), 전략 파일(PDF·엑셀·이미지)을 서버에 영구 저장합니다.")
 
     OPT_VAULT_PATH = os.path.expanduser("~/.optionhub_options_vault.json")
     OPT_VAULT_DIR = os.path.expanduser("~/.optionhub_options_files")
@@ -3854,52 +3854,131 @@ if nav_menu == "📂 옵션자료실":
     opt_items = load_json_file(OPT_VAULT_PATH, default_opt_vault)
     if st.session_state.pop("opt_saved_ok", False):
         st.success("✅ 옵션자료실에 정상 저장되었습니다!")
+    if st.session_state.pop("opt_edited_ok", False):
+        st.success("✏️ 옵션 자료가 수정되었습니다!")
 
-    with st.expander("➕ 새 옵션 자료 / 메모 / 파일 추가하기", expanded=True):
-        with st.form("opt_add_form", clear_on_submit=True):
-            oc1, oc2, oc3 = st.columns([1.2, 1.0, 2.0])
-            o_cat = oc1.selectbox("카테고리", ["GEX/그릭스", "OI·Wall 분석", "HIRO·다크풀", "스윕·블록", "0DTE·만기 전략", "참고 파일/PDF"])
-            o_tk = oc2.text_input("관련 종목", "공통", placeholder="예: SOXL, NVDA, SPX, 공통").strip().upper() or "공통"
-            o_title = oc3.text_input("제목 (비워두면 내용 첫 줄 자동 입력)", placeholder="예: 11/14 NVDA 150P/200C GEX 구조")
-            o_body = st.text_area("상세 내용 / 메모", height=110, placeholder="GEX·DEX·OI·스윕 분석 내용이나 전략 기준을 입력하세요.")
-            oc4, oc5 = st.columns([1.5, 1.5])
-            o_link = oc4.text_input("참고 URL (선택)", placeholder="https://...")
-            o_file = oc5.file_uploader("파일 첨부 (PDF·이미지·CSV·XLSX 등)", type=None, key="opt_file_up")
-            submitted_o = st.form_submit_button("💾 옵션자료실에 저장", type="primary")
-            if submitted_o:
-                saved_fp = ""
-                saved_fn = ""
-                if o_file is not None:
-                    safe_n = f"{int(time.time())}_{os.path.basename(o_file.name)}"
-                    saved_fp = os.path.join(OPT_VAULT_DIR, safe_n)
+    with st.expander("➕ 새 옵션 자료 / 메모 / 사진 붙여넣기(Ctrl+V) 추가하기", expanded=True):
+        oc1, oc2, oc3 = st.columns([1.2, 1.0, 2.0])
+        o_cat = oc1.selectbox("카테고리", ["GEX/그릭스", "OI·Wall 분석", "HIRO·다크풀", "스윕·블록", "0DTE·만기 전략", "참고 파일/PDF"], key="op_add_cat")
+        o_tk = oc2.text_input("관련 종목", "공통", placeholder="예: SOXL, NVDA, SPX, 공통", key="op_add_tk").strip().upper() or "공통"
+        o_title = oc3.text_input("제목 (비워두면 내용 첫 줄 자동 입력)", placeholder="예: 11/14 NVDA 150P/200C GEX 구조", key="op_add_title")
+        o_body = st.text_area("상세 내용 / 메모", height=100, placeholder="GEX·DEX·OI·스윕 분석 내용이나 전략 기준을 입력하세요.", key="op_add_body")
+
+        oc4, oc5 = st.columns([1.5, 1.5])
+        o_link = oc4.text_input("참고 URL (선택)", placeholder="https://...", key="op_add_link")
+        o_file = oc5.file_uploader("파일 첨부 (PDF·이미지·CSV·XLSX 등)", type=None, key="opt_file_up")
+
+        st.markdown("**📋 사진 복사·붙여넣기 (여기를 클릭하고 Ctrl+V)**")
+        components.html("""
+        <div id="op_paste_zone" tabindex="0" style="border:2px dashed #38bdf8; border-radius:8px; padding:12px; background:#0b101b; color:#cbd5e1; text-align:center; cursor:pointer; font-family:sans-serif; font-size:13px; outline:none;">
+          <div id="op_paste_msg">🖼️ 스크린샷이나 웹 이미지를 <b>복사(Ctrl+C)</b>한 뒤, 이 상자를 클릭하고 <b>붙여넣기(Ctrl+V)</b> 하세요!</div>
+          <img id="op_paste_prev" style="display:none; max-height:170px; margin:8px auto 0 auto; border-radius:6px; border:1px solid #334155;"/>
+        </div>
+        <script>
+          const zone = document.getElementById("op_paste_zone");
+          const msg = document.getElementById("op_paste_msg");
+          const prev = document.getElementById("op_paste_prev");
+          function sendToStreamlit(dataUrl) {
+            try {
+              const inp = window.parent.document.querySelector('input[aria-label="붙여넣기 이미지 데이터"]');
+              if (inp) {
+                const setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
+                setter.call(inp, dataUrl);
+                inp.dispatchEvent(new Event('input', { bubbles: true }));
+                inp.dispatchEvent(new Event('change', { bubbles: true }));
+                msg.innerHTML = "✅ 이미지가 첨부 대기 상태입니다! 아래 <b>💾 옵션자료실에 저장</b> 버튼을 누르세요.";
+              } else {
+                msg.innerHTML = "⚠️ 입력칸을 찾지 못했습니다. 파일 첨부를 이용해 주세요.";
+              }
+            } catch (err) {
+              msg.innerHTML = "⚠️ 붙여넣기 연동 오류: " + err;
+            }
+          }
+          zone.addEventListener("paste", (e) => {
+            const items = (e.clipboardData || window.clipboardData).items || [];
+            for (const it of items) {
+              if (it.type && it.type.indexOf("image") !== -1) {
+                e.preventDefault();
+                const blob = it.getAsFile();
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                  const img = new Image();
+                  img.onload = () => {
+                    const maxW = 1400;
+                    const scale = img.width > maxW ? (maxW / img.width) : 1;
+                    const cv = document.createElement("canvas");
+                    cv.width = Math.round(img.width * scale);
+                    cv.height = Math.round(img.height * scale);
+                    cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+                    const b64 = cv.toDataURL("image/jpeg", 0.85);
+                    prev.src = b64;
+                    prev.style.display = "block";
+                    sendToStreamlit(b64);
+                  };
+                  img.src = ev.target.result;
+                };
+                reader.readAsDataURL(blob);
+                return;
+              }
+            }
+          });
+        </script>
+        """, height=215)
+        pasted_b64 = st.text_input("붙여넣기 이미지 데이터", "", key="opt_paste_b64", label_visibility="collapsed", placeholder="Ctrl+V로 이미지를 붙여넣으면 자동으로 채워집니다 (직접 입력 불필요)")
+
+        if st.button("💾 옵션자료실에 저장", type="primary", key="opt_save_btn"):
+            saved_fp = ""
+            saved_fn = ""
+            if o_file is not None:
+                safe_n = f"{int(time.time())}_{os.path.basename(o_file.name)}"
+                saved_fp = os.path.join(OPT_VAULT_DIR, safe_n)
+                with open(saved_fp, "wb") as fw:
+                    fw.write(o_file.getbuffer())
+                saved_fn = o_file.name
+            elif pasted_b64 and pasted_b64.strip().startswith("data:image"):
+                try:
+                    import base64 as _b64_m
+                    _, b64_raw = pasted_b64.strip().split(",", 1)
+                    ts_n = int(time.time())
+                    saved_fn = f"screenshot_{ts_n}.jpg"
+                    saved_fp = os.path.join(OPT_VAULT_DIR, saved_fn)
                     with open(saved_fp, "wb") as fw:
-                        fw.write(o_file.getbuffer())
-                    saved_fn = o_file.name
-                auto_t = o_title.strip() or (o_body.strip().splitlines()[0][:50] if o_body.strip() else "") or saved_fn or o_link.strip()
-                if auto_t:
-                    opt_items.insert(0, {
-                        "id": f"op_{int(time.time()*1000)}",
-                        "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
-                        "카테고리": o_cat,
-                        "종목": o_tk,
-                        "제목": auto_t,
-                        "내용": o_body.strip(),
-                        "링크": o_link.strip(),
-                        "파일경로": saved_fp,
-                        "파일명": saved_fn,
-                    })
-                    save_json_file(OPT_VAULT_PATH, opt_items)
-                    st.session_state["opt_saved_ok"] = True
-                    st.rerun()
-                else:
-                    st.warning("제목, 내용, 파일, 또는 링크 중 하나는 입력해 주세요.")
+                        fw.write(_b64_m.b64decode(b64_raw))
+                except Exception as _pe:
+                    st.warning(f"붙여넣은 이미지 저장 실패: {_pe}")
 
-    oc_f1, oc_f2, oc_f3 = st.columns([1.2, 1.2, 2.0])
+            auto_t = o_title.strip() or (o_body.strip().splitlines()[0][:50] if o_body.strip() else "") or saved_fn or o_link.strip()
+            if auto_t:
+                opt_items.insert(0, {
+                    "id": f"op_{int(time.time()*1000)}",
+                    "날짜": pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M"),
+                    "카테고리": o_cat,
+                    "종목": o_tk,
+                    "제목": auto_t,
+                    "내용": o_body.strip(),
+                    "링크": o_link.strip(),
+                    "파일경로": saved_fp,
+                    "파일명": saved_fn,
+                })
+                save_json_file(OPT_VAULT_PATH, opt_items)
+                st.session_state["opt_paste_b64"] = ""
+                st.session_state["opt_saved_ok"] = True
+                st.rerun()
+            else:
+                st.warning("제목, 내용, 사진 붙여넣기, 파일, 또는 링크 중 하나는 입력해 주세요.")
+
+    oc_f1, oc_f2, oc_f3, oc_f4 = st.columns([1.1, 1.1, 1.8, 0.9])
     o_cats = ["전체"] + sorted(list({x.get("카테고리", "기타") for x in opt_items}))
     o_tks = ["전체"] + sorted(list({x.get("종목", "공통") for x in opt_items}))
     fo_cat = oc_f1.selectbox("카테고리 필터", o_cats, key="op_f_cat")
     fo_tk = oc_f2.selectbox("종목 필터", o_tks, key="op_f_tk")
     fo_kw = oc_f3.text_input("🔍 키워드 검색", "", placeholder="제목 또는 내용 검색...", key="op_f_kw").strip().lower()
+    if "opt_expand_all" not in st.session_state:
+        st.session_state["opt_expand_all"] = True
+    exp_lbl_o = "📁 전체 접기" if st.session_state["opt_expand_all"] else "📂 전체 펼치기"
+    if oc_f4.button(exp_lbl_o, use_container_width=True, key="op_exp_toggle"):
+        st.session_state["opt_expand_all"] = not st.session_state["opt_expand_all"]
+        st.rerun()
 
     filtered_op = []
     for x in opt_items:
@@ -3912,21 +3991,73 @@ if nav_menu == "📂 옵션자료실":
         filtered_op.append(x)
 
     st.caption(f"총 {len(filtered_op)}건의 옵션 자료가 표시되고 있습니다.")
+    edit_op_id = st.session_state.get("edit_op_id")
     for idx_op, item_op in enumerate(filtered_op):
+        iid_op = item_op.get("id", str(idx_op))
         with st.container(border=True):
-            oh_l, oh_r = st.columns([5, 1])
+            oh_l, oh_e, oh_t, oh_r = st.columns([4.2, 0.8, 1.0, 0.8])
             with oh_l:
                 st.markdown(f"**[{item_op.get('카테고리','')}] {item_op.get('제목','')}**  `{item_op.get('종목','')}` · {item_op.get('날짜','')}")
+            with oh_e:
+                if st.button("✏️ 수정", key=f"ed_op_{iid_op}"):
+                    st.session_state["edit_op_id"] = None if edit_op_id == iid_op else iid_op
+                    st.rerun()
+            with oh_t:
+                if st.button("📩 텔레그램", key=f"tg_op_{iid_op}"):
+                    tg_txt = f"📂 *[옵션자료실]* {item_op.get('제목','')}\n종목: {item_op.get('종목','')}\n\n{item_op.get('내용','')[:3200]}"
+                    if send_telegram_msg(tg_txt):
+                        st.toast("✅ 텔레그램 전송 완료!")
+                    else:
+                        st.toast("⚠️ 텔레그램 설정 확인 필요")
             with oh_r:
-                if st.button("🗑️ 삭제", key=f"del_op_{item_op.get('id', idx_op)}"):
+                if st.button("🗑️ 삭제", key=f"del_op_{iid_op}"):
                     opt_items = [z for z in opt_items if z.get("id") != item_op.get("id")]
                     save_json_file(OPT_VAULT_PATH, opt_items)
                     st.rerun()
-            if item_op.get("내용"):
-                st.markdown(item_op["내용"].replace("\n", "  \n"))
-            if item_op.get("링크"):
-                st.markdown(f"🔗 참고 링크: [{item_op['링크']}]({item_op['링크']})")
-            fp_op = item_op.get("파일경로", "")
-            if fp_op and os.path.exists(fp_op):
-                with open(fp_op, "rb") as fr:
-                    st.download_button(f"📥 {item_op.get('파일명', '첨부파일')}", fr.read(), file_name=item_op.get("파일명", "file"), key=f"dl_op_{item_op.get('id', idx_op)}")
+
+            if edit_op_id == iid_op:
+                ec1, ec2, ec3 = st.columns([1.2, 1.0, 2.0])
+                cat_list_o = ["GEX/그릭스", "OI·Wall 분석", "HIRO·다크풀", "스윕·블록", "0DTE·만기 전략", "참고 파일/PDF"]
+                cur_cat_i = cat_list_o.index(item_op.get("카테고리")) if item_op.get("카테고리") in cat_list_o else 0
+                ne_cat = ec1.selectbox("카테고리", cat_list_o, index=cur_cat_i, key=f"ne_cat_{iid_op}")
+                ne_tk = ec2.text_input("관련 종목", item_op.get("종목", "공통"), key=f"ne_tk_{iid_op}").strip().upper() or "공통"
+                ne_title = ec3.text_input("제목", item_op.get("제목", ""), key=f"ne_tit_{iid_op}")
+                ne_body = st.text_area("상세 내용", item_op.get("내용", ""), height=130, key=f"ne_bod_{iid_op}")
+                ne_link = st.text_input("참고 URL", item_op.get("링크", ""), key=f"ne_lnk_{iid_op}")
+                ne_file = st.file_uploader("첨부파일/사진 교체 (선택)", type=None, key=f"ne_fil_{iid_op}")
+                sb1, sb2 = st.columns([1, 5])
+                if sb1.button("💾 저장", type="primary", key=f"ne_sav_{iid_op}"):
+                    for z in opt_items:
+                        if z.get("id") == item_op.get("id"):
+                            z["카테고리"] = ne_cat
+                            z["종목"] = ne_tk
+                            z["제목"] = ne_title.strip() or z.get("제목", "")
+                            z["내용"] = ne_body.strip()
+                            z["링크"] = ne_link.strip()
+                            if ne_file is not None:
+                                safe_en = f"{int(time.time())}_{os.path.basename(ne_file.name)}"
+                                new_fp = os.path.join(OPT_VAULT_DIR, safe_en)
+                                with open(new_fp, "wb") as fw:
+                                    fw.write(ne_file.getbuffer())
+                                z["파일경로"] = new_fp
+                                z["파일명"] = ne_file.name
+                            break
+                    save_json_file(OPT_VAULT_PATH, opt_items)
+                    st.session_state["edit_op_id"] = None
+                    st.session_state["opt_edited_ok"] = True
+                    st.rerun()
+                if sb2.button("취소", key=f"ne_can_{iid_op}"):
+                    st.session_state["edit_op_id"] = None
+                    st.rerun()
+            elif st.session_state["opt_expand_all"]:
+                if item_op.get("내용"):
+                    st.markdown(item_op["내용"].replace("\n", "  \n"))
+                if item_op.get("링크"):
+                    st.markdown(f"🔗 참고 링크: [{item_op['링크']}]({item_op['링크']})")
+                fp_op = item_op.get("파일경로", "")
+                if fp_op and os.path.exists(fp_op):
+                    ext_op = os.path.splitext(fp_op)[1].lower()
+                    if ext_op in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+                        st.image(fp_op, caption=item_op.get("파일명", "첨부 이미지"), use_container_width=True)
+                    with open(fp_op, "rb") as fr:
+                        st.download_button(f"📥 {item_op.get('파일명', '첨부파일')}", fr.read(), file_name=item_op.get("파일명", "file"), key=f"dl_op_{iid_op}")
