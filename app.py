@@ -1013,7 +1013,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_ma = c_o3.checkbox("이동평균(MA)", value=False, key="ed_ma")
             c_o4, c_o5, c_o6 = st.columns(3)
             show_walls = c_o4.checkbox("옵션 레벨(벽·플립·1σ)", value=True, key="ed_walls")
-            show_vpvr = c_o5.checkbox("매물대·콜풋막대", value=True, key="ed_vpvr")
+            show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR)", value=True, key="ed_vpvr_vol")
             show_ichi = c_o6.checkbox("일목 구름·후행", value=True, key="ed_ichi")
             st.markdown("**아래 보조지표 (위로 ⬆️ · 아래로 ⬇️ · 빼기 ❌)**")
             if "mm_sub_order" not in st.session_state:
@@ -1045,9 +1045,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
             c_s1, c_s2 = st.columns(2)
             show_vol = c_s1.checkbox("거래량(Vol · 주 차트 하단)", value=True, key="ed_vol")
             show_icc = c_s2.checkbox("역시계곡선(아래 따로)", value=True, key="ed_icc")
-            c_s3, c_s4 = st.columns(2)
-            show_rail_gex = c_s3.checkbox("우측 GEX 레일", value=True, key="ed_rail_gex")
-            show_rail_nf = c_s4.checkbox("우측 Net Flow 레일", value=True, key="ed_rail_nf")
+            c_s3, c_s4, c_s5 = st.columns(3)
+            show_vpvr_opt = c_s3.checkbox("좌측 콜/풋 막대", value=True, key="ed_vpvr_opt")
+            show_rail_gex = c_s4.checkbox("우측 GEX 레일", value=True, key="ed_rail_gex")
+            show_rail_nf = c_s5.checkbox("우측 Net Flow 레일", value=True, key="ed_rail_nf")
+            vpvr_scale = st.slider("좌측 막대 길이 (%)", 20, 100, 45, step=5, key="ed_vpvr_scale")
             show_cvd = "CVD(누적델타)" in sub_order
             show_bii = "BII(체결강도)" in sub_order
             show_macd = "MACD" in sub_order
@@ -1191,7 +1193,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             "span_b": o_spb if show_ichi else [],
             "chikou": o_chi if show_ichi else [],
             "cloud": o_cld if show_ichi else [],
-            "vpvr": vpvr_local if show_vpvr else [],
+            "vpvr": vpvr_local if show_vpvr_vol else [],
             "cvd": o_cvd if show_cvd else [],
             "bii": o_bii if show_bii else [],
             "macd": o_macd if show_macd else [],
@@ -1253,8 +1255,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "delta_k": delta_lv if (show_walls and delta_lv and (not cur["px"] or 0.55 * cur["px"] <= float(delta_lv) <= 1.45 * cur["px"])) else None,
         "gex_c_k": gex_c_lv if (show_walls and gex_c_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_c_lv) <= 1.45 * cur["px"])) else None,
         "gex_p_k": gex_p_lv if (show_walls and gex_p_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_p_lv) <= 1.45 * cur["px"])) else None,
-        "opt_bars": opt_bars if (show_vpvr or show_rail_gex or show_rail_nf) else [],
-        "show_vpvr": show_vpvr,
+        "opt_bars": opt_bars if (show_vpvr_opt or show_rail_gex or show_rail_nf) else [],
+        "show_vpvr": show_vpvr_vol,
+        "show_vpvr_opt": show_vpvr_opt,
+        "bar_scale": vpvr_scale / 100.0,
         "show_r_gex": show_rail_gex,
         "show_r_nf": show_rail_nf,
     })
@@ -1312,7 +1316,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         const av = Math.abs(v);
         if (av >= 1e9) return (v / 1e9).toFixed(2) + "B";
         if (av >= 1e6) return (v / 1e6).toFixed(2) + "M";
-        if (av >= 1e3) return (v / 1e3).toFixed(1) + "K";
+        if (av >= 1e3) return (v / 1e3).toFixed(2) + "K";
         return v.toFixed(2);
       }};
       const baseOpt = {{
@@ -1401,26 +1405,27 @@ if nav_menu == "⚡ 무무 실시간 차트":
         vpCv.width = 160; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
         ctx.clearRect(0, 0, 160, mh);
-        if (d.vpvr && d.vpvr.length) {{
+        const sc = d.bar_scale || 0.45;
+        if (d.show_vpvr && d.vpvr && d.vpvr.length) {{
           d.vpvr.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
-            const w = Math.max(2, b.pct * 120);
-            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.35)" : "rgba(56,189,248,0.22)";
-            ctx.fillRect(0, y - 5, w, 10);
+            const w = Math.max(2, Math.round(b.pct * 110 * sc));
+            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.32)" : "rgba(56,189,248,0.20)";
+            ctx.fillRect(0, y - 4, w, 8);
           }});
         }}
-        if (d.show_vpvr && d.opt_bars && d.opt_bars.length) {{
+        if (d.show_vpvr_opt && d.opt_bars && d.opt_bars.length) {{
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
-            const wc = Math.round(b.c * 115);
-            const wp = Math.round(b.put * 115);
-            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.85)"; ctx.fillRect(0, y - 3, wp, 6); }}
-            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.9)"; ctx.fillRect(wp, y - 3, wc, 6); }}
-            if (wc + wp > 34) {{
-              ctx.font = "10px monospace"; ctx.fillStyle = "#e2e8f0";
-              ctx.fillText("C " + b.c_m + "M · P " + b.p_m + "M", wc + wp + 3, y + 3);
+            const wc = Math.round(b.c * 105 * sc);
+            const wp = Math.round(b.put * 105 * sc);
+            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.85)"; ctx.fillRect(0, y - 3, wp, 5); }}
+            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.9)"; ctx.fillRect(wp, y - 3, wc, 5); }}
+            if (wc + wp > Math.max(18, Math.round(32 * sc))) {{
+              ctx.font = "9px monospace"; ctx.fillStyle = "#e2e8f0";
+              ctx.fillText("C" + b.c_m + "/P" + b.p_m, wc + wp + 3, y + 3);
             }}
           }});
         }}
@@ -1485,7 +1490,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }}
       if (d.bii.length && document.getElementById("tv_bii")) {{
         cBii = LightweightCharts.createChart(document.getElementById("tv_bii"), baseOpt);
-        sBii = cBii.addLineSeries({{ color:"#2563eb", lineWidth:2, title:"BII (%)", priceFormat:{{type:"custom", formatter: v => v.toFixed(1) + "%"}} }});
+        sBii = cBii.addLineSeries({{ color:"#2563eb", lineWidth:2, title:"BII (%)", priceFormat:{{type:"custom", formatter: v => v.toFixed(2) + "%"}} }});
         sBii.setData(d.bii);
         sBii.createPriceLine({{ price:0, color:"rgba(148,163,184,0.4)", lineStyle:2 }});
         subCharts.push(cBii); subLinks.push({{c: cBii, s: sBii}});
