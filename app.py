@@ -5513,7 +5513,7 @@ function openEvent(id) {
   const rawDesc = (ev.description || '(상세 내용 없음)').trim();
   const descEl = document.getElementById('mDesc');
   const escHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const aiMatch = rawDesc.match(/📌\s*\[?Gemini(?:\s*AI)?\s*해석\]?[\s\S]*?(?=\n\n📊|\n\n📬|$)/i);
+  const aiMatch = rawDesc.match(/📌\\s*\\[?Gemini(?:\\s*AI)?\\s*해석\\]?[\\s\\S]*?(?=\\n\\n📊|\\n\\n📬|$)/i);
   if (aiMatch) {
     const rest = rawDesc.replace(aiMatch[0], '').trim();
     descEl.innerHTML = `<div class="ev-ai-box">${escHtml(aiMatch[0].trim())}</div>` + (rest ? `<div>${escHtml(rest)}</div>` : '');
