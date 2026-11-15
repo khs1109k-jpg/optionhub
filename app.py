@@ -838,7 +838,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     p_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Put")]["OI"].sum()) if "OI" in df_dm.columns else 0
                     net_g_k = float(df_dm[df_dm["행사가"] == k]["GEX($M)"].sum()) if "GEX($M)" in df_dm.columns else 0.0
                     opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 2), "p_m": round(pv, 2), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
-    if not opt_bars:
+    if (not opt_bars) or (cw_lv is not None and pw_lv is not None and cw_lv == pw_lv):
         try:
             y_rows, y_sp = _cached_opt_snapshot(clean_tk)
             if y_rows:
@@ -847,9 +847,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 if sp_ref > 0:
                     df_yd = df_yd[(df_yd["행사가"] >= sp_ref * 0.7) & (df_yd["행사가"] <= sp_ref * 1.3)]
                 if not df_yd.empty:
-                    if cw_lv is None and not df_yd[df_yd["구분"] == "Call"].empty:
+                    if (cw_lv is None or cw_lv == pw_lv) and not df_yd[df_yd["구분"] == "Call"].empty:
                         cw_lv = float(df_yd[df_yd["구분"] == "Call"].sort_values("OI", ascending=False).iloc[0]["행사가"])
-                    if pw_lv is None and not df_yd[df_yd["구분"] == "Put"].empty:
+                    if (pw_lv is None or cw_lv == pw_lv) and not df_yd[df_yd["구분"] == "Put"].empty:
                         pw_lv = float(df_yd[df_yd["구분"] == "Put"].sort_values("OI", ascending=False).iloc[0]["행사가"])
                     if zg_lv is None:
                         zg_lv = calc_zero_gamma(df_yd, sp_ref)
@@ -977,8 +977,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
     bk_top = aux_map.get("book") or {}
     bids_top = bk_top.get("Bid") or bk_top.get("bids") or []
     asks_top = bk_top.get("Ask") or bk_top.get("asks") or []
-    bid_px_s = f"${float(bids_top[0][0]):,.2f} ({int(bids_top[0][1])})" if bids_top and len(bids_top[0]) >= 2 else "-"
-    ask_px_s = f"${float(asks_top[0][0]):,.2f} ({int(asks_top[0][1])})" if asks_top and len(asks_top[0]) >= 2 else "-"
+    bid_px_s = f"${float(bids_top[0][0]):,.2f}" if bids_top and len(bids_top[0]) >= 2 else "-"
+    ask_px_s = f"${float(asks_top[0][0]):,.2f}" if asks_top and len(asks_top[0]) >= 2 else "-"
     if bid_px_s == "-" and isinstance(cur.get("raw"), dict):
         bp = cur["raw"].get("bid_price") or cur["raw"].get("bid")
         ap = cur["raw"].get("ask_price") or cur["raw"].get("ask")
@@ -1009,9 +1009,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("현재가", f"${cur['px']:,.2f}" if cur["px"] else "-", f"{cur['chg']:+.2f}%" if cur["chg"] is not None else None)
     m2.metric("Bid / Ask", f"{bid_px_s} / {ask_px_s}")
-    m3.metric("당일 거래량", f"{int(cur['vol']):,}" if cur["vol"] else "-")
+    _v_num = float(cur["vol"] or 0)
+    _v_str = f"{_v_num/1e6:,.2f}M" if _v_num >= 1e6 else (f"{_v_num/1e3:,.1f}K" if _v_num >= 1e3 else (f"{int(_v_num):,}" if _v_num > 0 else "-"))
+    m3.metric("당일 거래량", _v_str)
     m4.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
-    m5.metric("Call / Put Wall", f"${cw_lv or '-'} / ${pw_lv or '-'}")
+    m5.metric("Call / Put Wall", f"${cw_lv:g} / ${pw_lv:g}" if (cw_lv and pw_lv) else f"${cw_lv or '-'} / ${pw_lv or '-'}")
 
     with st.expander("⚙️ 지표 편집 (차트 오버레이 · 일목 · 보조지표 · 기간 설정)", expanded=False):
         ed_l, ed_r = st.columns([1.3, 1.0])
