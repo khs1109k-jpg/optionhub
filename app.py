@@ -4697,7 +4697,8 @@ if nav_menu == "📬 인사이더 파이낸셜":
     INSIDER_MAIL_PATH = os.path.expanduser("~/.optionhub_insider_mails.json")
     ORDS_MAIL_URL = "https://g8aaf2fcbd18708-optionhub.adb.ap-tokyo-1.oraclecloudapps.com/ords/optionhub/insider/mail/"
     local_mails = load_json_file(INSIDER_MAIL_PATH, [])
-    _seed_flag_20261113 = os.path.expanduser("~/.optionhub_insider_seed_20261113")
+    _seed_images_20261113 = [{'제목': '섹터별 옵션 플로우 (AI Market Insights)', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_equities_sector.png'}, {'제목': '주요 특징 체결 Top 10 (Noteworthy Trades)', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_equities_top_10.png'}, {'제목': 'Unusual Options Activity 그래프', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_unusual_graph.png'}, {'제목': 'Unusual Top #1: CIFR 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_unusual_1_trades.png'}, {'제목': 'Unusual Top #2: GNLX 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_unusual_2_trades.png'}, {'제목': 'Unusual Top #3: RDW 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_unusual_3_trades.png'}, {'제목': 'Sweep Options Activity 그래프', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_sweep_graph.png'}, {'제목': 'Sweep Top #1: VKTX 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_sweeps_1_trades.png'}, {'제목': 'Sweep Top #2: SNDK 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_sweeps_2_trades.png'}, {'제목': 'Sweep Top #3: CCC 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_sweeps_3_trades.png'}, {'제목': 'Momentum Options Activity 그래프', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_momentum_graph.png'}, {'제목': 'Momentum Top #1: NIO 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_momentum_1_trades.png'}, {'제목': 'Momentum Top #2: SO 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_momentum_2_trades.png'}, {'제목': 'Momentum Top #3: VKTX 체결', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_top_tickers_momentum_3_trades.png'}, {'제목': 'Top 10 Moonshot Flows', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_moonshot_flow_trades.png'}, {'제목': 'Top 10 ETF Flows (SPX)', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_daily_etfs_top_10.png'}, {'제목': 'Equities 5-Day Flow (Top 15)', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_rolling_equity_summary_top_15.png'}, {'제목': 'ETF 5-Day Flow 요약', 'url': 'https://storage.googleapis.com/if-snapshots/2026-11-13--ah_rolling_etf_summary_compressed.png'}]
+    _seed_flag_20261113 = os.path.expanduser("~/.optionhub_insider_seed_20261113_v2")
     if not os.path.exists(_seed_flag_20261113):
         _seed_mail_20261113 = {
             "id": "ins_20261113_evening_edge",
@@ -4708,9 +4709,17 @@ if nav_menu == "📬 인사이더 파이낸셜":
             "요약": '### 1) 핵심 3줄 요약\n- **AI 반도체·빅테크 대규모 풋 헤지 지속**: NVDA(5일간 -15%)의 CEO 교체 및 다음 주 실적 발표를 앞두고 **NVDA(5일 풋 비중 59% · $1,437.5M)·MRVL·MU·GOOG**에 수천만 달러 규모의 단·장기 풋 헤지가 집중되었습니다.\n- **인플레 경계감 속 방어·에너지·인플레 헤지 로테이션**: 10월 PPI 연간 물가 고착화로 연준 긴축 우려가 이어지며 부동산(AGNC 풋)·커뮤니케이션은 약세인 반면, **에너지·우라늄(XOM·CCJ)·유틸리티(PCG)·바이오(CYTK·VKTX)**로 콜 매수세가 유입되었습니다.\n- **개별 특이 콜 스윕(SNDK · BABA · CRWV)**: 반도체 약세 속에서도 **SNDK($2.5M 스윕 콜)**, **BABA 2027-01 $120C($2.8M)**, **CRWV($964K 콜)**에 공격적인 상방 베팅이 포착되었습니다.\n\n### 2) 주요 뉴스 & 매크로\n- **Modine (MOD)**: 삼성전자 인수 협상 보도로 시간외 **+29%** 급등 (AI 데이터센터 냉각 수요 재평가)\n- **Applied Materials (AMAT)**: Q4 매출 $10.41B·EPS $4.16 사상 최고치 및 FY27 Q1 가이던스($11.1B) 상향\n- **Cerebras Systems**: MS 클라우드 계약 체결 후 연간 가이던스 상향 / **미국 10월 PPI**: 월간 둔화·연간 고착화\n\n### 3) 주요 종목·행사가·프리미엄 체결\n- **풋 헤지 대형 블록**: `BA` 2027-01-15 230P ($30.9M, OI 1.5x) · `GOOG` 2027-01-15 480P ($26.3M) · `MRVL` 2027-01-15 145P ($19.0M, OI 5x) · `MU` 2027-03-19 650P ($9.6M) · `TSLA` 2026-12-11 320P ($2.6M 골든스윕, OI 27x)\n- **공격적 콜 유입**: `SNDK` 11/20 1000C ($1.0M Ask 위 스윕) & 11/13 850C ($1.34M) · `BABA` 2027-01-15 120C ($1.5M+$1.3M) · `PCG` 12/31 15C ($1.2M) · `GOOGL` 2027-12-17 440C ($8.4M) · `NVDA` 2027-03-19 250C ($7.9M)\n- **SPX 지수 대형 플로우**: 2027-02/03 8000P ($279M·$146.4M), 2026-12 8000P ($143.3M) vs 2026-11-20 7000C ($126.3M)\n\n### 4) 실전 트레이딩 체크포인트\n- **반도체(NVDA·SMH·SOXL)**: 다음 주 NVDA 실적 전까지 기관 풋 헤지 압력이 강하므로 **Bear Put Spread** 등 하방 방어 관점 유지, 단기 반등 시 콜/풋 쏠림 완화 여부 확인 필요.\n- **상방 유망 섹터**: 지정학·인플레 헤지 수혜 **CCJ(우라늄)**, 방어주 **PCG(유틸리티)**, 다년물 LEAPS 콜이 쌓이는 **CYTK(바이오)** 및 단기 스윕이 몰린 **SNDK** 주목.',
             "종목": "NVDA, GOOG, MU, MRVL, TSLA, BA, SNDK, SPX, SMH, SOXL",
         }
-        if not any(m.get("id") == _seed_mail_20261113["id"] or "Evening Edge 2026-11-13" in m.get("제목", "") for m in local_mails):
+        _seed_mail_20261113["이미지"] = _seed_images_20261113
+        _matched_seed = False
+        for _lm in local_mails:
+            if _lm.get("id") == _seed_mail_20261113["id"] or "Evening Edge 2026-11-13" in _lm.get("제목", ""):
+                if not _lm.get("이미지"):
+                    _lm["이미지"] = _seed_images_20261113
+                _matched_seed = True
+                break
+        if not _matched_seed:
             local_mails.insert(0, _seed_mail_20261113)
-            save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
+        save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
         try:
             with open(_seed_flag_20261113, "w", encoding="utf-8") as _sf:
                 _sf.write("1")
@@ -4860,6 +4869,20 @@ if nav_menu == "📬 인사이더 파이낸셜":
 
             if mm.get("요약"):
                 st.markdown(mm["요약"].replace("\n", "  \n"))
+            _imgs = list(mm.get("이미지") or [])
+            if not _imgs and mm.get("원문"):
+                _found_img_urls = re.findall(r'https?://[^\s"\'<>]+\.(?:png|jpg|jpeg|webp)', mm.get("원문", ""), flags=re.I)
+                _imgs = [{"제목": f"스냅샷 {_ii+1}", "url": _iu} for _ii, _iu in enumerate(dict.fromkeys(_found_img_urls))]
+            if _imgs:
+                with st.expander(f"🖼️ 메일 스냅샷 차트 보기 ({len(_imgs)}장)", expanded=(idx_m == 0)):
+                    for _row_i in range(0, len(_imgs), 2):
+                        _gcols = st.columns(2)
+                        for _ci in range(2):
+                            if _row_i + _ci < len(_imgs):
+                                _im_obj = _imgs[_row_i + _ci]
+                                _im_u = _im_obj.get("url") if isinstance(_im_obj, dict) else str(_im_obj)
+                                _im_t = _im_obj.get("제목", "") if isinstance(_im_obj, dict) else ""
+                                _gcols[_ci].image(_im_u, caption=_im_t, use_container_width=True)
             if mm.get("원문"):
                 with st.expander("📄 메일 원문 보기", expanded=(not bool(mm.get("요약")))):
                     st.text(mm["원문"][:5000])
