@@ -802,12 +802,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
         spot_m = float(snap_m.get("Spot", cur["px"] or 0) or 0)
         calls_m = [x for x in det_m if x.get("구분") == "Call"]
         puts_m = [x for x in det_m if x.get("구분") == "Put"]
-        if calls_m:
-            cw_lv = max(calls_m, key=lambda x: x.get("OI", 0)).get("행사가")
-            gex_c_lv = max(calls_m, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
-        if puts_m:
-            pw_lv = max(puts_m, key=lambda x: x.get("OI", 0)).get("행사가")
-            gex_p_lv = max(puts_m, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
+        calls_near = [x for x in calls_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or calls_m
+        puts_near = [x for x in puts_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or puts_m
+        if calls_near:
+            cw_lv = max(calls_near, key=lambda x: x.get("OI", 0)).get("행사가")
+            gex_c_lv = max(calls_near, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
+        if puts_near:
+            pw_lv = max(puts_near, key=lambda x: x.get("OI", 0)).get("행사가")
+            gex_p_lv = max(puts_near, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
         zg_lv = calc_zero_gamma(det_m, spot_m)
         if det_m:
             df_dm = pd.DataFrame(det_m)
@@ -1225,13 +1227,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if cur_bundle is None or not cur_bundle["candles"]:
         cur_bundle, icc_df = _build_tf_bundle(candles)
 
-    if sig_h_lv is None and candles and len(candles) >= 20:
-        df_tmp_s = pd.DataFrame(candles)
-        rv_std = float(df_tmp_s["close"].pct_change().dropna().tail(20).std() or 0)
-        last_c = float(df_tmp_s["close"].iloc[-1])
-        if rv_std > 0 and last_c > 0:
-            sig_h_lv = round(last_c * (1.0 + rv_std * 2.0), 2)
-            sig_l_lv = round(last_c * (1.0 - rv_std * 2.0), 2)
+    # 1일봉 기반 20일 실현변동성(HV20)으로 1시그마 검증 및 보정 (주말 IV=0.30 폴백/분봉 오차 방지)
+    daily_c = merged_tf_sets.get("1일봉") or []
+    hv20_1d_std = 0.0
+    if len(daily_c) >= 10:
+        df_d1 = pd.DataFrame(daily_c)
+        hv20_1d_std = float(df_d1["close"].pct_change().dropna().tail(20).std() or 0)
+    last_c_sig = float(cur["px"] or (candles[-1]["close"] if candles else 0) or 0)
+    if last_c_sig > 0:
+        if sig_h_lv is not None and sig_l_lv is not None and hv20_1d_std > 0:
+            cur_half = abs(sig_h_lv - sig_l_lv) / 2.0
+            # 옵션 IV가 주말 폴백(30%) 등으로 1일 실현변동성의 60% 미만이면 1일 HV20 기준으로 보정
+            if cur_half < last_c_sig * hv20_1d_std * 0.6:
+                sig_h_lv = round(last_c_sig * (1.0 + hv20_1d_std), 2)
+                sig_l_lv = round(last_c_sig * (1.0 - hv20_1d_std), 2)
+        elif sig_h_lv is None and hv20_1d_std > 0:
+            sig_h_lv = round(last_c_sig * (1.0 + hv20_1d_std), 2)
+            sig_l_lv = round(last_c_sig * (1.0 - hv20_1d_std), 2)
 
     pane_cnt = int(show_cvd) + int(show_bii) + int(show_macd) + int(show_rsi)
     total_h = 520 + pane_cnt * 135
@@ -1277,6 +1289,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
     })
 
     tv_html = f"""
+    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#0b101b; border:1px solid #1e293b; border-radius:6px; padding:6px 12px; margin-bottom:6px; font-family:monospace; font-size:12px;">
+      <span>🟢 <b>CALL WALL</b>: <b style="color:#10b981;">{f"${cw_lv:g}" if cw_lv else "-"}</b></span>
+      <span>🔴 <b>PUT WALL</b>: <b style="color:#ef4444;">{f"${pw_lv:g}" if pw_lv else "-"}</b></span>
+      <span>🟡 <b>FLIP GAMMA</b>: <b style="color:#f59e0b;">{f"${zg_lv:g}" if zg_lv else "-"}</b></span>
+      <span>🔵 <b>1σ 상단/하단</b>: <b style="color:#38bdf8;">{f"${sig_l_lv:g} ~ ${sig_h_lv:g}" if (sig_h_lv and sig_l_lv) else "-"}</b></span>
+      <span>⚪ <b>OPEN</b>: <b style="color:#e2e8f0;">{f"${merged_tf_sets['1일봉'][-1]['open']:g}" if merged_tf_sets.get("1일봉") else "-"}</b></span>
+    </div>
     <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden;">
     <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
       <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 끌기=이동 · 휠=확대/축소</span>
@@ -1341,7 +1360,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }};
       const elMain = document.getElementById("tv_main");
       const chart = LightweightCharts.createChart(elMain, baseOpt);
-      const cs = chart.addCandlestickSeries({{ upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350" }});
+      const cs = chart.addCandlestickSeries({{
+        upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350",
+        autoscaleInfoProvider: (original) => {{
+          const res = original();
+          if (res && res.priceRange) {{
+            const refP = d.candles.length ? d.candles[d.candles.length - 1].close : 0;
+            [d.cw, d.pw, d.zg, d.sig_h, d.sig_l].forEach(lv => {{
+              if (lv && (!refP || (lv >= refP * 0.72 && lv <= refP * 1.28))) {{
+                if (lv < res.priceRange.minValue) res.priceRange.minValue = lv * 0.992;
+                if (lv > res.priceRange.maxValue) res.priceRange.maxValue = lv * 1.008;
+              }}
+            }});
+          }}
+          return res;
+        }}
+      }});
       cs.setData(d.candles);
       let vs = null;
       if (d.volumes.length) {{
