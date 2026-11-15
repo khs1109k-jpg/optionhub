@@ -15,6 +15,8 @@ LIVE_PATH = os.path.expanduser("~/.optionhub_intraday_live.json")
 EARN_PATH = os.path.expanduser("~/.optionhub_earnings_scan.json")
 TIDE_PATH = os.path.expanduser("~/.optionhub_tide_brief.json")
 TG_ARCHIVE_PATH = os.path.expanduser("~/.optionhub_tg_archive.json")
+BIG_FLOWS_PATH = os.path.expanduser("~/.optionhub_big_flows.json")
+OPT_VAULT_PATH = os.path.expanduser("~/.optionhub_options_vault.json")
 APP_PATH = os.path.expanduser("~/app.py")
 SHEET_ID = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
 
@@ -558,6 +560,63 @@ def handle_command(token, chat_id, text):
             lines.append(f"• [{r[0]}] {r[1]} {r[7]} {r[3]} ({r[5]}) @ {r[14]} [{r[13]}]")
         send_msg(token, chat_id, "\n".join(lines))
 
+    elif "큰 옵션 체결" in text or ("PREMIUM SALE" in text and "계약" in text) or ("DIRECTIONAL FLOW" in text and "계약" in text):
+        pat = re.compile(
+            r"([🟢🔴🟡])\s*([A-Z]{1,6})\s+(\d+(?:\.\d+)?)([CP])\s+(\d{2}-\d{2}(?:-\d{2})?)\s+(BUY|SELL)\s+\$([\d\.]+)([MK])\s*[·\-]\s*([\d,]+)계약\s*[·\-]\s*(.+)"
+        )
+        flip_m = re.search(r"플립\(([\d\.]+)\)", text)
+        flip_v = float(flip_m.group(1)) if flip_m else None
+        recs = []
+        for ln in text.splitlines():
+            s_ln = ln.strip()
+            m_b = pat.search(s_ln)
+            if m_b:
+                emo, tk_b, k_s, cp_s, exp_s, side_s, pr_num, pr_unit, qty_s, tag_s = m_b.groups()
+                prem_m = float(pr_num) if pr_unit == "M" else round(float(pr_num) / 1000.0, 3)
+                recs.append({
+                    "emoji": emo,
+                    "tk": tk_b.upper(),
+                    "strike": float(k_s),
+                    "cp": "Call" if cp_s == "C" else "Put",
+                    "exp": exp_s,
+                    "side": side_s,
+                    "prem_m": prem_m,
+                    "prem_str": f"${pr_num}{pr_unit}",
+                    "qty": int(qty_s.replace(",", "")),
+                    "tag": tag_s.strip(),
+                    "notes": [],
+                })
+            elif recs and (s_ln.startswith("📍") or s_ln.startswith("🛡")):
+                recs[-1]["notes"].append(s_ln)
+        if recs:
+            from datetime import datetime
+            arr_b = []
+            if os.path.exists(BIG_FLOWS_PATH):
+                try:
+                    arr_b = json.load(open(BIG_FLOWS_PATH, "r", encoding="utf-8"))
+                except Exception:
+                    arr_b = []
+            entry_b = {
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "tk": recs[0]["tk"],
+                "flip": flip_v,
+                "items": recs,
+            }
+            arr_b.insert(0, entry_b)
+            with open(BIG_FLOWS_PATH, "w", encoding="utf-8") as fb:
+                json.dump(arr_b[:50], fb, ensure_ascii=False, indent=2)
+            bull_m = round(sum(x["prem_m"] for x in recs if x["emoji"] == "🟢"), 2)
+            bear_m = round(sum(x["prem_m"] for x in recs if x["emoji"] == "🔴"), 2)
+            hedg_m = round(sum(x["prem_m"] for x in recs if x["emoji"] == "🟡"), 2)
+            send_msg(
+                token,
+                chat_id,
+                f"✅ [큰 옵션 체결 OptionHub 자동 저장 완료]\n"
+                f"• 종목: {entry_b['tk']} ({len(recs)}건)" + (f" | 플립: ${flip_v}" if flip_v else "") + "\n"
+                f"• 🟢강세: ${bull_m:,.2f}M | 🔴약세: ${bear_m:,.2f}M | 🟡헤지: ${hedg_m:,.2f}M\n"
+                f"🌐 http://132.226.3.145:8501 (🎯 행사가별·동반 체결 탭)"
+            )
+
     elif any(k in text for k in ("시장 브리핑", "프리미엄 흐름", "시장 자금 순포지션", "Conviction Scores", "아침 종합 브리핑", "다크풀 하루 정리", "핵심 레벨", "스마트머니", "M7 관심도", "반도체 4종", "반도체 기본군")):
         d = parse_and_save_tide_brief(text)
         msg = (
@@ -569,6 +628,36 @@ def handle_command(token, chat_id, text):
             f"🌐 http://132.226.3.145:8501"
         )
         send_msg(token, chat_id, msg)
+
+    elif low.startswith("/옵션저장") or low.startswith("/자료저장"):
+        from datetime import datetime
+        body_v = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+        if not body_v:
+            send_msg(token, chat_id, "사용법: /옵션저장 [저장할 옵션 리포트 또는 메모 내용]")
+            return
+        arr_v = []
+        if os.path.exists(OPT_VAULT_PATH):
+            try:
+                arr_v = json.load(open(OPT_VAULT_PATH, "r", encoding="utf-8"))
+            except Exception:
+                arr_v = []
+        tks_v = re.findall(r"\b[A-Z]{2,5}\b", body_v.upper())
+        tk_v = ", ".join(list(dict.fromkeys(tks_v))[:3]) if tks_v else "공통"
+        title_v = body_v.splitlines()[0][:50]
+        arr_v.insert(0, {
+            "id": f"op_{int(time.time()*1000)}",
+            "날짜": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "카테고리": "스윕·블록",
+            "종목": tk_v,
+            "제목": title_v,
+            "내용": body_v,
+            "링크": "",
+            "파일경로": "",
+            "파일명": "",
+        })
+        with open(OPT_VAULT_PATH, "w", encoding="utf-8") as fv:
+            json.dump(arr_v, fv, ensure_ascii=False, indent=2)
+        send_msg(token, chat_id, f"✅ [📂 옵션자료실 자동 저장 완료]\n• 종목: {tk_v}\n• 제목: {title_v}\n🌐 http://132.226.3.145:8501")
 
     elif re.fullmatch(r"[A-Za-z]{1,5}", cmd):
         send_ticker_gex_with_chart(token, chat_id, cmd)
