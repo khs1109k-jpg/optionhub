@@ -266,9 +266,54 @@ MENU_ITEMS = [
     "📚 실피 자료실",
     "📂 옵션자료실"
 ]
+MENU_CFG_PATH = os.path.expanduser("~/.optionhub_menu_cfg.json")
+_menu_cfg = load_json_file(MENU_CFG_PATH, {"order": list(MENU_ITEMS), "hidden": [], "aliases": {}})
+_saved_order = [m for m in _menu_cfg.get("order", MENU_ITEMS) if m in MENU_ITEMS]
+for _m in MENU_ITEMS:
+    if _m not in _saved_order:
+        _saved_order.append(_m)
+_hidden_set = set(_menu_cfg.get("hidden", []))
+_aliases = _menu_cfg.get("aliases", {})
+_visible_menus = [_m for _m in _saved_order if _m not in _hidden_set] or list(MENU_ITEMS)
+
 st.sidebar.title("⚙️ OptionHub")
 st.sidebar.success("🟢 실시간 데이터 연동 중 (11/12 반영)")
-nav_menu = st.sidebar.radio("📌 메뉴 이동", MENU_ITEMS, index=0)
+nav_menu = st.sidebar.radio(
+    "📌 메뉴 이동",
+    _visible_menus,
+    index=0,
+    format_func=lambda x: _aliases.get(x, x),
+)
+with st.sidebar.expander("🛠️ 메뉴 순서·이름 편집 (상하 수정)", expanded=False):
+    _sel_ed_m = st.selectbox("편집할 메뉴", _saved_order, format_func=lambda x: _aliases.get(x, x), key="m_ed_sel")
+    _mc1, _mc2 = st.columns(2)
+    _idx_m = _saved_order.index(_sel_ed_m)
+    if _mc1.button("⬆️ 위로", use_container_width=True, key="m_up") and _idx_m > 0:
+        _saved_order[_idx_m - 1], _saved_order[_idx_m] = _saved_order[_idx_m], _saved_order[_idx_m - 1]
+        _menu_cfg["order"] = _saved_order
+        save_json_file(MENU_CFG_PATH, _menu_cfg)
+        st.rerun()
+    if _mc2.button("⬇️ 아래로", use_container_width=True, key="m_dn") and _idx_m < len(_saved_order) - 1:
+        _saved_order[_idx_m + 1], _saved_order[_idx_m] = _saved_order[_idx_m], _saved_order[_idx_m + 1]
+        _menu_cfg["order"] = _saved_order
+        save_json_file(MENU_CFG_PATH, _menu_cfg)
+        st.rerun()
+    _new_alias = st.text_input("표시 이름 수정", value=_aliases.get(_sel_ed_m, _sel_ed_m), key="m_alias_in")
+    _is_hid = st.checkbox("이 메뉴 숨기기", value=(_sel_ed_m in _hidden_set), key="m_hid_chk")
+    if st.button("💾 메뉴 설정 저장", use_container_width=True, key="m_save_btn"):
+        if _new_alias.strip() and _new_alias.strip() != _sel_ed_m:
+            _aliases[_sel_ed_m] = _new_alias.strip()
+        else:
+            _aliases.pop(_sel_ed_m, None)
+        if _is_hid:
+            _hidden_set.add(_sel_ed_m)
+        else:
+            _hidden_set.discard(_sel_ed_m)
+        _menu_cfg["order"] = _saved_order
+        _menu_cfg["hidden"] = list(_hidden_set)
+        _menu_cfg["aliases"] = _aliases
+        save_json_file(MENU_CFG_PATH, _menu_cfg)
+        st.rerun()
 
 if nav_menu == "📝 오늘의 종합평":
     # 상단 1분 모닝 브리핑 배너 (2026-11-11 최신 반영)
@@ -950,13 +995,33 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_walls = c_o4.checkbox("옵션 레벨(벽·플립·1σ)", value=True, key="ed_walls")
             show_vpvr = c_o5.checkbox("매물대·콜풋막대", value=True, key="ed_vpvr")
             show_ichi = c_o6.checkbox("일목 구름·후행", value=True, key="ed_ichi")
-            st.markdown("**아래 보조지표 (순서 변경 · 추가/빼기)**")
-            sub_order = st.multiselect(
-                "선택한 순서대로 위→아래 배치 (× 눌러 빼기)",
-                ["CVD(누적델타)", "BII(체결강도)", "MACD", "RSI"],
-                default=["CVD(누적델타)", "BII(체결강도)", "MACD"],
-                key="ed_sub_order",
-            )
+            st.markdown("**아래 보조지표 (위로 ⬆️ · 아래로 ⬇️ · 빼기 ❌)**")
+            if "mm_sub_order" not in st.session_state:
+                st.session_state["mm_sub_order"] = ["CVD(누적델타)", "BII(체결강도)", "MACD"]
+            sub_order = list(st.session_state["mm_sub_order"])
+            for si, sname in enumerate(sub_order):
+                sc_n, sc_u, sc_d, sc_x = st.columns([2.2, 0.6, 0.6, 0.6])
+                sc_n.markdown(f"`{si+1}. {sname}`")
+                if sc_u.button("⬆️", key=f"sub_up_{si}") and si > 0:
+                    sub_order[si-1], sub_order[si] = sub_order[si], sub_order[si-1]
+                    st.session_state["mm_sub_order"] = sub_order
+                    st.rerun()
+                if sc_d.button("⬇️", key=f"sub_dn_{si}") and si < len(sub_order) - 1:
+                    sub_order[si+1], sub_order[si] = sub_order[si], sub_order[si+1]
+                    st.session_state["mm_sub_order"] = sub_order
+                    st.rerun()
+                if sc_x.button("❌", key=f"sub_rm_{si}"):
+                    sub_order.pop(si)
+                    st.session_state["mm_sub_order"] = sub_order
+                    st.rerun()
+            avail_subs = [x for x in ["CVD(누적델타)", "BII(체결강도)", "MACD", "RSI"] if x not in sub_order]
+            if avail_subs:
+                ac_s, ac_b = st.columns([2.4, 1.0])
+                add_pick = ac_s.selectbox("보조지표 추가", avail_subs, label_visibility="collapsed", key="sub_add_sel")
+                if ac_b.button("➕ 추가", use_container_width=True, key="sub_add_btn"):
+                    sub_order.append(add_pick)
+                    st.session_state["mm_sub_order"] = sub_order
+                    st.rerun()
             c_s1, c_s2 = st.columns(2)
             show_vol = c_s1.checkbox("거래량(Vol · 주 차트 하단)", value=True, key="ed_vol")
             show_icc = c_s2.checkbox("역시계곡선(아래 따로)", value=True, key="ed_icc")
@@ -1163,12 +1228,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
         <button id="tv_undo" title="되돌리기" style="width:28px;height:28px;background:#1e293b;color:#fbbf24;border:1px solid #334155;border-radius:4px;cursor:pointer;">↩️</button>
         <button id="tv_clear" title="전체지우기" style="width:28px;height:28px;background:#1e293b;color:#f87171;border:1px solid #334155;border-radius:4px;cursor:pointer;">🗑️</button>
       </div>
-      <div style="position:relative; flex:1; min-width:0; background:#080c14;">
+      <div style="flex:1; min-width:0; background:#080c14;">
+      <div style="display:flex; width:100%;">
+      <div style="position:relative; flex:1; min-width:0;">
       <div id="tv_main" style="width:100%; height:460px;"></div>
       <div id="tv_hud" style="position:absolute; top:8px; right:76px; z-index:4; background:rgba(15,23,42,0.85); border:1px solid #334155; border-radius:6px; padding:5px 10px; font-family:monospace; font-size:11px; color:#e2e8f0; pointer-events:none;"></div>
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
       <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:130px; height:460px; pointer-events:none; z-index:2;"></canvas>
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
+      </div>
+      <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
+      </div>
+      <div style="padding-right:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; background:#080c14;">
       {''.join([
           '<div id="tv_cvd" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>' if x == "CVD(누적델타)" else
           '<div id="tv_bii" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>' if x == "BII(체결강도)" else
@@ -1177,17 +1248,17 @@ if nav_menu == "⚡ 무무 실시간 차트":
           for x in sub_order
       ])}
       </div>
-      <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
+      </div>
     </div>
     </div>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
       const d = {tv_payload};
       const baseOpt = {{
-        layout: {{ background: {{ color: "#131722" }}, textColor: "#d1d4dc" }},
+        layout: {{ background: {{ color: "#080c14" }}, textColor: "#d1d4dc", attributionLogo: false }},
         grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 68 }},
+        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 84 }},
         timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false }},
       }};
       const elMain = document.getElementById("tv_main");
@@ -1390,11 +1461,25 @@ if nav_menu == "⚡ 무무 실시간 차트":
         hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 ${{bar.open}} 고 ${{bar.high}} 저 ${{bar.low}} 종 <b style="color:${{colP}};">${{bar.close}} (${{chgP}}%)`;
       }});
       chart.timeScale().fitContent();
-      subCharts.forEach(sc => sc.timeScale().fitContent());
+      const initR = chart.timeScale().getVisibleLogicalRange();
+      subCharts.forEach(sc => {{ if (initR) sc.timeScale().setVisibleLogicalRange(initR); else sc.timeScale().fitContent(); }});
+      let syncing = false;
       chart.timeScale().subscribeVisibleLogicalRangeChange(r => {{
-        if (r) subCharts.forEach(sc => sc.timeScale().setVisibleLogicalRange(r));
+        if (!syncing && r) {{
+          syncing = true;
+          subCharts.forEach(sc => sc.timeScale().setVisibleLogicalRange(r));
+          syncing = false;
+        }}
         drawVpvr();
       }});
+      subCharts.forEach(sc => sc.timeScale().subscribeVisibleLogicalRangeChange(r => {{
+        if (!syncing && r) {{
+          syncing = true;
+          chart.timeScale().setVisibleLogicalRange(r);
+          subCharts.forEach(o => {{ if (o !== sc) o.timeScale().setVisibleLogicalRange(r); }});
+          syncing = false;
+        }}
+      }}));
       setTimeout(drawVpvr, 250);
 
       // 그리기 도구 (붓 / 추세선 / 수평선 / 메모) + localStorage 저장
