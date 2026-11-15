@@ -824,25 +824,37 @@ if nav_menu == "⚡ 무무 실시간 차트":
     }
     yf_per, yf_int, tf_sec = tf_map.get(tf_opt, ("5d", "5m", 300))
     candles = []
-    try:
-        import yfinance as yf
-        df_yf = yf.Ticker(clean_tk).history(period=yf_per, interval=yf_int)
-        if not df_yf.empty:
-            if tf_opt == "10분봉":
-                df_yf = df_yf.resample("10min").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
-            for idx_t, r_y in df_yf.iterrows():
-                candles.append({
-                    "time": int(idx_t.timestamp()),
-                    "open": round(float(r_y["Open"]), 2),
-                    "high": round(float(r_y["High"]), 2),
-                    "low": round(float(r_y["Low"]), 2),
-                    "close": round(float(r_y["Close"]), 2),
-                    "volume": float(r_y["Volume"]),
-                })
-            if cur["px"] == 0 and candles:
-                cur["px"] = candles[-1]["close"]
-    except Exception:
-        pass
+    @st.cache_data(ttl=60, show_spinner=False)
+    def _fetch_tf_candles(tk_s, per_s, int_s, resamp_10=False):
+        out = []
+        try:
+            import yfinance as yf
+            d_y = yf.Ticker(tk_s).history(period=per_s, interval=int_s)
+            if not d_y.empty:
+                if resamp_10:
+                    d_y = d_y.resample("10min").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
+                for idx_t, r_y in d_y.iterrows():
+                    out.append({
+                        "time": int(idx_t.timestamp()),
+                        "open": round(float(r_y["Open"]), 2),
+                        "high": round(float(r_y["High"]), 2),
+                        "low": round(float(r_y["Low"]), 2),
+                        "close": round(float(r_y["Close"]), 2),
+                        "volume": float(r_y["Volume"]),
+                    })
+        except Exception:
+            pass
+        return out
+
+    tf_sets = {
+        "1분봉": _fetch_tf_candles(clean_tk, "2d", "1m", False),
+        "5분봉": _fetch_tf_candles(clean_tk, "5d", "5m", False),
+        "10분봉": _fetch_tf_candles(clean_tk, "5d", "5m", True),
+        "1일봉": _fetch_tf_candles(clean_tk, "1y", "1d", False),
+    }
+    candles = list(tf_sets.get(tf_opt) or _fetch_tf_candles(clean_tk, yf_per, yf_int, tf_opt == "10분봉"))
+    if cur["px"] == 0 and candles:
+        cur["px"] = candles[-1]["close"]
 
     aux_map = {}
     if con is not None:
@@ -1092,6 +1104,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     tv_payload = json.dumps({
         "tk": clean_tk,
+        "tf_cur": tf_opt,
+        "tf_sets": tf_sets,
         "candles": [{k: c[k] for k in ("time", "open", "high", "low", "close")} for c in candles],
         "volumes": vol_pts if show_vol else [],
         "vwap": vwap_pts if show_vwap else [],
@@ -1130,7 +1144,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
     <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden;">
     <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
       <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 끌기=이동 · 휠=확대/축소</span>
-      <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 10px;cursor:pointer;font-weight:700;">⛶ 전체화면 확대</button>
+      <div style="display:flex; align-items:center; gap:5px;">
+        <button class="tv-tf" data-tf="1분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1분봉</button>
+        <button class="tv-tf" data-tf="5분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">5분봉</button>
+        <button class="tv-tf" data-tf="10분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">10분봉</button>
+        <button class="tv-tf" data-tf="1일봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1일봉</button>
+        <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 10px;cursor:pointer;font-weight:700;">⛶ 전체화면 확대</button>
+      </div>
     </div>
     <div style="display:flex; width:100%;">
       <div style="width:38px; flex-shrink:0; background:#0b101b; border-right:1px solid #1e293b; display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 0; z-index:6;">
@@ -1174,11 +1194,32 @@ if nav_menu == "⚡ 무무 실시간 차트":
       const chart = LightweightCharts.createChart(elMain, baseOpt);
       const cs = chart.addCandlestickSeries({{ upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350" }});
       cs.setData(d.candles);
+      let vs = null;
       if (d.volumes.length) {{
-        const vs = chart.addHistogramSeries({{ priceFormat:{{type:"volume"}}, priceScaleId:"" }});
+        vs = chart.addHistogramSeries({{ priceFormat:{{type:"volume"}}, priceScaleId:"" }});
         vs.priceScale().applyOptions({{ scaleMargins:{{ top:0.82, bottom:0 }} }});
         vs.setData(d.volumes);
       }}
+      function styleTfBtns(act) {{
+        document.querySelectorAll(".tv-tf").forEach(b => {{
+          const on = b.dataset.tf === act;
+          b.style.background = on ? "#f59e0b" : "#1e293b";
+          b.style.color = on ? "#0f172a" : "#e2e8f0";
+          b.style.borderColor = on ? "#f59e0b" : "#334155";
+        }});
+      }}
+      styleTfBtns(d.tf_cur);
+      document.querySelectorAll(".tv-tf").forEach(b => {{
+        b.onclick = () => {{
+          const arr = (d.tf_sets && d.tf_sets[b.dataset.tf]) || [];
+          if (!arr.length) return;
+          cs.setData(arr.map(c => ({{time:c.time, open:c.open, high:c.high, low:c.low, close:c.close}})));
+          if (vs) vs.setData(arr.map(c => ({{time:c.time, value:c.volume, color:c.close>=c.open?"rgba(38,166,154,0.5)":"rgba(239,83,80,0.5)"}})));
+          chart.timeScale().fitContent();
+          styleTfBtns(b.dataset.tf);
+          setTimeout(drawVpvr, 80);
+        }};
+      }});
       if (d.vwap.length) chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.vwap);
       if (d.ma20.length) chart.addLineSeries({{ color:"#22c55e", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.ma20);
       if (d.ma200.length) chart.addLineSeries({{ color:"#eab308", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.ma200);
