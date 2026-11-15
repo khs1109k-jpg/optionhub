@@ -948,6 +948,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
             c_s1, c_s2 = st.columns(2)
             show_vol = c_s1.checkbox("거래량(Vol · 주 차트 하단)", value=True, key="ed_vol")
             show_icc = c_s2.checkbox("역시계곡선(아래 따로)", value=True, key="ed_icc")
+            c_s3, c_s4 = st.columns(2)
+            show_rail_gex = c_s3.checkbox("우측 GEX 레일", value=True, key="ed_rail_gex")
+            show_rail_nf = c_s4.checkbox("우측 Net Flow 레일", value=True, key="ed_rail_nf")
             show_cvd = "CVD(누적델타)" in sub_order
             show_bii = "BII(체결강도)" in sub_order
             show_macd = "MACD" in sub_order
@@ -1117,7 +1120,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "delta_k": delta_lv if (show_walls and delta_lv and (not cur["px"] or 0.55 * cur["px"] <= float(delta_lv) <= 1.45 * cur["px"])) else None,
         "gex_c_k": gex_c_lv if (show_walls and gex_c_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_c_lv) <= 1.45 * cur["px"])) else None,
         "gex_p_k": gex_p_lv if (show_walls and gex_p_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_p_lv) <= 1.45 * cur["px"])) else None,
-        "opt_bars": opt_bars if show_vpvr else [],
+        "opt_bars": opt_bars if (show_vpvr or show_rail_gex or show_rail_nf) else [],
+        "show_vpvr": show_vpvr,
+        "show_r_gex": show_rail_gex,
+        "show_r_nf": show_rail_nf,
     })
 
     tv_html = f"""
@@ -1151,7 +1157,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
           for x in sub_order
       ])}
       </div>
-      <canvas id="tv_rail" style="width:136px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
+      <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
     </div>
     </div>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -1235,7 +1241,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             ctx.fillRect(0, y - 5, w, 10);
           }});
         }}
-        if (d.opt_bars && d.opt_bars.length) {{
+        if (d.show_vpvr && d.opt_bars && d.opt_bars.length) {{
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
@@ -1254,28 +1260,45 @@ if nav_menu == "⚡ 무무 실시간 차트":
         const rl = document.getElementById("tv_rail");
         if (!rl) return;
         const mh = elMain.clientHeight || 460;
-        rl.width = 136; rl.height = mh;
+        const rw = (d.show_r_gex ? 68 : 0) + (d.show_r_nf ? 68 : 0);
+        rl.style.width = rw + "px";
+        rl.width = rw; rl.height = mh;
+        if (rw === 0) return;
         const rctx = rl.getContext("2d");
-        rctx.clearRect(0, 0, 136, mh);
+        rctx.clearRect(0, 0, rw, mh);
         rctx.fillStyle = "#94a3b8"; rctx.font = "bold 10px monospace";
-        rctx.fillText("GEX", 22, 14); rctx.fillText("Net Flow", 78, 14);
-        rctx.strokeStyle = "#1e293b";
-        rctx.beginPath(); rctx.moveTo(68, 0); rctx.lineTo(68, mh); rctx.stroke();
-        rctx.strokeStyle = "rgba(148,163,184,0.25)";
-        rctx.beginPath(); rctx.moveTo(34, 18); rctx.lineTo(34, mh); rctx.moveTo(102, 18); rctx.lineTo(102, mh); rctx.stroke();
+        const gexOff = 0, nfOff = d.show_r_gex ? 68 : 0;
+        if (d.show_r_gex) {{
+          rctx.fillText("GEX", gexOff + 22, 14);
+          rctx.strokeStyle = "rgba(148,163,184,0.25)";
+          rctx.beginPath(); rctx.moveTo(gexOff + 34, 18); rctx.lineTo(gexOff + 34, mh); rctx.stroke();
+        }}
+        if (d.show_r_nf) {{
+          rctx.fillText("Net Flow", nfOff + 10, 14);
+          rctx.strokeStyle = "rgba(148,163,184,0.25)";
+          rctx.beginPath(); rctx.moveTo(nfOff + 34, 18); rctx.lineTo(nfOff + 34, mh); rctx.stroke();
+        }}
+        if (d.show_r_gex && d.show_r_nf) {{
+          rctx.strokeStyle = "#1e293b";
+          rctx.beginPath(); rctx.moveTo(68, 0); rctx.lineTo(68, mh); rctx.stroke();
+        }}
         if (!d.opt_bars || !d.opt_bars.length) return;
         const maxG = Math.max(...d.opt_bars.map(x => Math.abs(x.net_g || 0)), 0.1);
         const maxOi = Math.max(...d.opt_bars.map(x => Math.abs((x.c_oi || 0) - (x.p_oi || 0))), 1);
         d.opt_bars.forEach(b => {{
           const y = cs.priceToCoordinate(b.p);
           if (y === null || y < 20 || y > mh - 8) return;
-          const gw = Math.max(2, Math.round(Math.abs(b.net_g || 0) / maxG * 30));
-          if ((b.net_g || 0) >= 0) {{ rctx.fillStyle = "#10b981"; rctx.fillRect(34 - gw, y - 2, gw, 5); }}
-          else {{ rctx.fillStyle = "#ef4444"; rctx.fillRect(34, y - 2, gw, 5); }}
-          const netOi = (b.c_oi || 0) - (b.p_oi || 0);
-          const ow = Math.max(2, Math.round(Math.abs(netOi) / maxOi * 30));
-          if (netOi >= 0) {{ rctx.fillStyle = "#10b981"; rctx.fillRect(102 - ow, y - 2, ow, 5); }}
-          else {{ rctx.fillStyle = "#ef4444"; rctx.fillRect(102, y - 2, ow, 5); }}
+          if (d.show_r_gex) {{
+            const gw = Math.max(2, Math.round(Math.abs(b.net_g || 0) / maxG * 30));
+            if ((b.net_g || 0) >= 0) {{ rctx.fillStyle = "#10b981"; rctx.fillRect(gexOff + 34 - gw, y - 2, gw, 5); }}
+            else {{ rctx.fillStyle = "#ef4444"; rctx.fillRect(gexOff + 34, y - 2, gw, 5); }}
+          }}
+          if (d.show_r_nf) {{
+            const netOi = (b.c_oi || 0) - (b.p_oi || 0);
+            const ow = Math.max(2, Math.round(Math.abs(netOi) / maxOi * 30));
+            if (netOi >= 0) {{ rctx.fillStyle = "#10b981"; rctx.fillRect(nfOff + 34 - ow, y - 2, ow, 5); }}
+            else {{ rctx.fillStyle = "#ef4444"; rctx.fillRect(nfOff + 34, y - 2, ow, 5); }}
+          }}
         }});
       }}
 
