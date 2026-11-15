@@ -895,17 +895,17 @@ if nav_menu == "⚡ 무무 실시간 차트":
             pass
         return out
 
-    tf_sets = {
+    tf_sec_map = {"1분봉": 60, "5분봉": 300, "10분봉": 600, "15분봉": 900, "1일봉": 86400}
+    raw_tf_sets = {
         "1분봉": _fetch_tf_candles(clean_tk, "2d", "1m", False),
         "5분봉": _fetch_tf_candles(clean_tk, "5d", "5m", False),
         "10분봉": _fetch_tf_candles(clean_tk, "5d", "5m", True),
         "1일봉": _fetch_tf_candles(clean_tk, "1y", "1d", False),
     }
-    candles = list(tf_sets.get(tf_opt) or _fetch_tf_candles(clean_tk, yf_per, yf_int, tf_opt == "10분봉"))
-    if cur["px"] == 0 and candles:
-        cur["px"] = candles[-1]["close"]
 
     aux_map = {}
+    moomoo_bars = []
+    hist_rows = []
     if con is not None:
         try:
             for k_a, d_a in con.execute("SELECT kind, data FROM aux WHERE sym=?", (sel_syn,)).fetchall():
@@ -920,7 +920,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 for b in bars_data:
                     t_raw = b.get("time_key") or b.get("time") or b.get("ts") or b.get("t")
                     ts_sec = int(pd.Timestamp(t_raw).timestamp()) if isinstance(t_raw, str) else int(float(t_raw))
-                    candles.append({
+                    moomoo_bars.append({
                         "time": ts_sec,
                         "open": float(b.get("open", b.get("o", 0))),
                         "high": float(b.get("high", b.get("h", 0))),
@@ -929,24 +929,40 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         "volume": float(b.get("volume", b.get("vol", b.get("v", 0))) or 0),
                     })
             hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? ORDER BY ts ASC", (sel_syn,)).fetchall()
-            if hist_rows:
-                df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
-                df_h["min_ts"] = (df_h["ts"] // tf_sec).astype(int) * tf_sec
-                for m_ts, g in df_h.groupby("min_ts"):
-                    candles.append({
-                        "time": int(m_ts),
-                        "open": float(g["px"].iloc[0]),
-                        "high": float(g["px"].max()),
-                        "low": float(g["px"].min()),
-                        "close": float(g["px"].iloc[-1]),
-                        "volume": float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0)),
-                    })
         except Exception:
             pass
 
-    # Deduplicate & sort candles strictly ascending by time
-    c_dict = {c["time"]: c for c in candles if c["close"] > 0}
-    candles = [c_dict[k] for k in sorted(c_dict.keys())]
+    def _merge_tf_candles(base_list, sec_step):
+        merged = list(base_list or [])
+        if sec_step <= 900 and moomoo_bars:
+            merged.extend(moomoo_bars)
+        if hist_rows:
+            df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
+            df_h["min_ts"] = (df_h["ts"] // sec_step).astype(int) * sec_step
+            for m_ts, g in df_h.groupby("min_ts"):
+                o_px = float(g["px"].iloc[0])
+                h_px = float(g["px"].max())
+                l_px = float(g["px"].min())
+                c_px = float(g["px"].iloc[-1])
+                v_diff = float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0))
+                # 주말/장마감 무거래 정지 구간 평탄화 틱 제외
+                if v_diff <= 0 and h_px <= l_px and merged:
+                    continue
+                merged.append({
+                    "time": int(m_ts),
+                    "open": o_px,
+                    "high": h_px,
+                    "low": l_px,
+                    "close": c_px,
+                    "volume": v_diff,
+                })
+        c_dict = {c["time"]: c for c in merged if c["close"] > 0}
+        return [c_dict[k] for k in sorted(c_dict.keys())]
+
+    merged_tf_sets = {k: _merge_tf_candles(v, tf_sec_map.get(k, 300)) for k, v in raw_tf_sets.items()}
+    candles = list(merged_tf_sets.get(tf_opt) or _merge_tf_candles(_fetch_tf_candles(clean_tk, yf_per, yf_int, tf_opt == "10분봉"), tf_sec))
+    if cur["px"] == 0 and candles:
+        cur["px"] = candles[-1]["close"]
 
     bk_top = aux_map.get("book") or {}
     bids_top = bk_top.get("Bid") or bk_top.get("bids") or []
@@ -1065,23 +1081,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
     except Exception:
         ma1_len, ma2_len = 20, 200
 
-    vwap_pts, bb_up_pts, bb_dn_pts, vol_pts = [], [], [], []
-    ma20_pts, ma200_pts = [], []
-    tenkan_pts, kijun_pts, span_a_pts, span_b_pts, chikou_pts = [], [], [], [], []
-    cvd_pts, bii_pts, macd_pts, macd_sig_pts, macd_hist_pts, rsi_pts, cloud_pts = [], [], [], [], [], [], []
-    vpvr_bins = []
-    icc_df = pd.DataFrame()
-
-    if candles:
-        df_c = pd.DataFrame(candles)
+    def _build_tf_bundle(c_list):
+        if not c_list:
+            return {
+                "candles": [], "volumes": [], "vwap": [], "bb_up": [], "bb_dn": [],
+                "ma20": [], "ma200": [], "tenkan": [], "kijun": [], "span_a": [],
+                "span_b": [], "chikou": [], "cloud": [], "vpvr": [], "cvd": [],
+                "bii": [], "macd": [], "macd_sig": [], "macd_hist": [], "rsi": [],
+            }, pd.DataFrame()
+        df_c = pd.DataFrame(c_list)
         tp = (df_c["high"] + df_c["low"] + df_c["close"]) / 3.0
         v_safe = df_c["volume"].replace(0, 1)
         df_c["vwap"] = (tp * v_safe).cumsum() / v_safe.cumsum()
         df_c["ma20"] = df_c["close"].rolling(ma1_len).mean()
+        df_c["bb_ma"] = df_c["close"].rolling(bb_len).mean()
         df_c["std20"] = df_c["close"].rolling(bb_len).std()
         df_c["ma200"] = df_c["close"].rolling(min(ma2_len, max(30, len(df_c)//2))).mean()
 
-        # 일목균형표 (9, 26, 52)
         h9 = df_c["high"].rolling(i_ten).max(); l9 = df_c["low"].rolling(i_ten).min()
         h26 = df_c["high"].rolling(i_kij).max(); l26 = df_c["low"].rolling(i_kij).min()
         h52 = df_c["high"].rolling(i_sen).max(); l52 = df_c["low"].rolling(i_sen).min()
@@ -1091,30 +1107,28 @@ if nav_menu == "⚡ 무무 실시간 차트":
         df_c["span_b"] = ((h52 + l52) / 2.0).shift(i_kij)
         df_c["chikou"] = df_c["close"].shift(-i_kij)
 
-        # CVD (캔들 내 매수/매도 압력 추정 델타 누적)
         rng_hl = (df_c["high"] - df_c["low"]).replace(0, 1e-6)
         bar_delta = df_c["volume"] * ((2.0 * df_c["close"] - df_c["high"] - df_c["low"]) / rng_hl)
         df_c["cvd"] = bar_delta.cumsum()
-        df_c["bii"] = bar_delta.cumsum() * 100.0
+        # BII(Intraday Intensity %): 이동합(20봉) 기반 정규화 체결강도 (-100 ~ +100%)
+        roll_v = df_c["volume"].rolling(20, min_periods=1).sum().replace(0, 1)
+        df_c["bii"] = (bar_delta.rolling(20, min_periods=1).sum() / roll_v) * 100.0
 
-        # MACD (12, 26, 9)
         ema12 = df_c["close"].ewm(span=m_fast, adjust=False).mean()
         ema26 = df_c["close"].ewm(span=m_slow, adjust=False).mean()
         df_c["macd"] = ema12 - ema26
         df_c["macd_sig"] = df_c["macd"].ewm(span=m_sig, adjust=False).mean()
         df_c["macd_hist"] = df_c["macd"] - df_c["macd_sig"]
 
-        # RSI (14)
         diff_c = df_c["close"].diff()
         gain = diff_c.clip(lower=0).rolling(int(rsi_len)).mean()
         loss = (-diff_c.clip(upper=0)).rolling(int(rsi_len)).mean().replace(0, 1e-6)
         df_c["rsi"] = 100.0 - (100.0 / (1.0 + gain / loss))
 
-        # 역시계곡선 (20봉 종가 MA vs 거래량 MA)
         df_c["vol_ma20"] = df_c["volume"].rolling(int(icc_len)).mean()
-        icc_df = df_c.dropna(subset=["ma20", "vol_ma20"]).tail(40).copy()
+        icc_local = df_c.dropna(subset=["ma20", "vol_ma20"]).tail(40).copy()
 
-        # VPVR (매물대 24구간)
+        vpvr_local = []
         p_min, p_max = float(df_c["low"].min()), float(df_c["high"].max())
         if p_max > p_min:
             bins = int(vpvr_bins_n)
@@ -1125,40 +1139,77 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 v_arr[idx_b] += float(rc["volume"])
             v_mx = max(v_arr) or 1.0
             for bi in range(bins):
-                vpvr_bins.append({"p": round(p_min + (bi + 0.5) * step, 2), "pct": round(v_arr[bi] / v_mx, 3)})
+                vpvr_local.append({"p": round(p_min + (bi + 0.5) * step, 2), "pct": round(v_arr[bi] / v_mx, 3)})
 
+        o_vol, o_vwap, o_ma20, o_ma200, o_bb_u, o_bb_d = [], [], [], [], [], []
+        o_ten, o_kij, o_spa, o_spb, o_chi, o_cld = [], [], [], [], [], []
+        o_cvd, o_bii, o_macd, o_msig, o_mhist, o_rsi = [], [], [], [], [], []
         for _, r_c in df_c.iterrows():
             t_i = int(r_c["time"])
             is_up = r_c["close"] >= r_c["open"]
-            vol_pts.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
-            vwap_pts.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
-            cvd_pts.append({"time": t_i, "value": round(float(r_c["cvd"]), 1)})
-            bii_pts.append({"time": t_i, "value": round(float(r_c["bii"]), 0)})
-            macd_pts.append({"time": t_i, "value": round(float(r_c["macd"]), 3)})
-            macd_sig_pts.append({"time": t_i, "value": round(float(r_c["macd_sig"]), 3)})
+            o_vol.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
+            o_vwap.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
+            o_cvd.append({"time": t_i, "value": round(float(r_c["cvd"]), 1)})
+            o_bii.append({"time": t_i, "value": round(float(r_c["bii"]), 2)})
+            o_macd.append({"time": t_i, "value": round(float(r_c["macd"]), 3)})
+            o_msig.append({"time": t_i, "value": round(float(r_c["macd_sig"]), 3)})
             mh = float(r_c["macd_hist"])
-            macd_hist_pts.append({"time": t_i, "value": round(mh, 3), "color": "rgba(16,185,129,0.65)" if mh >= 0 else "rgba(239,68,68,0.65)"})
+            o_mhist.append({"time": t_i, "value": round(mh, 3), "color": "rgba(16,185,129,0.65)" if mh >= 0 else "rgba(239,68,68,0.65)"})
             if pd.notna(r_c["ma20"]):
-                ma20_pts.append({"time": t_i, "value": round(float(r_c["ma20"]), 2)})
+                o_ma20.append({"time": t_i, "value": round(float(r_c["ma20"]), 2)})
             if pd.notna(r_c["ma200"]):
-                ma200_pts.append({"time": t_i, "value": round(float(r_c["ma200"]), 2)})
-            if pd.notna(r_c["ma20"]) and pd.notna(r_c["std20"]):
-                bb_up_pts.append({"time": t_i, "value": round(float(r_c["close"].rolling(bb_len).mean().loc[r_c.name] if False else r_c["ma20"] + bb_std * r_c["std20"]), 2)})
-                bb_dn_pts.append({"time": t_i, "value": round(float(r_c["ma20"] - bb_std * r_c["std20"]), 2)})
+                o_ma200.append({"time": t_i, "value": round(float(r_c["ma200"]), 2)})
+            if pd.notna(r_c["bb_ma"]) and pd.notna(r_c["std20"]):
+                o_bb_u.append({"time": t_i, "value": round(float(r_c["bb_ma"] + bb_std * r_c["std20"]), 2)})
+                o_bb_d.append({"time": t_i, "value": round(float(r_c["bb_ma"] - bb_std * r_c["std20"]), 2)})
             if pd.notna(r_c["tenkan"]):
-                tenkan_pts.append({"time": t_i, "value": round(float(r_c["tenkan"]), 2)})
+                o_ten.append({"time": t_i, "value": round(float(r_c["tenkan"]), 2)})
             if pd.notna(r_c["kijun"]):
-                kijun_pts.append({"time": t_i, "value": round(float(r_c["kijun"]), 2)})
+                o_kij.append({"time": t_i, "value": round(float(r_c["kijun"]), 2)})
             if pd.notna(r_c["span_a"]):
-                span_a_pts.append({"time": t_i, "value": round(float(r_c["span_a"]), 2)})
+                o_spa.append({"time": t_i, "value": round(float(r_c["span_a"]), 2)})
             if pd.notna(r_c["span_b"]):
-                span_b_pts.append({"time": t_i, "value": round(float(r_c["span_b"]), 2)})
+                o_spb.append({"time": t_i, "value": round(float(r_c["span_b"]), 2)})
             if pd.notna(r_c["span_a"]) and pd.notna(r_c["span_b"]):
-                cloud_pts.append({"time": t_i, "a": round(float(r_c["span_a"]), 2), "b": round(float(r_c["span_b"]), 2)})
+                o_cld.append({"time": t_i, "a": round(float(r_c["span_a"]), 2), "b": round(float(r_c["span_b"]), 2)})
             if pd.notna(r_c["chikou"]):
-                chikou_pts.append({"time": t_i, "value": round(float(r_c["chikou"]), 2)})
+                o_chi.append({"time": t_i, "value": round(float(r_c["chikou"]), 2)})
             if pd.notna(r_c["rsi"]):
-                rsi_pts.append({"time": t_i, "value": round(float(r_c["rsi"]), 2)})
+                o_rsi.append({"time": t_i, "value": round(float(r_c["rsi"]), 2)})
+
+        return {
+            "candles": [{k: c[k] for k in ("time", "open", "high", "low", "close")} for c in c_list],
+            "volumes": o_vol if show_vol else [],
+            "vwap": o_vwap if show_vwap else [],
+            "bb_up": o_bb_u if show_bb else [],
+            "bb_dn": o_bb_d if show_bb else [],
+            "ma20": o_ma20 if show_ma else [],
+            "ma200": o_ma200 if show_ma else [],
+            "tenkan": o_ten if show_ichi else [],
+            "kijun": o_kij if show_ichi else [],
+            "span_a": o_spa if show_ichi else [],
+            "span_b": o_spb if show_ichi else [],
+            "chikou": o_chi if show_ichi else [],
+            "cloud": o_cld if show_ichi else [],
+            "vpvr": vpvr_local if show_vpvr else [],
+            "cvd": o_cvd if show_cvd else [],
+            "bii": o_bii if show_bii else [],
+            "macd": o_macd if show_macd else [],
+            "macd_sig": o_msig if show_macd else [],
+            "macd_hist": o_mhist if show_macd else [],
+            "rsi": o_rsi if show_rsi else [],
+        }, icc_local
+
+    tf_bundles = {}
+    icc_df = pd.DataFrame()
+    for tf_k, tf_c in merged_tf_sets.items():
+        b_res, b_icc = _build_tf_bundle(tf_c)
+        tf_bundles[tf_k] = b_res
+        if tf_k == tf_opt:
+            icc_df = b_icc
+    cur_bundle = tf_bundles.get(tf_opt)
+    if cur_bundle is None or not cur_bundle["candles"]:
+        cur_bundle, icc_df = _build_tf_bundle(candles)
 
     if sig_h_lv is None and candles and len(candles) >= 20:
         df_tmp_s = pd.DataFrame(candles)
@@ -1174,28 +1225,27 @@ if nav_menu == "⚡ 무무 실시간 차트":
     tv_payload = json.dumps({
         "tk": clean_tk,
         "tf_cur": tf_opt,
-        "tf_sets": tf_sets,
-        "candles": [{k: c[k] for k in ("time", "open", "high", "low", "close")} for c in candles],
-        "volumes": vol_pts if show_vol else [],
-        "vwap": vwap_pts if show_vwap else [],
-        "bb_up": bb_up_pts if show_bb else [],
-        "bb_dn": bb_dn_pts if show_bb else [],
-        "ma20": ma20_pts if show_ma else [],
-        "ma200": ma200_pts if show_ma else [],
-        "tenkan": tenkan_pts if show_ichi else [],
-        "kijun": kijun_pts if show_ichi else [],
-        "span_a": span_a_pts if show_ichi else [],
-        "span_b": span_b_pts if show_ichi else [],
-        "chikou": chikou_pts if show_ichi else [],
-        "vpvr": vpvr_bins if show_vpvr else [],
-        "cvd": cvd_pts if show_cvd else [],
-        "bii": bii_pts if show_bii else [],
-        "cloud": cloud_pts if show_ichi else [],
-        "macd": macd_pts if show_macd else [],
-        "macd_sig": macd_sig_pts if show_macd else [],
-        "macd_hist": macd_hist_pts if show_macd else [],
-        "rsi": rsi_pts if show_rsi else [],
-        "cw": cw_lv if (show_walls and cw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(cw_lv) <= 1.45 * cur["px"])) else None,
+        "tf_sets": tf_bundles,
+        "candles": cur_bundle["candles"],
+        "volumes": cur_bundle["volumes"],
+        "vwap": cur_bundle["vwap"],
+        "bb_up": cur_bundle["bb_up"],
+        "bb_dn": cur_bundle["bb_dn"],
+        "ma20": cur_bundle["ma20"],
+        "ma200": cur_bundle["ma200"],
+        "tenkan": cur_bundle["tenkan"],
+        "kijun": cur_bundle["kijun"],
+        "span_a": cur_bundle["span_a"],
+        "span_b": cur_bundle["span_b"],
+        "chikou": cur_bundle["chikou"],
+        "vpvr": cur_bundle["vpvr"],
+        "cvd": cur_bundle["cvd"],
+        "bii": cur_bundle["bii"],
+        "cloud": cur_bundle["cloud"],
+        "macd": cur_bundle["macd"],
+        "macd_sig": cur_bundle["macd_sig"],
+        "macd_hist": cur_bundle["macd_hist"],
+        "rsi": cur_bundle["rsi"],        "cw": cw_lv if (show_walls and cw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(cw_lv) <= 1.45 * cur["px"])) else None,
         "pw": pw_lv if (show_walls and pw_lv and (not cur["px"] or 0.55 * cur["px"] <= float(pw_lv) <= 1.45 * cur["px"])) else None,
         "zg": zg_lv if (show_walls and zg_lv and (not cur["px"] or 0.55 * cur["px"] <= float(zg_lv) <= 1.45 * cur["px"])) else None,
         "sig_h": sig_h_lv if show_walls else None,
@@ -1258,11 +1308,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
       const d = {tv_payload};
+      const fmtCompact = (v) => {{
+        const av = Math.abs(v);
+        if (av >= 1e9) return (v / 1e9).toFixed(2) + "B";
+        if (av >= 1e6) return (v / 1e6).toFixed(2) + "M";
+        if (av >= 1e3) return (v / 1e3).toFixed(1) + "K";
+        return v.toFixed(2);
+      }};
       const baseOpt = {{
         layout: {{ background: {{ color: "#080c14" }}, textColor: "#d1d4dc", attributionLogo: false }},
         grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
-        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 84 }},
+        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 92 }},
         timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false }},
       }};
       const elMain = document.getElementById("tv_main");
@@ -1284,31 +1341,27 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }});
       }}
       styleTfBtns(d.tf_cur);
-      document.querySelectorAll(".tv-tf").forEach(b => {{
-        b.onclick = () => {{
-          const arr = (d.tf_sets && d.tf_sets[b.dataset.tf]) || [];
-          if (!arr.length) return;
-          cs.setData(arr.map(c => ({{time:c.time, open:c.open, high:c.high, low:c.low, close:c.close}})));
-          if (vs) vs.setData(arr.map(c => ({{time:c.time, value:c.volume, color:c.close>=c.open?"rgba(38,166,154,0.5)":"rgba(239,83,80,0.5)"}})));
-          chart.timeScale().fitContent();
-          styleTfBtns(b.dataset.tf);
-          setTimeout(drawVpvr, 80);
-        }};
-      }});
-      if (d.vwap.length) chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.vwap);
-      if (d.ma20.length) chart.addLineSeries({{ color:"#22c55e", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.ma20);
-      if (d.ma200.length) chart.addLineSeries({{ color:"#eab308", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.ma200);
-      if (d.bb_up.length) {{
-        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.bb_up);
-        chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.bb_dn);
-      }}
-      if (d.tenkan.length) {{
-        chart.addLineSeries({{ color:"#ef4444", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.tenkan);
-        chart.addLineSeries({{ color:"#3b82f6", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.kijun);
-        chart.addLineSeries({{ color:"rgba(16,185,129,0.55)", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.span_a);
-        chart.addLineSeries({{ color:"rgba(239,68,68,0.55)", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}).setData(d.span_b);
-        chart.addLineSeries({{ color:"rgba(148,163,184,0.6)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}).setData(d.chikou);
-      }}
+      const sVwap = d.vwap.length ? chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}) : null;
+      if (sVwap) sVwap.setData(d.vwap);
+      const sMa20 = d.ma20.length ? chart.addLineSeries({{ color:"#22c55e", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}) : null;
+      if (sMa20) sMa20.setData(d.ma20);
+      const sMa200 = d.ma200.length ? chart.addLineSeries({{ color:"#eab308", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}) : null;
+      if (sMa200) sMa200.setData(d.ma200);
+      const sBbUp = d.bb_up.length ? chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sBbDn = d.bb_dn.length ? chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}) : null;
+      if (sBbUp) sBbUp.setData(d.bb_up);
+      if (sBbDn) sBbDn.setData(d.bb_dn);
+      const sTenkan = d.tenkan.length ? chart.addLineSeries({{ color:"#ef4444", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sKijun = d.kijun.length ? chart.addLineSeries({{ color:"#3b82f6", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sSpanA = d.span_a.length ? chart.addLineSeries({{ color:"rgba(16,185,129,0.55)", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sSpanB = d.span_b.length ? chart.addLineSeries({{ color:"rgba(239,68,68,0.55)", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sChikou = d.chikou.length ? chart.addLineSeries({{ color:"rgba(148,163,184,0.6)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}) : null;
+      if (sTenkan) sTenkan.setData(d.tenkan);
+      if (sKijun) sKijun.setData(d.kijun);
+      if (sSpanA) sSpanA.setData(d.span_a);
+      if (sSpanB) sSpanB.setData(d.span_b);
+      if (sChikou) sChikou.setData(d.chikou);
+
       if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"CALL WALL" }});
       if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"PUT WALL" }});
       if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"GAMMA" }});
@@ -1420,34 +1473,72 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
       // 보조지표 차트 동기화
       const subCharts = [];
-      if (d.cvd.length) {{
-        const cCvd = LightweightCharts.createChart(document.getElementById("tv_cvd"), baseOpt);
-        const sCvd = cCvd.addAreaSeries({{ lineColor:"#38bdf8", topColor:"rgba(56,189,248,0.3)", bottomColor:"rgba(56,189,248,0.02)", lineWidth:2, title:"CVD" }});
+      const subLinks = [];
+      let cCvd = null, sCvd = null, cBii = null, sBii = null;
+      let cMacd = null, sMacdH = null, sMacd = null, sMacdS = null;
+      let cRsi = null, sRsi = null;
+      if (d.cvd.length && document.getElementById("tv_cvd")) {{
+        cCvd = LightweightCharts.createChart(document.getElementById("tv_cvd"), baseOpt);
+        sCvd = cCvd.addAreaSeries({{ lineColor:"#38bdf8", topColor:"rgba(56,189,248,0.3)", bottomColor:"rgba(56,189,248,0.02)", lineWidth:2, title:"CVD", priceFormat:{{type:"custom", formatter:fmtCompact}} }});
         sCvd.setData(d.cvd);
-        subCharts.push(cCvd);
+        subCharts.push(cCvd); subLinks.push({{c: cCvd, s: sCvd}});
       }}
-      if (d.bii.length) {{
-        const cBii = LightweightCharts.createChart(document.getElementById("tv_bii"), baseOpt);
-        const sBii = cBii.addLineSeries({{ color:"#2563eb", lineWidth:2, title:"BII (Intraday Intensity)" }});
+      if (d.bii.length && document.getElementById("tv_bii")) {{
+        cBii = LightweightCharts.createChart(document.getElementById("tv_bii"), baseOpt);
+        sBii = cBii.addLineSeries({{ color:"#2563eb", lineWidth:2, title:"BII (%)", priceFormat:{{type:"custom", formatter: v => v.toFixed(1) + "%"}} }});
         sBii.setData(d.bii);
         sBii.createPriceLine({{ price:0, color:"rgba(148,163,184,0.4)", lineStyle:2 }});
-        subCharts.push(cBii);
+        subCharts.push(cBii); subLinks.push({{c: cBii, s: sBii}});
       }}
-      if (d.macd.length) {{
-        const cMacd = LightweightCharts.createChart(document.getElementById("tv_macd"), baseOpt);
-        cMacd.addHistogramSeries({{ title:"MACD Hist" }}).setData(d.macd_hist);
-        cMacd.addLineSeries({{ color:"#38bdf8", lineWidth:1.5, title:"MACD" }}).setData(d.macd);
-        cMacd.addLineSeries({{ color:"#f59e0b", lineWidth:1.5, title:"Signal" }}).setData(d.macd_sig);
-        subCharts.push(cMacd);
+      if (d.macd.length && document.getElementById("tv_macd")) {{
+        cMacd = LightweightCharts.createChart(document.getElementById("tv_macd"), baseOpt);
+        sMacdH = cMacd.addHistogramSeries({{ title:"MACD Hist" }});
+        sMacd = cMacd.addLineSeries({{ color:"#38bdf8", lineWidth:1.5, title:"MACD" }});
+        sMacdS = cMacd.addLineSeries({{ color:"#f59e0b", lineWidth:1.5, title:"Signal" }});
+        sMacdH.setData(d.macd_hist); sMacd.setData(d.macd); sMacdS.setData(d.macd_sig);
+        subCharts.push(cMacd); subLinks.push({{c: cMacd, s: sMacd}});
       }}
-      if (d.rsi.length) {{
-        const cRsi = LightweightCharts.createChart(document.getElementById("tv_rsi"), baseOpt);
-        const sRsi = cRsi.addLineSeries({{ color:"#a855f7", lineWidth:2, title:"RSI(14)" }});
+      if (d.rsi.length && document.getElementById("tv_rsi")) {{
+        cRsi = LightweightCharts.createChart(document.getElementById("tv_rsi"), baseOpt);
+        sRsi = cRsi.addLineSeries({{ color:"#a855f7", lineWidth:2, title:"RSI" }});
         sRsi.setData(d.rsi);
         sRsi.createPriceLine({{ price:70, color:"rgba(239,68,68,0.6)", lineStyle:2, title:"70" }});
         sRsi.createPriceLine({{ price:30, color:"rgba(16,185,129,0.6)", lineStyle:2, title:"30" }});
-        subCharts.push(cRsi);
+        subCharts.push(cRsi); subLinks.push({{c: cRsi, s: sRsi}});
       }}
+
+      document.querySelectorAll(".tv-tf").forEach(b => {{
+        b.onclick = () => {{
+          const tfB = d.tf_sets && d.tf_sets[b.dataset.tf];
+          if (!tfB || !tfB.candles || !tfB.candles.length) return;
+          cs.setData(tfB.candles);
+          if (vs && tfB.volumes) vs.setData(tfB.volumes);
+          if (sVwap && tfB.vwap) sVwap.setData(tfB.vwap);
+          if (sMa20 && tfB.ma20) sMa20.setData(tfB.ma20);
+          if (sMa200 && tfB.ma200) sMa200.setData(tfB.ma200);
+          if (sBbUp && tfB.bb_up) sBbUp.setData(tfB.bb_up);
+          if (sBbDn && tfB.bb_dn) sBbDn.setData(tfB.bb_dn);
+          if (sTenkan && tfB.tenkan) sTenkan.setData(tfB.tenkan);
+          if (sKijun && tfB.kijun) sKijun.setData(tfB.kijun);
+          if (sSpanA && tfB.span_a) sSpanA.setData(tfB.span_a);
+          if (sSpanB && tfB.span_b) sSpanB.setData(tfB.span_b);
+          if (sChikou && tfB.chikou) sChikou.setData(tfB.chikou);
+          d.cloud = tfB.cloud || [];
+          d.vpvr = tfB.vpvr || [];
+          if (sCvd && tfB.cvd) sCvd.setData(tfB.cvd);
+          if (sBii && tfB.bii) sBii.setData(tfB.bii);
+          if (sMacdH && tfB.macd_hist) sMacdH.setData(tfB.macd_hist);
+          if (sMacd && tfB.macd) sMacd.setData(tfB.macd);
+          if (sMacdS && tfB.macd_sig) sMacdS.setData(tfB.macd_sig);
+          if (sRsi && tfB.rsi) sRsi.setData(tfB.rsi);
+          chart.timeScale().fitContent();
+          const newR = chart.timeScale().getVisibleLogicalRange();
+          subCharts.forEach(sc => {{ if (newR) sc.timeScale().setVisibleLogicalRange(newR); else sc.timeScale().fitContent(); }});
+          styleTfBtns(b.dataset.tf);
+          setTimeout(drawVpvr, 80);
+        }};
+      }});
+
       const hudEl = document.getElementById("tv_hud");
       if (hudEl) {{
         const cTxt = d.candles.length ? d.candles[d.candles.length-1].close : "-";
@@ -1456,7 +1547,16 @@ if nav_menu == "⚡ 무무 실시간 차트":
           (d.pw ? ` · <span style="color:#ef4444;">PW $${{d.pw}}</span>` : "") +
           (d.zg ? ` · <span style="color:#f59e0b;">γ $${{d.zg}}</span>` : "");
       }}
+      let syncingX = false;
       chart.subscribeCrosshairMove(param => {{
+        if (!syncingX) {{
+          syncingX = true;
+          subLinks.forEach(lk => {{
+            if (param && param.time) lk.c.setCrosshairPosition(0, param.time, lk.s);
+            else lk.c.clearCrosshairPosition();
+          }});
+          syncingX = false;
+        }}
         if (!hudEl || !param || !param.time) return;
         const bar = param.seriesData.get(cs);
         if (!bar) return;
@@ -1464,6 +1564,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
         const colP = bar.close >= bar.open ? "#10b981" : "#ef4444";
         hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 ${{bar.open}} 고 ${{bar.high}} 저 ${{bar.low}} 종 <b style="color:${{colP}};">${{bar.close}} (${{chgP}}%)`;
       }});
+      subLinks.forEach(lk => lk.c.subscribeCrosshairMove(param => {{
+        if (syncingX) return;
+        syncingX = true;
+        if (param && param.time) {{
+          chart.setCrosshairPosition(0, param.time, cs);
+          subLinks.forEach(o => {{ if (o.c !== lk.c) o.c.setCrosshairPosition(0, param.time, o.s); }});
+        }} else {{
+          chart.clearCrosshairPosition();
+          subLinks.forEach(o => {{ if (o.c !== lk.c) o.c.clearCrosshairPosition(); }});
+        }}
+        syncingX = false;
+      }}));
       chart.timeScale().fitContent();
       const initR = chart.timeScale().getVisibleLogicalRange();
       subCharts.forEach(sc => {{ if (initR) sc.timeScale().setVisibleLogicalRange(initR); else sc.timeScale().fitContent(); }});
@@ -1485,7 +1597,6 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }}
       }}));
       setTimeout(drawVpvr, 250);
-
       // 그리기 도구 (붓 / 추세선 / 수평선 / 메모) + localStorage 저장
       const drCv = document.getElementById("tv_draw");
       const drCtx = drCv.getContext("2d");
