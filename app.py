@@ -263,6 +263,7 @@ MENU_ITEMS = [
     "📰 뉴스 (7선)",
     "⚡ 무무 실시간 차트",
     "📌 다음 주·원월 포지션",
+    "📰 대형 옵션 체결",
     "🎯 행사가별·동반 체결",
     "📬 인사이더 파이낸셜",
     "📅 구글 캘린더",
@@ -3912,7 +3913,7 @@ def parse_tg_big_flows(raw_text):
     records = []
     flip_val = None
     pat = re.compile(
-        r"([🟢🔴🟡])\s*([A-Z]{1,6})\s+(\d+(?:\.\d+)?)([CP])\s+(\d{2}-\d{2}(?:-\d{2})?)\s+(BUY|SELL)\s+\$([\d\.]+)([MK])\s*[·\-]\s*([\d,]+)계약\s*[·\-]\s*(.+)"
+        r"([🟢🔴🟡⚪])\s*([A-Z]{1,6})\s+(\d+(?:\.\d+)?)([CP])\s+(\d{2}-\d{2}(?:-\d{2})?)\s+(BUY|SELL|MID|-)\s+\$([\d\.]+)([MK])\s*[·\-]\s*([\d,]+)계약\s*[·\-]\s*(.+)"
     )
     flip_pat = re.compile(r"플립\(([\d\.]+)\)")
     for line in (raw_text or "").splitlines():
@@ -3946,6 +3947,298 @@ def parse_tg_big_flows(raw_text):
             records[-1]["notes"].append(s)
     return records, flip_val
 
+
+
+if nav_menu == "📰 대형 옵션 체결":
+    st.title("📰 대형 옵션 체결 · 신규/증가")
+    st.caption("텔레그램 큰 옵션 체결 + 구글 시트 대형 스윕($500K+)을 한눈에 표로 정리하고, 방향성·지지/저항·AI 해석을 생성해 텔레그램·캘린더로 바로 보냅니다.")
+
+    _big_seed_flag = os.path.expanduser("~/.optionhub_big_seed_pltr_v1")
+    saved_big_flows = load_json_file(BIG_FLOWS_PATH, [])
+    if not os.path.exists(_big_seed_flag):
+        _pltr_seed_raw = """🚨 큰 옵션 체결 12건
+🔴 PLTR 175C 11-20 SELL $2.46M · 10040계약 · CALL OVERWRITE/SALE
+🔴 PLTR 162.5P 11-20 BUY $672.0K · 2358계약 · SPECULATIVE LONG
+   📍 플립(162.3) 아래 이탈 베팅
+🔴 PLTR 160P 11-20 BUY $869.3K · 4062계약 · SPECULATIVE LONG
+   📍 플립(162.3) 아래 이탈 베팅
+🔴 PLTR 170C 11-20 SELL $4.41M · 10139계약 · PREMIUM SALE
+🟢 PLTR 177.5C 11-20 BUY $1.57M · 8819계약 · SPECULATIVE LONG
+🔴 PLTR 165P 11-20 BUY $742.1K · 1979계약 · SPECULATIVE LONG
+⚪ PLTR 172.5C 11-20 MID $2.81M · 8377계약 · UNCLEAR FLOW
+🟢 PLTR 155P 12-18 SELL $870.6K · 1795계약 · PREMIUM SALE
+🟢 PLTR 167.5C 11-20 BUY $567.8K · 1005계약 · DIRECTIONAL FLOW
+⚪ PLTR 180C 11-20 MID $1.19M · 9422계약 · UNCLEAR FLOW
+🔴 PLTR 165C 11-20 SELL $2.96M · 4187계약 · PREMIUM SALE
+🟢 PLTR 167.5P 11-20 SELL $508.8K · 1069계약 · PREMIUM SALE"""
+        _p_recs, _p_flip = parse_tg_big_flows(_pltr_seed_raw)
+        if _p_recs:
+            _has_pltr = any(b.get("tk") == "PLTR" and len(b.get("records", [])) >= 10 for b in saved_big_flows)
+            if not _has_pltr:
+                saved_big_flows.insert(0, {
+                    "tk": "PLTR",
+                    "ts": "2026-11-16 01:30",
+                    "flip": _p_flip,
+                    "raw": _pltr_seed_raw,
+                    "records": _p_recs,
+                })
+                save_json_file(BIG_FLOWS_PATH, saved_big_flows[:50])
+        try:
+            with open(_big_seed_flag, "w", encoding="utf-8") as _bf:
+                _bf.write("1")
+        except Exception:
+            pass
+
+    with st.expander("📋 텔레그램 '🚨 큰 옵션 체결' 붙여넣기 · 자동 파싱 저장", expanded=False):
+        _big_paste = st.text_area(
+            "큰 옵션 체결 메시지 붙여넣기",
+            height=150,
+            placeholder="🚨 큰 옵션 체결 12건\n🔴 PLTR 175C 11-20 SELL $2.46M · 10040계약 · CALL OVERWRITE/SALE ...",
+            key="big_page_paste",
+        )
+        if st.button("⚡ 파싱 및 대형 옵션 체결 표에 추가", type="primary", key="btn_big_page_parse"):
+            _recs, _flp = parse_tg_big_flows(_big_paste)
+            if _recs:
+                _by_tk = {}
+                for _rr in _recs:
+                    _by_tk.setdefault(_rr["tk"], []).append(_rr)
+                _now_s = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M")
+                for _btk, _brecs in _by_tk.items():
+                    saved_big_flows.insert(0, {
+                        "tk": _btk,
+                        "ts": _now_s,
+                        "flip": _flp,
+                        "raw": _big_paste,
+                        "records": _brecs,
+                    })
+                save_json_file(BIG_FLOWS_PATH, saved_big_flows[:50])
+                st.success(f"✅ {len(_recs)}건 파싱 완료! ({', '.join(_by_tk.keys())})")
+                st.rerun()
+            else:
+                st.warning("인식된 옵션 체결 행이 없습니다. 형식을 확인해 주세요.")
+
+    # 통합 레코드 구성 (저장된 큰 옵션 체결 + 구글 시트 대형 스윕)
+    _merged_rows = []
+    _seen_keys = set()
+    for _blk in saved_big_flows:
+        _flp_v = _blk.get("flip")
+        _ts_v = _blk.get("ts", "")
+        for _r in _blk.get("records", []):
+            _rk = f"{_r.get('tk')}|{_r.get('strike')}|{_r.get('cp')}|{_r.get('exp')}|{_r.get('side')}|{_r.get('prem_str')}"
+            if _rk in _seen_keys:
+                continue
+            _seen_keys.add(_rk)
+            _em = _r.get("emoji", "⚪")
+            _cp = _r.get("cp", "Call")
+            _sd = _r.get("side", "MID")
+            _tag = _r.get("tag", "")
+            _notes = " · ".join(_r.get("notes") or [])
+            # 자동 한국어 해석 생성
+            if _notes:
+                _interp = _notes
+            elif _cp == "Call" and _sd == "SELL":
+                _interp = f"콜 매도 저항 (상방 캡) · {_tag}"
+            elif _cp == "Call" and _sd == "BUY":
+                _interp = f"콜 매수 강세 베팅 · {_tag}"
+            elif _cp == "Put" and _sd == "BUY":
+                _interp = (f"플립({_flp_v}) 하방 이탈 베팅 · " if _flp_v else "하락 방어·풋 매수 · ") + _tag
+            elif _cp == "Put" and _sd == "SELL":
+                _interp = f"풋 매도 하단 지지 방어 · {_tag}"
+            else:
+                _interp = f"방향 중립/혼조 (MID) · OI 변화 확인 필요"
+            _sent = "강세" if _em == "🟢" else ("약세" if _em == "🔴" else "중립")
+            _merged_rows.append({
+                "tk": _r.get("tk", ""),
+                "exp": _r.get("exp", ""),
+                "status": "신규",
+                "strike": _r.get("strike", 0),
+                "cp": _cp,
+                "side": _sd,
+                "qty": int(_r.get("qty", 0)),
+                "prem_m": float(_r.get("prem_m", 0.0)),
+                "prem_str": _r.get("prem_str", ""),
+                "emoji": _em,
+                "sent": _sent,
+                "interp": _interp,
+                "flip": _flp_v,
+                "ts": _ts_v,
+            })
+
+    # 구글 시트 대형 스윕($0.5M 이상) 병합
+    for _sr in (all_raw_flows or []):
+        try:
+            _pm_s = str(_sr[14] if len(_sr) > 14 else "").replace("$", "").replace(",", "").strip().upper()
+            _pm_v = float(_pm_s[:-1]) if _pm_s.endswith("M") else (float(_pm_s[:-1]) / 1000.0 if _pm_s.endswith("K") else 0.0)
+        except Exception:
+            _pm_v = 0.0
+        if _pm_v < 0.5:
+            continue
+        _stk = str(_sr[1]).upper()
+        _scp = "Call" if "C" in str(_sr[3]).upper() else "Put"
+        _ssd = "BUY" if "A" in str(_sr[4]) else ("SELL" if "B" in str(_sr[4]) else "MID")
+        _sexp = str(_sr[5])
+        try:
+            _sk = float(str(_sr[7]).replace("$", "").replace(",", "").strip())
+        except Exception:
+            _sk = 0.0
+        try:
+            _sqty = int(float(_sr[15])) if len(_sr) > 15 and str(_sr[15]).replace(".", "", 1).isdigit() else 0
+        except Exception:
+            _sqty = 0
+        _rk = f"{_stk}|{_sk}|{_scp}|{_sexp}|{_ssd}|{_pm_s}"
+        if _rk in _seen_keys:
+            continue
+        _seen_keys.add(_rk)
+        _is_bull = (_scp == "Call" and _ssd == "BUY") or (_scp == "Put" and _ssd == "SELL")
+        _is_bear = (_scp == "Call" and _ssd == "SELL") or (_scp == "Put" and _ssd == "BUY")
+        _sem = "🟢" if _is_bull else ("🔴" if _is_bear else "⚪")
+        _ssent = "강세" if _is_bull else ("약세" if _is_bear else "중립")
+        _stag = str(_sr[13]) if len(_sr) > 13 else "시트 대형 스윕"
+        _sinterp = ("콜 매수 상방 베팅" if (_scp == "Call" and _ssd == "BUY") else
+                    "콜 매도 상방 저항" if (_scp == "Call" and _ssd == "SELL") else
+                    "풋 매도 하단 지지" if (_scp == "Put" and _ssd == "SELL") else
+                    "풋 매수 하락 베팅" if (_scp == "Put" and _ssd == "BUY") else "중립 스윕") + f" · {_stag}"
+        _merged_rows.append({
+            "tk": _stk,
+            "exp": _sexp,
+            "status": "증가",
+            "strike": _sk,
+            "cp": _scp,
+            "side": _ssd,
+            "qty": _sqty,
+            "prem_m": round(_pm_v, 3),
+            "prem_str": f"${_pm_v:.2f}M",
+            "emoji": _sem,
+            "sent": _ssent,
+            "interp": _sinterp,
+            "flip": None,
+            "ts": str(_sr[0]),
+        })
+
+    _all_big_tks = sorted({r["tk"] for r in _merged_rows if r["tk"]})
+    _fc1, _fc2, _fc3 = st.columns([1.4, 1.4, 1.4])
+    _sel_big_tk = _fc1.selectbox("종목 필터", ["전체"] + _all_big_tks, index=(1 if "PLTR" in _all_big_tks and _all_big_tks[0] == "PLTR" else 0), key="big_tk_sel")
+    _sel_big_dir = _fc2.selectbox("방향 필터", ["전체", "🟢 강세", "🔴 약세", "⚪ 중립(MID)"], key="big_dir_sel")
+    _min_prem_m = _fc3.slider("최소 프리미엄 ($M)", 0.0, 10.0, 0.5, 0.1, key="big_min_prem")
+
+    _f_rows = [
+        r for r in _merged_rows
+        if (_sel_big_tk == "전체" or r["tk"] == _sel_big_tk)
+        and (_sel_big_dir == "전체" or (_sel_big_dir.startswith("🟢") and r["sent"] == "강세") or (_sel_big_dir.startswith("🔴") and r["sent"] == "약세") or (_sel_big_dir.startswith("⚪") and r["sent"] == "중립"))
+        and r["prem_m"] >= _min_prem_m
+    ]
+    _f_rows.sort(key=lambda x: x["prem_m"], reverse=True)
+
+    _bull_sum = sum(r["prem_m"] for r in _f_rows if r["sent"] == "강세")
+    _bear_sum = sum(r["prem_m"] for r in _f_rows if r["sent"] == "약세")
+    _mid_sum = sum(r["prem_m"] for r in _f_rows if r["sent"] == "중립")
+    _overall_lbl = "강세 우위" if _bull_sum > _bear_sum * 1.25 else ("약세·상방 캡 우위" if _bear_sum > _bull_sum * 1.25 else "한쪽으로 쏠리지 않음 (양방향)")
+
+    # 종목별 요약 계산
+    _tk_summary_lines = []
+    _by_tk_grp = {}
+    for _r in _f_rows:
+        _by_tk_grp.setdefault(_r["tk"], []).append(_r)
+    for _gtk, _glist in sorted(_by_tk_grp.items(), key=lambda kv: sum(x["prem_m"] for x in kv[1]), reverse=True)[:6]:
+        _gbull = sum(x["prem_m"] for x in _glist if x["sent"] == "강세")
+        _gbear = sum(x["prem_m"] for x in _glist if x["sent"] == "약세")
+        _gdir = "강세 우위" if _gbull > _gbear * 1.25 else ("약세 우위" if _gbear > _gbull * 1.25 else "양방향")
+        _put_ks = sorted({x["strike"] for x in _glist if x["cp"] == "Put" and x["strike"] > 0})
+        _call_ks = sorted({x["strike"] for x in _glist if x["cp"] == "Call" and x["strike"] > 0})
+        _sup_s = f"{_put_ks[0]:g}" if _put_ks else "-"
+        _res_s = f"{_call_ks[0]:g}·{_call_ks[-1]:g}" if len(_call_ks) >= 2 else (f"{_call_ks[0]:g}" if _call_ks else "-")
+        _flp_g = next((x["flip"] for x in _glist if x.get("flip")), None)
+        _flp_txt = f" · 플립 {_flp_g}" if _flp_g else ""
+        _tk_summary_lines.append(f"• **{_gtk} {_gdir}** (강세 ${_gbull:.2f}M · 약세 ${_gbear:.2f}M) → 지지 ${_sup_s} / 저항 ${_res_s}{_flp_txt}")
+
+    # 상단 액션 버튼
+    _ab1, _ab2, _ab3 = st.columns(3)
+    if _ab1.button("🤖 Gemini AI 상세 해석", use_container_width=True, key="btn_big_ai"):
+        with st.spinner("Gemini가 대형 옵션 체결 수급을 분석 중입니다..."):
+            _sample_lines = "\n".join(
+                f"{r['emoji']} {r['tk']} {r['strike']:g}{r['cp'][0]} {r['exp']} {r['side']} {r['prem_str']} ({r['qty']:,}계약) - {r['interp']}"
+                for r in _f_rows[:25]
+            )
+            _ai_pr = f"다음 미국 주식 대형 옵션 체결 목록을 한국어 트레이더 관점에서 요약(강세/약세 우위, 주요 지지·저항 행사가, 감마 플립, 매매 전략)해 주세요:\n\n{_sample_lines}"
+            _, _ai_res = run_ai_analysis(_ai_pr)
+            st.session_state["big_ai_summary_txt"] = _ai_res
+    if _ab2.button("📩 텔레그램 전송", use_container_width=True, key="btn_big_tg"):
+        _tg_hdr = f"📰 *대형 옵션 체결 · {_sel_big_tk} ({len(_f_rows)}건)*\n"
+        _tg_top = "\n".join(f"• {r['emoji']} {r['tk']} {r['strike']:g}{r['cp'][0]} {r['exp']} {r['prem_str']} {r['side']}" for r in _f_rows[:12])
+        _tg_bot = f"\n\n전체: 강세 ${_bull_sum:.2f}M vs 약세 ${_bear_sum:.2f}M → {_overall_lbl}\n" + "\n".join(_tk_summary_lines).replace("**", "*")
+        if send_telegram_msg(tg_token, tg_chat_id, _tg_hdr + _tg_top + _tg_bot)[0]:
+            st.toast("✅ 텔레그램 전송 완료!")
+        else:
+            st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
+    if _ab3.button("📅 캘린더 등록 (해석 포함)", use_container_width=True, key="btn_big_cal"):
+        import hashlib as _hs_b
+        _gcal_p = os.path.expanduser("~/.optionhub_gcal_events.json")
+        _gcal_list = load_json_file(_gcal_p, [])
+        _gcal_idx = {e.get("id"): i for i, e in enumerate(_gcal_list) if e.get("id")}
+        _cal_cnt = 0
+        for _r in _f_rows[:20]:
+            _exp_raw = str(_r["exp"])
+            _exp_iso = f"2026-{_exp_raw}" if re.match(r"^\d{2}-\d{2}$", _exp_raw) else (_exp_raw[:10] if re.match(r"^202\d-\d{2}-\d{2}", _exp_raw) else "2026-11-20")
+            _cid = "big_" + _hs_b.md5(f"{_r['tk']}|{_r['strike']}|{_r['cp']}|{_exp_iso}|{_r['side']}".encode()).hexdigest()[:12]
+            _c_ev = {
+                "id": _cid,
+                "date": _exp_iso,
+                "summary": f"[대형 체결] {_r['emoji']} {_r['tk']} {_r['strike']:g}{_r['cp'][0]} {_r['side']} ({_r['prem_str']})",
+                "description": f"📌 [Gemini AI 해석]\n{_r['interp']}\n\n📊 [체결 상세]\n수량: {_r['qty']:,}계약 | 프리미엄: {_r['prem_str']} | 만기: {_exp_iso}",
+                "cal": "옵션 헷지 (풋)" if _r["sent"] == "약세" else "옵션 만기 (콜/전략)",
+            }
+            if _cid in _gcal_idx:
+                _gcal_list[_gcal_idx[_cid]] = _c_ev
+            else:
+                _gcal_list.append(_c_ev)
+            _cal_cnt += 1
+        save_json_file(_gcal_p, _gcal_list)
+        st.toast(f"✅ 구글 캘린더에 해석 포함 {_cal_cnt}건 등록 완료!")
+
+    # 다크 테마 테이블 렌더링 (스크린샷 1:1 스타일)
+    if _f_rows:
+        _trs = []
+        for _r in _f_rows[:60]:
+            _cp_cls = "background:#0f5132;color:#75b798;border:1px solid #198754;" if _r["cp"] == "Call" else "background:#58151c;color:#ea868f;border:1px solid #dc3545;"
+            _sd_cls = "color:#4ade80;font-weight:700;" if _r["side"] == "BUY" else ("color:#f87171;font-weight:700;" if _r["side"] == "SELL" else "color:#9aa0a6;font-weight:700;")
+            _st_cls = "background:#1e3a5f;color:#93c5fd;" if _r["status"] == "신규" else "background:#3b2f1e;color:#fcd34d;"
+            _k_lbl = f"{_r['strike']:g} {'CALL' if _r['cp']=='Call' else 'PUT'}"
+            _trs.append(
+                f"<tr style='border-bottom:1px solid #26292e;'>"
+                f"<td style='padding:8px 10px;font-weight:700;color:#fff;'>{_r['tk']}</td>"
+                f"<td style='padding:8px 10px;color:#9aa0a6;font-size:12.5px;'>{_r['exp']}</td>"
+                f"<td style='padding:8px 10px;'><span style='{_st_cls}padding:2px 7px;border-radius:4px;font-size:11.5px;font-weight:600;'>{_r['status']}</span></td>"
+                f"<td style='padding:8px 10px;'><span style='{_cp_cls}padding:3px 9px;border-radius:5px;font-size:12px;font-weight:700;display:inline-block;min-width:86px;text-align:center;'>{_k_lbl}</span></td>"
+                f"<td style='padding:8px 10px;{_sd_cls}'>{_r['side']}</td>"
+                f"<td style='padding:8px 10px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;'>{_r['qty']:,}</td>"
+                f"<td style='padding:8px 10px;text-align:right;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;'>{_r['prem_str']}</td>"
+                f"<td style='padding:8px 10px;color:#cbd5e1;font-size:12.5px;'>{_r['emoji']} {_r['interp']}</td>"
+                f"</tr>"
+            )
+        _tbl_html = (
+            "<div style='background:#0f1419;border:1px solid #26292e;border-radius:10px;overflow-x:auto;margin:8px 0 14px;'>"
+            "<table style='width:100%;border-collapse:collapse;font-size:13px;'>"
+            "<thead><tr style='background:#161b22;border-bottom:1px solid #30363d;color:#8b949e;text-align:left;font-size:12px;'>"
+            "<th style='padding:9px 10px;'>종목</th><th style='padding:9px 10px;'>EXP</th><th style='padding:9px 10px;'>상태</th>"
+            "<th style='padding:9px 10px;'>계약</th><th style='padding:9px 10px;'>BUY/SELL</th>"
+            "<th style='padding:9px 10px;text-align:right;'>수량</th><th style='padding:9px 10px;text-align:right;'>총 PREM</th>"
+            "<th style='padding:9px 10px;'>해석</th></tr></thead>"
+            f"<tbody>{''.join(_trs)}</tbody></table></div>"
+        )
+        st.markdown(_tbl_html, unsafe_allow_html=True)
+
+        # 하단 종합 요약 박스
+        with st.container(border=True):
+            st.markdown(
+                f"**전체: 강세 `${_bull_sum:.2f}M` vs 약세 `${_bear_sum:.2f}M`** (MID `${_mid_sum:.2f}M`) → **{_overall_lbl}**"
+            )
+            if _tk_summary_lines:
+                st.markdown("  \n".join(_tk_summary_lines))
+    else:
+        st.info("조건에 맞는 대형 옵션 체결이 없습니다. 필터를 조정하거나 위 붙여넣기 상자에서 체결 내역을 추가해 주세요.")
+
+    if st.session_state.get("big_ai_summary_txt"):
+        st.info(st.session_state["big_ai_summary_txt"])
 
 if nav_menu == "🎯 행사가별·동반 체결":
     st.title("🎯 행사가별 옵션 주문 & 만기 간 동반 체결 (무무 LV3 · ΔOI · 신규/청산/롤오버 · AI)")
