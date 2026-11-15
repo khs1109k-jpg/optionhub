@@ -2254,8 +2254,13 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
     tot_prem_usd = 0.0
 
     if not df_det.empty:
-        c_df = df_det[df_det["구분"] == "Call"]
-        p_df = df_det[df_det["구분"] == "Put"]
+        _df_valid = df_det.copy()
+        if spot_val > 0:
+            _df_near = _df_valid[(_df_valid["행사가"] >= spot_val * 0.40) & (_df_valid["행사가"] <= spot_val * 2.20)]
+            if not _df_near.empty:
+                _df_valid = _df_near
+        c_df = _df_valid[_df_valid["구분"] == "Call"]
+        p_df = _df_valid[_df_valid["구분"] == "Put"]
         if not c_df.empty:
             c_by_k = c_df.groupby("행사가").agg(oi=("OI", "sum"), gex=("GEX($M)", "sum"), vol=("거래량", "sum"))
             cw = float(c_by_k["gex"].idxmax()) if c_by_k["gex"].max() > 0 else float(c_by_k["oi"].idxmax())
@@ -2271,7 +2276,7 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
             tot_prem_usd = float(df_det["프리미엄($)"].sum())
 
         # GEX Flip
-        n_by_k = df_det.groupby("행사가")["GEX($M)"].sum().sort_index()
+        n_by_k = _df_valid.groupby("행사가")["GEX($M)"].sum().sort_index()
         cum = n_by_k.cumsum()
         ks = list(cum.index)
         vals = list(cum.values)
@@ -2285,7 +2290,7 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
             gex_flip = min(flips, key=lambda x: abs(x - spot_val))
 
         # Max Pain
-        all_ks = sorted(df_det["행사가"].unique())
+        all_ks = sorted(_df_valid["행사가"].unique())
         c_oi_map = c_df.groupby("행사가")["OI"].sum() if not c_df.empty else pd.Series(dtype=float)
         p_oi_map = p_df.groupby("행사가")["OI"].sum() if not p_df.empty else pd.Series(dtype=float)
         best_pain, best_k = None, spot_val
@@ -2296,9 +2301,12 @@ def _oi_pro_calc(oi_tk, snaps, df_det, spot_val, all_raw_flows, saved_big_flows)
                 best_pain, best_k = (cp_sum + pp_sum), float(kc)
         max_pain = best_k
 
-    vol_oi = round(tot_vol / tot_oi, 2) if tot_oi > 0 else 0.0
-    call_vol_oi = round(call_vol / call_oi, 2) if call_oi > 0 else 0.0
-    put_vol_oi = round(put_vol / put_oi, 2) if put_oi > 0 else 0.0
+    _c_oi_eff = float(c_df["OI"].sum()) if (not df_det.empty and not c_df.empty) else call_oi
+    _p_oi_eff = float(p_df["OI"].sum()) if (not df_det.empty and not p_df.empty) else put_oi
+    _t_oi_eff = _c_oi_eff + _p_oi_eff
+    vol_oi = round(tot_vol / _t_oi_eff, 2) if _t_oi_eff >= 10 else 0.0
+    call_vol_oi = round(call_vol / _c_oi_eff, 2) if _c_oi_eff >= 10 else 0.0
+    put_vol_oi = round(put_vol / _p_oi_eff, 2) if _p_oi_eff >= 10 else 0.0
 
     # Sheet + TG big flow signals for this ticker
     tk_flows = []
