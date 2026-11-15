@@ -56,6 +56,7 @@ JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
 
 
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
+BIG_FLOWS_PATH = os.path.expanduser("~/.optionhub_big_flows.json")
 
 def calc_zero_gamma(df_gex, spot=0.0):
     if isinstance(df_gex, list):
