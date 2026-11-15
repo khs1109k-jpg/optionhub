@@ -3951,6 +3951,90 @@ if nav_menu == "🎯 행사가별·동반 체결":
         """, unsafe_allow_html=True)
 
     # =========================================================
+    # [섹션 0] 전체 상황 한눈에 보기 (종합 포지션 & 행사가 TOP 10 맵)
+    # =========================================================
+    st.subheader(f"0️⃣ {tk_f} 전체 상황 한눈에 보기")
+    if not df_yf_f.empty:
+        _c_all = df_yf_f[df_yf_f["구분"] == "Call"]
+        _p_all = df_yf_f[df_yf_f["구분"] == "Put"]
+        _c_vol = int(_c_all["거래량"].sum())
+        _p_vol = int(_p_all["거래량"].sum())
+        _c_oi = int(_c_all["OI"].sum())
+        _p_oi = int(_p_all["OI"].sum())
+        _pc_vol = round(_p_vol / max(_c_vol, 1), 2)
+        _pc_oi = round(_p_oi / max(_c_oi, 1), 2)
+        _tot_gex = round(float(df_yf_f["GEX($M)"].sum()), 2)
+        _cw_f = float(_c_all.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _c_all.empty else 0.0
+        _pw_f = float(_p_all.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _p_all.empty else 0.0
+        _zg_f = calc_zero_gamma(df_yf_f, spot_live)
+        _gex_regime = "+GEX (변동성 억제 · 박스권)" if _tot_gex >= 0 else "-GEX (변동성 증폭 · 추세추종)"
+        _gex_col = "#10b981" if _tot_gex >= 0 else "#ef4444"
+        _sh_cnt = len(df_tk_sh) if not df_tk_sh.empty else 0
+        _tg_cnt = len(tg_hits)
+
+        _sum_row = (
+            f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+            f"<td style='padding:8px; color:#10b981; font-weight:700;'>{_c_vol:,} / {_c_oi:,}</td>"
+            f"<td style='padding:8px; color:#ef4444; font-weight:700;'>{_p_vol:,} / {_p_oi:,}</td>"
+            f"<td style='padding:8px;'>Vol {_pc_vol} · OI {_pc_oi}</td>"
+            f"<td style='padding:8px; color:#10b981; font-weight:700;'>${_cw_f:g}</td>"
+            f"<td style='padding:8px; color:#ef4444; font-weight:700;'>${_pw_f:g}</td>"
+            f"<td style='padding:8px; color:#fbbf24; font-weight:700;'>{f'${_zg_f:g}' if _zg_f else '-'}</td>"
+            f"<td style='padding:8px; color:{_gex_col}; font-weight:700;'>${_tot_gex:+.2f}M<br><span style='font-size:10px;'>{_gex_regime}</span></td>"
+            f"<td style='padding:8px;'>시트 {_sh_cnt}건 · TG {_tg_cnt}건</td>"
+            f"</tr>"
+        )
+        _render_dark_table(
+            f"{tk_f} · 전체 수급·감마 구조 요약",
+            f"무무 LV3 현재가 {f'${spot_live:,.2f}' if spot_live>0 else '-'} · {lv3_bias}",
+            ["콜 거래량 / OI", "풋 거래량 / OI", "P/C 비율", "Call Wall", "Put Wall", "Flip Gamma", "총 Net GEX", "수신 로그"],
+            [_sum_row]
+        )
+
+        # 행사가별 TOP 10 전체 맵
+        df_top10 = df_yf_f.copy()
+        if spot_live > 0:
+            df_top10 = df_top10[(df_top10["행사가"] >= spot_live * 0.70) & (df_top10["행사가"] <= spot_live * 1.30)]
+        if df_top10.empty:
+            df_top10 = df_yf_f.copy()
+        df_top10 = df_top10.sort_values(["거래량", "OI"], ascending=False).head(10)
+        _top_rows_html = []
+        for _, _rt in df_top10.iterrows():
+            _cp_c = "#10b981" if _rt["구분"] == "Call" else "#ef4444"
+            _vq = int(_rt["거래량"])
+            _oiq = int(_rt["OI"])
+            _voi = f"{round(_vq / max(_oiq, 1) * 100)}%" if _oiq > 0 else "-"
+            _role = []
+            if _cw_f and float(_rt["행사가"]) == _cw_f and _rt["구분"] == "Call":
+                _role.append("🟢CW")
+            if _pw_f and float(_rt["행사가"]) == _pw_f and _rt["구분"] == "Put":
+                _role.append("🔴PW")
+            if spot_live > 0 and abs(float(_rt["행사가"]) - spot_live) / spot_live <= 0.02:
+                _role.append("⚡ATM")
+            _role_s = " ".join(_role) if _role else "-"
+            _top_rows_html.append(
+                f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+                f"<td style='padding:5px;'>{_rt['만기일']}</td>"
+                f"<td style='padding:5px;'><span style='color:{_cp_c}; font-weight:700;'>{_rt['행사가']:g} {_rt['구분'].upper()}</span></td>"
+                f"<td style='padding:5px; font-weight:700;'>{_vq:,}</td>"
+                f"<td style='padding:5px;'>{_oiq:,}</td>"
+                f"<td style='padding:5px; color:#fbbf24;'>{_voi}</td>"
+                f"<td style='padding:5px;'>{_rt['IV(%)']:.1f}%</td>"
+                f"<td style='padding:5px;'>{_rt['Delta']:+.2f}</td>"
+                f"<td style='padding:5px; color:#38bdf8;'>${_rt['GEX($M)']:+.2f}M</td>"
+                f"<td style='padding:5px;'>${_rt['DEX($M)']:+.2f}M</td>"
+                f"<td style='padding:5px;'>{_role_s}</td></tr>"
+            )
+        _render_dark_table(
+            f"{tk_f} · 활성 행사가 TOP 10 전체 맵",
+            "당일 거래량 · OI 집중 상위 10개 계약 (±30% 구간)",
+            ["만기", "계약", "거래량", "기초 OI", "V / OI", "IV(%)", "Delta", "GEX($M)", "DEX($M)", "구간"],
+            _top_rows_html
+        )
+    else:
+        st.info("야후 실시간 옵션 체인 조회를 켜면 전체 요약 표와 TOP 10 행사가 맵이 표시됩니다.")
+
+    # =========================================================
     # [섹션 1] 만기 간 동반 체결 (같은 행사가 · 서로 다른 만기 동시 활성/시트 매칭)
     # =========================================================
     st.subheader("1️⃣ 만기 간 동반 체결 (캘린더 · 롤오버 · 스프레드)")
