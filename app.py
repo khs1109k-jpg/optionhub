@@ -898,6 +898,27 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if bp: bid_px_s = f"${float(bp):,.2f}"
         if ap: ask_px_s = f"${float(ap):,.2f}"
 
+    tot_net_g_mm = round(sum(float(x.get("net_g", 0) or 0) for x in opt_bars), 2) if opt_bars else 0.0
+    tot_c_oi_mm = sum(int(x.get("c_oi", 0) or 0) for x in opt_bars)
+    tot_p_oi_mm = sum(int(x.get("p_oi", 0) or 0) for x in opt_bars)
+    sent_score = int(round(tot_c_oi_mm / max(tot_c_oi_mm + tot_p_oi_mm, 1) * 100)) if opt_bars else 50
+    sent_lbl = "BULLISH" if sent_score >= 60 else ("BEARISH" if sent_score <= 40 else "NEUTRAL")
+    sent_col = "#10b981" if sent_score >= 60 else ("#ef4444" if sent_score <= 40 else "#f59e0b")
+    st.markdown(f"""
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; background:#0b101b; border:1px solid #1e293b; border-radius:8px; padding:8px 14px; margin-bottom:8px;">
+      <div><span style="font-size:11px;color:#94a3b8;">TOTAL NET GEX</span><br><b style="font-size:16px;color:{'#10b981' if tot_net_g_mm>=0 else '#ef4444'};">${tot_net_g_mm:+.2f}M</b></div>
+      <div><span style="font-size:11px;color:#94a3b8;">REGIME</span><br><b style="font-size:14px;color:{'#10b981' if tot_net_g_mm>=0 else '#ef4444'};">{'Positive GEX' if tot_net_g_mm>=0 else 'Negative GEX'}</b></div>
+      <div style="min-width:220px;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;">
+          <span style="color:#94a3b8;">0DTE SENTIMENT</span><span style="color:{sent_col};">{sent_lbl} ({sent_score}/100)</span>
+        </div>
+        <div style="height:8px;border-radius:4px;background:linear-gradient(90deg,#ef4444,#f59e0b,#10b981);position:relative;margin-top:4px;">
+          <div style="position:absolute;top:-3px;left:calc({sent_score}% - 4px);width:8px;height:14px;background:#fff;border-radius:2px;"></div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("현재가", f"${cur['px']:,.2f}" if cur["px"] else "-", f"{cur['chg']:+.2f}%" if cur["chg"] is not None else None)
     m2.metric("Bid / Ask", f"{bid_px_s} / {ask_px_s}")
@@ -917,15 +938,20 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_walls = c_o4.checkbox("옵션 레벨(벽·플립·1σ)", value=True, key="ed_walls")
             show_vpvr = c_o5.checkbox("매물대·콜풋막대", value=True, key="ed_vpvr")
             show_ichi = c_o6.checkbox("일목 구름·후행", value=True, key="ed_ichi")
-            st.markdown("**아래 보조지표 창**")
-            c_s1, c_s2, c_s3 = st.columns(3)
-            show_vol = c_s1.checkbox("거래량(Vol)", value=True, key="ed_vol")
-            show_cvd = c_s2.checkbox("CVD(누적델타)", value=True, key="ed_cvd")
-            show_bii = c_s3.checkbox("BII(체결강도)", value=True, key="ed_bii")
-            c_s4, c_s5, c_s6 = st.columns(3)
-            show_macd = c_s4.checkbox("MACD", value=True, key="ed_macd")
-            show_rsi = c_s5.checkbox("RSI", value=False, key="ed_rsi")
-            show_icc = c_s6.checkbox("역시계곡선", value=True, key="ed_icc")
+            st.markdown("**아래 보조지표 (순서 변경 · 추가/빼기)**")
+            sub_order = st.multiselect(
+                "선택한 순서대로 위→아래 배치 (× 눌러 빼기)",
+                ["CVD(누적델타)", "BII(체결강도)", "MACD", "RSI"],
+                default=["CVD(누적델타)", "BII(체결강도)", "MACD"],
+                key="ed_sub_order",
+            )
+            c_s1, c_s2 = st.columns(2)
+            show_vol = c_s1.checkbox("거래량(Vol · 주 차트 하단)", value=True, key="ed_vol")
+            show_icc = c_s2.checkbox("역시계곡선(아래 따로)", value=True, key="ed_icc")
+            show_cvd = "CVD(누적델타)" in sub_order
+            show_bii = "BII(체결강도)" in sub_order
+            show_macd = "MACD" in sub_order
+            show_rsi = "RSI" in sub_order
         with ed_r:
             st.markdown("**기간 설정**")
             bb_cfg = st.text_input("볼린저 (기간, σ)", "20,2", key="ed_bb_p")
@@ -1117,12 +1143,15 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
       <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:130px; height:460px; pointer-events:none; z-index:2;"></canvas>
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
-      <div id="tv_cvd" style="width:100%; height:{130 if show_cvd else 0}px; border-top:{'1px solid #2a2e39' if show_cvd else '0'};"></div>
-      <div id="tv_bii" style="width:100%; height:{130 if show_bii else 0}px; border-top:{'1px solid #2a2e39' if show_bii else '0'};"></div>
-      <div id="tv_macd" style="width:100%; height:{130 if show_macd else 0}px; border-top:{'1px solid #2a2e39' if show_macd else '0'};"></div>
-      <div id="tv_rsi" style="width:100%; height:{130 if show_rsi else 0}px; border-top:{'1px solid #2a2e39' if show_rsi else '0'};"></div>
+      {''.join([
+          '<div id="tv_cvd" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>' if x == "CVD(누적델타)" else
+          '<div id="tv_bii" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>' if x == "BII(체결강도)" else
+          '<div id="tv_macd" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>' if x == "MACD" else
+          '<div id="tv_rsi" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>'
+          for x in sub_order
+      ])}
       </div>
-      <canvas id="tv_rail" style="width:86px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
+      <canvas id="tv_rail" style="width:136px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
     </div>
     </div>
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -1197,53 +1226,56 @@ if nav_menu == "⚡ 무무 실시간 차트":
         vpCv.width = 160; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
         ctx.clearRect(0, 0, 160, mh);
+        if (d.vpvr && d.vpvr.length) {{
+          d.vpvr.forEach(b => {{
+            const y = cs.priceToCoordinate(b.p);
+            if (y === null || y < 0 || y > mh) return;
+            const w = Math.max(2, b.pct * 120);
+            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.35)" : "rgba(56,189,248,0.22)";
+            ctx.fillRect(0, y - 5, w, 10);
+          }});
+        }}
         if (d.opt_bars && d.opt_bars.length) {{
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
-            const wc = Math.round(b.c * 130);
-            const wp = Math.round(b.put * 130);
-            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.8)"; ctx.fillRect(0, y - 4, wp, 8); }}
-            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.85)"; ctx.fillRect(wp, y - 4, wc, 8); }}
-            if (wc + wp > 38) {{
+            const wc = Math.round(b.c * 115);
+            const wp = Math.round(b.put * 115);
+            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.85)"; ctx.fillRect(0, y - 3, wp, 6); }}
+            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.9)"; ctx.fillRect(wp, y - 3, wc, 6); }}
+            if (wc + wp > 34) {{
               ctx.font = "10px monospace"; ctx.fillStyle = "#e2e8f0";
               ctx.fillText("C " + b.c_m + "M · P " + b.p_m + "M", wc + wp + 3, y + 3);
             }}
           }});
-          return;
         }}
-        if (!d.vpvr.length) return;
-        d.vpvr.forEach(b => {{
-          const y = cs.priceToCoordinate(b.p);
-          if (y === null || y < 0 || y > mh) return;
-          const w = Math.max(2, b.pct * 115);
-          ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.55)" : "rgba(56,189,248,0.35)";
-          ctx.fillRect(0, y - 4, w, 8);
-        }});
       }}
       function drawRail() {{
         const rl = document.getElementById("tv_rail");
         if (!rl) return;
         const mh = elMain.clientHeight || 460;
-        rl.width = 86; rl.height = mh;
+        rl.width = 136; rl.height = mh;
         const rctx = rl.getContext("2d");
-        rctx.clearRect(0, 0, 86, mh);
-        rctx.fillStyle = "#64748b"; rctx.font = "bold 10px monospace";
-        rctx.fillText("Net γ", 6, 14); rctx.fillText("P/C", 52, 14);
-        rctx.strokeStyle = "#1e293b"; rctx.beginPath(); rctx.moveTo(44, 0); rctx.lineTo(44, mh); rctx.stroke();
+        rctx.clearRect(0, 0, 136, mh);
+        rctx.fillStyle = "#94a3b8"; rctx.font = "bold 10px monospace";
+        rctx.fillText("GEX", 22, 14); rctx.fillText("Net Flow", 78, 14);
+        rctx.strokeStyle = "#1e293b";
+        rctx.beginPath(); rctx.moveTo(68, 0); rctx.lineTo(68, mh); rctx.stroke();
+        rctx.strokeStyle = "rgba(148,163,184,0.25)";
+        rctx.beginPath(); rctx.moveTo(34, 18); rctx.lineTo(34, mh); rctx.moveTo(102, 18); rctx.lineTo(102, mh); rctx.stroke();
         if (!d.opt_bars || !d.opt_bars.length) return;
         const maxG = Math.max(...d.opt_bars.map(x => Math.abs(x.net_g || 0)), 0.1);
+        const maxOi = Math.max(...d.opt_bars.map(x => Math.abs((x.c_oi || 0) - (x.p_oi || 0))), 1);
         d.opt_bars.forEach(b => {{
           const y = cs.priceToCoordinate(b.p);
           if (y === null || y < 20 || y > mh - 8) return;
-          const gw = Math.max(2, Math.round(Math.abs(b.net_g || 0) / maxG * 34));
-          rctx.fillStyle = (b.net_g || 0) >= 0 ? "#10b981" : "#ef4444";
-          rctx.fillRect(6, y - 3, gw, 6);
-          const totOi = Math.max((b.c_oi || 0) + (b.p_oi || 0), 1);
-          const cw2 = Math.round((b.c_oi || 0) / totOi * 32);
-          const pw2 = Math.round((b.p_oi || 0) / totOi * 32);
-          rctx.fillStyle = "#10b981"; rctx.fillRect(48, y - 3, cw2, 6);
-          rctx.fillStyle = "#ef4444"; rctx.fillRect(48 + cw2, y - 3, pw2, 6);
+          const gw = Math.max(2, Math.round(Math.abs(b.net_g || 0) / maxG * 30));
+          if ((b.net_g || 0) >= 0) {{ rctx.fillStyle = "#10b981"; rctx.fillRect(34 - gw, y - 2, gw, 5); }}
+          else {{ rctx.fillStyle = "#ef4444"; rctx.fillRect(34, y - 2, gw, 5); }}
+          const netOi = (b.c_oi || 0) - (b.p_oi || 0);
+          const ow = Math.max(2, Math.round(Math.abs(netOi) / maxOi * 30));
+          if (netOi >= 0) {{ rctx.fillStyle = "#10b981"; rctx.fillRect(102 - ow, y - 2, ow, 5); }}
+          else {{ rctx.fillStyle = "#ef4444"; rctx.fillRect(102, y - 2, ow, 5); }}
         }});
       }}
 
