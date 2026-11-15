@@ -263,6 +263,7 @@ MENU_ITEMS = [
     "📰 뉴스 (7선)",
     "⚡ 무무 실시간 차트",
     "📌 다음 주·원월 포지션",
+    "🎯 행사가별·동반 체결",
     "📚 실피 자료실",
     "📂 옵션자료실"
 ]
@@ -3815,6 +3816,339 @@ if nav_menu == "📚 실피 자료실":
 
 
 # ================= TAB: OPTIONS ARCHIVE =================
+if nav_menu == "🎯 행사가별·동반 체결":
+    st.title("🎯 행사가별 옵션 주문 & 만기 간 동반 체결 (무무 LV3 · 시트 · 야후 · 텔레그램)")
+    st.caption("구글 시트 체결 내역 + 텔레그램 아카이브 + 야후 실시간 OI/GEX + 무무 주식 LV3 호가·스팟을 결합해 행사가별 누적·만기 간 동반 체결·과거 BTO/STO NOTE를 추적합니다.")
+
+    STRIKE_NOTE_PATH = os.path.expanduser("~/.optionhub_strike_notes.json")
+    strike_notes = load_json_file(STRIKE_NOTE_PATH, {})
+
+    # 무무 실시간 DB 조회
+    mm_q = {}
+    mm_bk = {}
+    _mm_db_f = os.path.expanduser("~/moomoo-hub/moomoo.db")
+    if os.path.exists(_mm_db_f):
+        try:
+            _c_f = sqlite3.connect(_mm_db_f, timeout=2.0)
+            for _s, _p, _ch, _v, _t, _r in _c_f.execute("SELECT sym, px, chg, vol, ts, raw FROM quotes").fetchall():
+                try:
+                    _rw = json.loads(_r) if _r else {}
+                except Exception:
+                    _rw = {}
+                mm_q[_s.replace("US.", "").upper()] = {"px": float(_p or 0), "chg": _ch, "vol": float(_v or 0), "ts": _t, "raw": _rw}
+            for _s, _k, _d in _c_f.execute("SELECT sym, kind, data FROM aux WHERE kind='book'").fetchall():
+                try:
+                    mm_bk[_s.replace("US.", "").upper()] = json.loads(_d)
+                except Exception:
+                    pass
+            _c_f.close()
+        except Exception:
+            pass
+
+    sheet_tks = sorted(df_all["티커"].dropna().astype(str).str.upper().unique().tolist()) if not df_all.empty and "티커" in df_all.columns else []
+    base_tks_f = ["SOXL", "NVDA", "VIX", "SPX", "QQQ", "TSLA", "MU", "AMD", "PLTR", "SMH", "IWM", "META", "AMZN", "AAPL"]
+    all_tks_f = list(dict.fromkeys(base_tks_f + sorted(list(mm_q.keys())) + sheet_tks))
+
+    fc1, fc2, fc3 = st.columns([1.2, 1.2, 1.6])
+    sel_tk_f = fc1.selectbox("종목 선택", all_tks_f, index=0, key="flow_stk_tk")
+    custom_tk_f = fc2.text_input("직접 입력 (선택)", "", placeholder="예: SOXL, VIX, BA", key="flow_stk_cus").strip().upper()
+    tk_f = custom_tk_f if custom_tk_f else sel_tk_f
+    use_yf_live = fc3.checkbox("야후 실시간 OI · GEX 결합 조회", value=True, key="flow_use_yf")
+
+    # 무무 LV3 실시간 상단 배너
+    qm = mm_q.get(tk_f, {})
+    bkm = mm_bk.get(tk_f, {})
+    bids_m = bkm.get("Bid") or bkm.get("bids") or []
+    asks_m = bkm.get("Ask") or bkm.get("asks") or []
+    b_qty = sum(int(x[1]) for x in bids_m[:5] if len(x) >= 2)
+    a_qty = sum(int(x[1]) for x in asks_m[:5] if len(x) >= 2)
+    lv3_bias = "매수 호가 우위" if b_qty > a_qty * 1.15 else ("매도 호가 우위" if a_qty > b_qty * 1.15 else "호가 균형")
+    spot_live = float(qm.get("px", 0) or 0)
+
+    # 야후 옵션 체인 조회
+    @st.cache_data(ttl=240, show_spinner=False)
+    def _fetch_flow_chain(t_sym):
+        return fetch_yahoo_oi(t_sym)
+
+    yf_rows, yf_spot, yf_err = ([], 0.0, "")
+    if use_yf_live:
+        yf_rows, yf_spot, yf_err = _fetch_flow_chain(tk_f)
+    if spot_live <= 0 and yf_spot > 0:
+        spot_live = float(yf_spot)
+
+    st.markdown(f"""
+    <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; background:#07111e; border:1px solid #1e3a5f; border-radius:8px; padding:10px 14px; margin-bottom:10px; font-family:monospace; font-size:13px;">
+      <span style="color:#f8fafc; font-weight:800; font-size:15px;">{tk_f}</span>
+      <span>무무 LV3 현재가: <b style="color:#38bdf8;">{f"${spot_live:,.2f}" if spot_live>0 else "-"}</b> {f"({qm['chg']:+.2f}%)" if qm.get('chg') is not None else ""}</span>
+      <span>무무 호가(Top5): <b style="color:#10b981;">Bid {b_qty:,}</b> / <b style="color:#ef4444;">Ask {a_qty:,}</b> · <span style="color:#fbbf24;">{lv3_bias}</span></span>
+      <span style="color:#94a3b8; font-size:11px;">※ 무무: 미국주식 LV3 실시간 연동 · 옵션 체인: 야후+시트+텔레그램</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 1) 구글 시트 내 해당 종목 플로우 추출
+    df_tk_sh = pd.DataFrame()
+    if not df_all.empty and "티커" in df_all.columns:
+        df_tk_sh = df_all[df_all["티커"].astype(str).str.upper() == tk_f].copy()
+
+    # 2) 야후 옵션 체인 정리
+    df_yf_f = pd.DataFrame(yf_rows) if yf_rows else pd.DataFrame()
+
+    # 텔레그램 아카이브 내 해당 종목 메시지
+    tg_arch_f = load_json_file(os.path.expanduser("~/.optionhub_tg_archive.json"), [])
+    tg_hits = [m for m in tg_arch_f if tk_f in (m.get("symbols") or []) or tk_f in (m.get("text") or "").upper()]
+
+    def _render_dark_table(title_main, sub_hdr, cols, rows_html, note_footer=""):
+        ths = "".join(f"<th style='padding:6px 8px; text-align:center; color:#7dd3fc; font-size:11px; border-bottom:1px solid #1e3a5f; white-space:nowrap;'>{c}</th>" for c in cols)
+        trs = "".join(rows_html)
+        st.markdown(f"""
+        <div style="background:#07111e; border:1px solid #1e3a5f; border-radius:8px; padding:12px 14px; margin-bottom:14px; font-family:'Segoe UI',sans-serif; overflow-x:auto;">
+          <div style="font-size:16px; font-weight:800; color:#f8fafc; margin-bottom:2px;">{title_main}</div>
+          <div style="font-size:12px; color:#38bdf8; font-weight:700; margin-bottom:8px;">{sub_hdr}</div>
+          <table style="width:100%; border-collapse:collapse; font-size:12px; color:#e2e8f0;">
+            <thead><tr style="background:#0d2538;">{ths}</tr></thead>
+            <tbody>{trs}</tbody>
+          </table>
+          {f"<div style='font-size:11px; color:#94a3b8; margin-top:6px;'>{note_footer}</div>" if note_footer else ""}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # =========================================================
+    # [섹션 1] 만기 간 동반 체결 (같은 행사가 · 서로 다른 만기 동시 활성/시트 매칭)
+    # =========================================================
+    st.subheader("1️⃣ 만기 간 동반 체결 (캘린더 · 롤오버 · 스프레드)")
+    cal_rows_html = []
+    # 우선 구글 시트에서 같은 행사가에 2개 이상 만기가 동시에 잡힌 경우 추출
+    sh_cal_hits = []
+    if not df_tk_sh.empty and "행사가" in df_tk_sh.columns and "만기일" in df_tk_sh.columns:
+        for (k_s, cp_s), g_s in df_tk_sh.groupby(["행사가", "구분"]):
+            exps_u = g_s["만기일"].dropna().astype(str).unique().tolist()
+            if len(exps_u) >= 2:
+                sh_cal_hits.append((k_s, cp_s, exps_u, g_s))
+
+    if sh_cal_hits:
+        k_s, cp_s, exps_u, g_s = sh_cal_hits[0]
+        tot_p_cal = float(g_s["프리미엄"].sum()) if "프리미엄" in g_s.columns else 0.0
+        for r_i, (exp_u, ge) in enumerate(g_s.groupby("만기일"), 1):
+            buy_q = int(ge[ge["매수/매도"].astype(str).str.contains("BUY|ASK|매수", case=False, na=False)]["수량"].sum()) if "매수/매도" in ge.columns and "수량" in ge.columns else 0
+            sell_q = int(ge[ge["매수/매도"].astype(str).str.contains("SELL|BID|매도", case=False, na=False)]["수량"].sum()) if "매수/매도" in ge.columns and "수량" in ge.columns else 0
+            tot_q = int(ge["수량"].sum()) if "수량" in ge.columns else len(ge)
+            unk_q = max(tot_q - buy_q - sell_q, 0)
+            oi_b = int(ge["OI"].max()) if "OI" in ge.columns and not ge["OI"].isna().all() else 0
+            q_oi = f"{round(tot_q / max(oi_b, 1) * 100)}%" if oi_b > 0 else "-"
+            prem_u = float(ge["프리미엄"].sum()) if "프리미엄" in ge.columns else 0.0
+            cp_col = "#10b981" if "CALL" in str(cp_s).upper() else "#ef4444"
+            cal_rows_html.append(
+                f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+                f"<td style='padding:6px;'>{str(exp_u)[:10]}</td>"
+                f"<td style='padding:6px;'><span style='border:1px solid {cp_col}; color:{cp_col}; padding:1px 6px; border-radius:4px; font-weight:700;'>{k_s} {str(cp_s).upper()}</span></td>"
+                f"<td style='padding:6px; color:#10b981;'>{buy_q:,}</td>"
+                f"<td style='padding:6px; color:#e2e8f0;'>{sell_q:,}</td>"
+                f"<td style='padding:6px; font-weight:700;'>{unk_q:,}</td>"
+                f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#fbbf24;'>#{r_i} {tot_q:,}</span></td>"
+                f"<td style='padding:6px;'>{oi_b:,}</td>"
+                f"<td style='padding:6px;'>{q_oi}</td>"
+                f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#fbbf24;'>${prem_u/1000:,.1f}K</span></td>"
+                f"<td style='padding:6px;'>-</td></tr>"
+            )
+        _render_dark_table(
+            f"{tk_f} · 시트 기준 만기 간 동반 체결",
+            f"{' ↔ '.join([str(e)[:10] for e in exps_u[:3]])} · {k_s} {cp_s} · PREM 합계 ${tot_p_cal:,.0f}",
+            ["EXP ET", "계약", "BUY", "SELL", "미정", "순위 / 수량", "기초 OI", "Q / OI", "순위 / PREM", "GEX · 1%"],
+            cal_rows_html,
+            "구글 시트 옵션 플로우 내역에서 동일 행사가·복수 만기 동시 체결을 자동 매칭했습니다."
+        )
+    elif not df_yf_f.empty:
+        # 야후 옵션 체인에서 동일 행사가·복수 만기 중 거래량 활발한 대표 계약 2~3만기 비교
+        df_yf_near = df_yf_f[df_yf_f["거래량"] > 0].copy()
+        if not df_yf_near.empty:
+            top_pair = df_yf_near.groupby(["행사가", "구분"]).filter(lambda g: g["만기일"].nunique() >= 2)
+            if not top_pair.empty:
+                best_k_cp = top_pair.groupby(["행사가", "구분"])["거래량"].sum().idxmax()
+                sub_p = top_pair[(top_pair["행사가"] == best_k_cp[0]) & (top_pair["구분"] == best_k_cp[1])].sort_values("거래량", ascending=False).head(3)
+                sub_p_prem_rank = sub_p["거래량"].rank(ascending=False, method="min").astype(int)
+                for idx_p, (_, rp) in enumerate(sub_p.iterrows(), 1):
+                    cp_col = "#10b981" if rp["구분"] == "Call" else "#ef4444"
+                    v_q = int(rp["거래량"])
+                    oi_b = int(rp["OI"])
+                    v_oi = f"{round(v_q / max(oi_b, 1) * 100)}%" if oi_b > 0 else "-"
+                    gex_m = float(rp.get("GEX($M)", 0) or 0)
+                    cal_rows_html.append(
+                        f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+                        f"<td style='padding:6px;'>{rp['만기일']}</td>"
+                        f"<td style='padding:6px;'><span style='border:1px solid {cp_col}; color:{cp_col}; padding:1px 6px; border-radius:4px; font-weight:700;'>{rp['행사가']:g} {rp['구분'].upper()}</span></td>"
+                        f"<td style='padding:6px; color:#94a3b8;'>-</td>"
+                        f"<td style='padding:6px; color:#94a3b8;'>-</td>"
+                        f"<td style='padding:6px; font-weight:700;'>{v_q:,}</td>"
+                        f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#fbbf24;'>#{idx_p} {v_q:,}</span></td>"
+                        f"<td style='padding:6px;'>{oi_b:,}</td>"
+                        f"<td style='padding:6px;'>{v_oi}</td>"
+                        f"<td style='padding:6px;'>#{sub_p_prem_rank.loc[rp.name]} · IV {rp['IV(%)']:.1f}%</td>"
+                        f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#38bdf8;'>${gex_m:+.2f}M</span></td></tr>"
+                    )
+                _render_dark_table(
+                    f"{tk_f} · 만기 간 동시 활성 계약 (야후 실시간 체인 기준)",
+                    f"{' ↔ '.join(sub_p['만기일'].tolist())} · {best_k_cp[0]:g} {best_k_cp[1].upper()} 동시 거래",
+                    ["EXP ET", "계약", "BUY", "SELL", "미정(거래량)", "순위 / 수량", "기초 OI", "V / OI", "순위 / IV", "GEX · 1%"],
+                    cal_rows_html,
+                    "※ 실시간 틱 BUY/SELL 구분은 시트/유료 테이프 수신 시 자동 채워지며, 현재는 야후 당일 거래량·OI·GEX 기준입니다."
+                )
+    if not cal_rows_html:
+        st.info("현재 선택 종목에서 동일 행사가·복수 만기 동반 체결 데이터가 없습니다.")
+
+    # =========================================================
+    # [섹션 2] 행사가별 옵션 주문 (수신 계약 누적 · 주요 체결 시간순 · 과거 NOTE)
+    # =========================================================
+    st.subheader("2️⃣ 행사가별 옵션 주문 & 과거 NOTE (BTO/STO 이력)")
+    strike_choices = []
+    if not df_tk_sh.empty and "행사가" in df_tk_sh.columns:
+        strike_choices.extend([f"{float(r['행사가']):g} {str(r['구분']).upper()}" for _, r in df_tk_sh.iterrows() if pd.notna(r.get("행사가"))])
+    if not df_yf_f.empty:
+        top_yf_k = df_yf_f.sort_values("거래량", ascending=False).head(12)
+        strike_choices.extend([f"{float(r['행사가']):g} {r['구분'].upper()}" for _, r in top_yf_k.iterrows()])
+    strike_choices = list(dict.fromkeys(strike_choices)) or ["전체 상위"]
+
+    sc_sel1, sc_sel2 = st.columns([1.4, 2.6])
+    sel_k_lbl = sc_sel1.selectbox("집중 조회 행사가", strike_choices, key="flow_sel_k")
+
+    # 수신 계약 누적 표 (구글 시트 + 야후 결합)
+    acc_rows = []
+    detail_rows = []
+    if not df_yf_f.empty:
+        if sel_k_lbl != "전체 상위":
+            k_val_s, cp_val_s = sel_k_lbl.split(" ", 1)
+            df_y_sub = df_yf_f[(df_yf_f["행사가"] == float(k_val_s)) & (df_yf_f["구분"].str.upper() == cp_val_s)].copy()
+        else:
+            df_y_sub = df_yf_f.sort_values("거래량", ascending=False).head(6).copy()
+        for r_i, (_, ry) in enumerate(df_y_sub.sort_values("거래량", ascending=False).head(5).iterrows(), 1):
+            # 시트에서 동일 행사가/만기 매칭 시 BUY/SELL 합산
+            sh_b = sh_s = 0
+            if not df_tk_sh.empty and "행사가" in df_tk_sh.columns:
+                m_sh = df_tk_sh[(df_tk_sh["행사가"].astype(float) == float(ry["행사가"])) & (df_tk_sh["구분"].astype(str).str.upper() == ry["구분"].upper())]
+                if not m_sh.empty and "매수/매도" in m_sh.columns and "수량" in m_sh.columns:
+                    sh_b = int(m_sh[m_sh["매수/매도"].astype(str).str.contains("BUY|ASK|매수", case=False, na=False)]["수량"].sum())
+                    sh_s = int(m_sh[m_sh["매수/매도"].astype(str).str.contains("SELL|BID|매도", case=False, na=False)]["수량"].sum())
+            v_q = int(ry["거래량"])
+            unk_q = max(v_q - sh_b - sh_s, 0)
+            oi_b = int(ry["OI"])
+            v_oi = f"{round(v_q / max(oi_b, 1) * 100)}%" if oi_b > 0 else "-"
+            gex_m = float(ry.get("GEX($M)", 0) or 0)
+            cp_col = "#10b981" if ry["구분"] == "Call" else "#ef4444"
+            acc_rows.append(
+                f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+                f"<td style='padding:6px;'>{ry['만기일']}</td>"
+                f"<td style='padding:6px;'><span style='color:{cp_col}; font-weight:700;'>{ry['행사가']:g} {ry['구분'].upper()}</span></td>"
+                f"<td style='padding:6px; color:#10b981; font-weight:700;'>{sh_b:,}</td>"
+                f"<td style='padding:6px;'>{sh_s:,}</td>"
+                f"<td style='padding:6px; font-weight:700;'>{unk_q:,}</td>"
+                f"<td style='padding:6px;'>{oi_b:,}</td>"
+                f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#fbbf24;'>#{r_i} {v_q:,}</span></td>"
+                f"<td style='padding:6px;'>{v_oi}</td>"
+                f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#fbbf24;'>IV {ry['IV(%)']:.1f}%</span></td>"
+                f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#38bdf8;'>${gex_m:+.2f}M</span></td></tr>"
+            )
+    if acc_rows:
+        _render_dark_table(
+            f"{tk_f} · 행사가별 옵션 주문 ({sel_k_lbl})",
+            "수신 계약 누적 · 표시 계약 내 순위",
+            ["EXP ET", "계약", "BUY", "SELL", "미정", "기초 OI", "순위 / 수량", "V / OI", "IV(%)", "GEX · 1%"],
+            acc_rows,
+            f"Spot 기준: 무무 LV3 {f'${spot_live:,.2f}' if spot_live>0 else '-'}"
+        )
+
+    # 주요 체결 시간순 (구글 시트 + 텔레그램)
+    if not df_tk_sh.empty:
+        df_sh_sub = df_tk_sh.copy()
+        if sel_k_lbl != "전체 상위" and "행사가" in df_sh_sub.columns:
+            k_val_s, cp_val_s = sel_k_lbl.split(" ", 1)
+            m_sub = df_sh_sub[(df_sh_sub["행사가"].astype(float) == float(k_val_s)) & (df_sh_sub["구분"].astype(str).str.upper() == cp_val_s)]
+            if not m_sub.empty:
+                df_sh_sub = m_sub
+        for _, rs in df_sh_sub.head(10).iterrows():
+            t_s = str(rs.get("날짜", rs.get("체결시간", "-")))
+            e_s = str(rs.get("만기일", "-"))[:10]
+            k_str = f"{rs.get('행사가','-')} {str(rs.get('구분','')).upper()}"
+            side_s = str(rs.get("매수/매도", "미정"))
+            side_col = "#10b981" if any(w in side_s.upper() for w in ["BUY", "ASK", "매수"]) else ("#ef4444" if any(w in side_s.upper() for w in ["SELL", "BID", "매도"]) else "#94a3b8")
+            qty_s = int(rs.get("수량", 0) or 0)
+            oi_s = int(rs.get("OI", 0) or 0)
+            qv_s = f"{round(qty_s / max(oi_s, 1) * 100, 1)}%" if oi_s > 0 else "-"
+            oc_s = str(rs.get("비고", rs.get("OPEN/CLOSE", "미확정")))[:28]
+            prem_v = float(rs.get("프리미엄", 0) or 0)
+            detail_rows.append(
+                f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+                f"<td style='padding:6px;'>{t_s}</td>"
+                f"<td style='padding:6px;'>{e_s}</td>"
+                f"<td style='padding:6px; color:#10b981; font-weight:700;'>{k_str}</td>"
+                f"<td style='padding:6px; color:{side_col}; font-weight:700;'>{side_s}</td>"
+                f"<td style='padding:6px;'>{qty_s:,}</td>"
+                f"<td style='padding:6px;'>{qv_s}</td>"
+                f"<td style='padding:6px; color:#fbbf24;'>{oc_s}</td>"
+                f"<td style='padding:6px;'><span style='border:1px solid #b45309; padding:1px 6px; border-radius:4px; color:#fbbf24;'>${prem_v/1000:,.1f}K</span></td></tr>"
+            )
+    if detail_rows:
+        _render_dark_table(
+            f"{tk_f} · 주요 체결 · 시간순 (시트 플로우 기준)",
+            "시트 수신 내역 시간순 정렬",
+            ["시간", "EXP ET", "계약", "방향", "수량", "Q / OI", "OPEN / CLOSE", "PREM"],
+            detail_rows
+        )
+
+    # 과거 NOTE (BTO/STO 이력 + 수동 NOTE 추가)
+    note_key = f"{tk_f}_{sel_k_lbl}"
+    saved_notes = strike_notes.get(note_key, [])
+    note_rows = []
+    for sn in saved_notes:
+        note_rows.append(
+            f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+            f"<td style='padding:6px;'>{sn.get('date','-')}</td>"
+            f"<td style='padding:6px;'>{sn.get('exp','-')}</td>"
+            f"<td style='padding:6px; color:#10b981; font-weight:700;'>{sel_k_lbl}</td>"
+            f"<td style='padding:6px; color:#fbbf24;'>{sn.get('record','-')}</td>"
+            f"<td style='padding:6px;'>{sn.get('ratio','-')}</td></tr>"
+        )
+    if tg_hits:
+        for th in tg_hits[:3]:
+            note_rows.append(
+                f"<tr style='border-bottom:1px solid #13283d; text-align:center;'>"
+                f"<td style='padding:6px;'>{str(th.get('date','-'))[:10]}</td>"
+                f"<td style='padding:6px;'>텔레그램</td>"
+                f"<td style='padding:6px; color:#38bdf8;'>{tk_f}</td>"
+                f"<td style='padding:6px; text-align:left;'>{str(th.get('text',''))[:80]}</td>"
+                f"<td style='padding:6px;'>TG 보관</td></tr>"
+            )
+    if note_rows:
+        _render_dark_table(
+            "과거 NOTE · BTO / STO 누적 기록",
+            f"{tk_f} {sel_k_lbl} 과거 이력",
+            ["발표일", "EXP / 출처", "계약", "당시 기록 (BTO / STO / 메모)", "기록 수량 / 기준 OI"],
+            note_rows
+        )
+
+    with st.expander(f"📝 {tk_f} ({sel_k_lbl}) 과거 NOTE 추가하기", expanded=False):
+        nc1, nc2, nc3 = st.columns([1.0, 2.0, 1.2])
+        n_exp = nc1.text_input("만기일", "26-11-20", key="fn_exp")
+        n_rec = nc2.text_input("당시 기록 (BTO / STO / 메모)", "BTO 1,500 / STO 0", key="fn_rec")
+        n_rat = nc3.text_input("수량 / 기준 OI", "BTO 15.9% · OI 대비", key="fn_rat")
+        if st.button("💾 과거 NOTE 저장", key="fn_save"):
+            saved_notes.insert(0, {
+                "date": pd.Timestamp.now(tz="Asia/Seoul").strftime("%m-%d"),
+                "exp": n_exp.strip(),
+                "record": n_rec.strip(),
+                "ratio": n_rat.strip(),
+            })
+            strike_notes[note_key] = saved_notes
+            save_json_file(STRIKE_NOTE_PATH, strike_notes)
+            st.success("✅ 과거 NOTE가 저장되었습니다!")
+            st.rerun()
+
+    if st.button(f"📩 {tk_f} ({sel_k_lbl}) 요약 텔레그램 전송", key="flow_tg_send"):
+        msg_f = f"🎯 *[{tk_f} 행사가별·동반 체결]* ({sel_k_lbl})\n• 무무 LV3 현재가: ${spot_live:,.2f} ({lv3_bias})\n• Bid/Ask Top5: {b_qty:,} / {a_qty:,}"
+        if send_telegram_msg(msg_f):
+            st.success("✅ 텔레그램 전송 완료!")
+        else:
+            st.warning("⚠️ 텔레그램 설정을 확인해 주세요.")
+
+
 if nav_menu == "📂 옵션자료실":
     st.title("📂 옵션자료실 (GEX · 그릭스 · 옵션 전략 아카이브)")
     st.caption("옵션 리포트, GEX/HIRO/OI 분석 메모, 스크린샷 복사·붙여넣기(Ctrl+V), 전략 파일(PDF·엑셀·이미지)을 서버에 영구 저장합니다.")
