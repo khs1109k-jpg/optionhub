@@ -945,9 +945,15 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     mv_1d = ref_px_sig * (atm_iv_m / 100.0) / math.sqrt(252.0)
                     sig_h_lv = round(ref_px_sig + mv_1d, 2)
                     sig_l_lv = round(ref_px_sig - mv_1d, 2)
-            # 행사가별 Call/Put 강도 (거래량·|GEX| 기반 좌측 가로 막대)
-            grp_c = df_dm[df_dm["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum().abs() if "GEX($M)" in df_dm.columns else pd.Series(dtype=float)
-            grp_p = df_dm[df_dm["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum().abs() if "GEX($M)" in df_dm.columns else pd.Series(dtype=float)
+            # 행사가별 Call/Put 달러 유입 (프리미엄($) 우선, 없으면 거래량*100*옵션가 또는 |GEX|)
+            if "프리미엄($)" in df_dm.columns and df_dm["프리미엄($)"].sum() > 0:
+                df_dm["_flow_m"] = pd.to_numeric(df_dm["프리미엄($)"], errors="coerce").fillna(0.0) / 1e6
+            elif "거래량" in df_dm.columns and "현재가" in df_dm.columns:
+                df_dm["_flow_m"] = (pd.to_numeric(df_dm["거래량"], errors="coerce").fillna(0.0) * pd.to_numeric(df_dm["현재가"], errors="coerce").fillna(0.0) * 100.0) / 1e6
+            else:
+                df_dm["_flow_m"] = pd.to_numeric(df_dm.get("GEX($M)", 0), errors="coerce").fillna(0.0).abs()
+            grp_c = df_dm[df_dm["구분"] == "Call"].groupby("행사가")["_flow_m"].sum().abs()
+            grp_p = df_dm[df_dm["구분"] == "Put"].groupby("행사가")["_flow_m"].sum().abs()
             all_ks = sorted(set(grp_c.index.tolist()) | set(grp_p.index.tolist()))
             mx_cp = max([float(grp_c.get(k, 0)) + float(grp_p.get(k, 0)) for k in all_ks] + [1e-6])
             for k in all_ks:
@@ -957,7 +963,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     c_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Call")]["OI"].sum()) if "OI" in df_dm.columns else 0
                     p_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Put")]["OI"].sum()) if "OI" in df_dm.columns else 0
                     net_g_k = float(df_dm[df_dm["행사가"] == k]["GEX($M)"].sum()) if "GEX($M)" in df_dm.columns else 0.0
-                    opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 2), "p_m": round(pv, 2), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
+                    opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 4), "p_m": round(pv, 4), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
     if (not opt_bars) or (cw_lv is not None and pw_lv is not None and cw_lv == pw_lv):
         try:
             y_rows, y_sp = _cached_opt_snapshot(clean_tk)
@@ -979,8 +985,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
                             mv_y = sp_ref * (atm_iv_y / 100.0) / math.sqrt(252.0)
                             sig_h_lv = round(sp_ref + mv_y, 2)
                             sig_l_lv = round(sp_ref - mv_y, 2)
-                    yc = df_yd[df_yd["구분"] == "Call"].groupby("행사가")["GEX($M)"].sum().abs()
-                    yp = df_yd[df_yd["구분"] == "Put"].groupby("행사가")["GEX($M)"].sum().abs()
+                    if "프리미엄($)" in df_yd.columns and df_yd["프리미엄($)"].sum() > 0:
+                        df_yd["_flow_m"] = pd.to_numeric(df_yd["프리미엄($)"], errors="coerce").fillna(0.0) / 1e6
+                    elif "거래량" in df_yd.columns and "현재가" in df_yd.columns:
+                        df_yd["_flow_m"] = (pd.to_numeric(df_yd["거래량"], errors="coerce").fillna(0.0) * pd.to_numeric(df_yd["현재가"], errors="coerce").fillna(0.0) * 100.0) / 1e6
+                    else:
+                        df_yd["_flow_m"] = pd.to_numeric(df_yd.get("GEX($M)", 0), errors="coerce").fillna(0.0).abs()
+                    yc = df_yd[df_yd["구분"] == "Call"].groupby("행사가")["_flow_m"].sum().abs()
+                    yp = df_yd[df_yd["구분"] == "Put"].groupby("행사가")["_flow_m"].sum().abs()
                     yks = sorted(set(yc.index.tolist()) | set(yp.index.tolist()))
                     ymx = max([float(yc.get(k, 0)) + float(yp.get(k, 0)) for k in yks] + [1e-6])
                     for k in yks:
@@ -989,7 +1001,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                             c_oi = int(df_yd[(df_yd["행사가"] == k) & (df_yd["구분"] == "Call")]["OI"].sum())
                             p_oi = int(df_yd[(df_yd["행사가"] == k) & (df_yd["구분"] == "Put")]["OI"].sum())
                             net_g_k = float(df_yd[df_yd["행사가"] == k]["GEX($M)"].sum())
-                            opt_bars.append({"p": float(k), "c": round(cv / ymx, 3), "put": round(pv / ymx, 3), "c_m": round(cv, 2), "p_m": round(pv, 2), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
+                            opt_bars.append({"p": float(k), "c": round(cv / ymx, 3), "put": round(pv / ymx, 3), "c_m": round(cv, 4), "p_m": round(pv, 4), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
         except Exception:
             pass
 
@@ -1377,14 +1389,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_zg = c_l3.checkbox("감마플립", value=True, key="ed_zg")
             show_open_px = c_l4.checkbox("Open (시가)", value=True, key="ed_open_px")
             show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR)", value=True, key="ed_vpvr_vol")
-            show_ichi_cloud = c_o6.checkbox("일목 구름대(Cloud)", value=True, key="ed_ichi_cloud")
+            show_ichi_cloud = c_o6.checkbox("일목 구름대(Cloud)", value=False, key="ed_ichi_cloud")
             st.markdown("**일목균형표 세부 요소 (개별 넣기 · 빼기)**")
             ic_1, ic_2, ic_3, ic_4, ic_5 = st.columns(5)
-            show_tenkan = ic_1.checkbox("전환선(9)", value=True, key="ed_ichi_ten")
-            show_kijun = ic_2.checkbox("기준선(26)", value=True, key="ed_ichi_kij")
-            show_span_a = ic_3.checkbox("선행스팬1", value=True, key="ed_ichi_spa")
-            show_span_b = ic_4.checkbox("선행스팬2", value=True, key="ed_ichi_spb")
-            show_chikou = ic_5.checkbox("후행스팬", value=True, key="ed_ichi_chi")
+            show_tenkan = ic_1.checkbox("전환선(9)", value=False, key="ed_ichi_ten")
+            show_kijun = ic_2.checkbox("기준선(26)", value=False, key="ed_ichi_kij")
+            show_span_a = ic_3.checkbox("선행스팬1", value=False, key="ed_ichi_spa")
+            show_span_b = ic_4.checkbox("선행스팬2", value=False, key="ed_ichi_spb")
+            show_chikou = ic_5.checkbox("후행스팬", value=False, key="ed_ichi_chi")
             st.markdown("**아래 보조지표 (위로 ⬆️ · 아래로 ⬇️ · 빼기 ❌)**")
             if "mm_sub_order" not in st.session_state:
                 st.session_state["mm_sub_order"] = ["CVD(누적델타)", "BII(체결강도)", "MACD"]
@@ -1679,6 +1691,62 @@ if nav_menu == "⚡ 무무 실시간 차트":
             f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['note']}</td>"
             f"</tr>"
         )
+    if len(_stream_items) < 10:
+        try:
+            _y_rows_st, _ = _cached_opt_snapshot(clean_tk)
+            if _y_rows_st:
+                _df_yst = pd.DataFrame(_y_rows_st)
+                if "프리미엄($)" not in _df_yst.columns and "거래량" in _df_yst.columns and "현재가" in _df_yst.columns:
+                    _df_yst["프리미엄($)"] = pd.to_numeric(_df_yst["거래량"], errors="coerce").fillna(0) * pd.to_numeric(_df_yst["현재가"], errors="coerce").fillna(0) * 100
+                _df_yst = _df_yst.sort_values("프리미엄($)" if "프리미엄($)" in _df_yst.columns else "거래량", ascending=False)
+                for _, _yr in _df_yst.head(12 - len(_stream_items)).iterrows():
+                    _prm_v = float(_yr.get("프리미엄($)", 0) or 0)
+                    _prm_s = f"${_prm_v/1e6:.2f}M" if _prm_v >= 1e6 else (f"${_prm_v/1e3:.1f}K" if _prm_v >= 1e3 else f"${int(_prm_v)}")
+                    _vol_v = int(_yr.get("거래량", 0) or 0)
+                    _oi_v = int(_yr.get("OI", 0) or 0)
+                    _oi_s = f"{_oi_v/1e3:.1f}K" if _oi_v >= 1000 else str(_oi_v)
+                    _stream_items.append({
+                        "tm": "LIVE",
+                        "exp": str(_yr.get("만기", "-"))[-5:],
+                        "stk": f"{float(_yr.get('행사가', 0)):g}",
+                        "cp": "C" if "C" in str(_yr.get("구분", "")).upper() else "P",
+                        "bs": "BUY" if _vol_v > _oi_v else "FLOW",
+                        "prem": _prm_s,
+                        "vol": f"{_vol_v:,}",
+                        "cnt": "-",
+                        "oi": _oi_s,
+                        "note": str(_yr.get("Moneyness", "—")),
+                    })
+                _stream_rows_html = ""
+                for _si in _stream_items[:12]:
+                    _lv_tag = _match_lv_tag(_si["stk"])
+                    _cp_col = "#22c55e" if _si["cp"] == "C" else "#ef4444"
+                    _bs_col = "#22c55e" if _si["bs"] == "BUY" else "#cbd5e1"
+                    _row_bdr = ""
+                    if _si["bs"] == "BUY" and _si["cp"] == "C":
+                        _row_bdr = "outline:1px solid #22c55e; background:rgba(16,185,129,0.08);"
+                    elif _si["bs"] == "BUY" and _si["cp"] == "P" and _lv_tag != "—":
+                        _row_bdr = "outline:1px solid #ef4444; background:rgba(239,68,68,0.08);"
+                    elif _lv_tag != "—":
+                        _row_bdr = "background:rgba(245,158,11,0.04);"
+                    _lv_col = "#f59e0b" if _lv_tag != "—" else "#64748b"
+                    _stream_rows_html += (
+                        f"<tr style='border-bottom:1px solid #1e293b; {_row_bdr}'>"
+                        f"<td style='padding:3px 6px;color:#cbd5e1;'>{_si['tm']}</td>"
+                        f"<td style='padding:3px 6px;color:#cbd5e1;'>{_si['exp']}</td>"
+                        f"<td style='padding:3px 6px;color:#f87171;font-weight:700;'>{_si['stk']}</td>"
+                        f"<td style='padding:3px 6px;color:{_lv_col};font-weight:700;'>{_lv_tag}</td>"
+                        f"<td style='padding:3px 6px;color:{_cp_col};font-weight:700;'>{_si['cp']}</td>"
+                        f"<td style='padding:3px 6px;color:{_bs_col};font-weight:700;'>{_si['bs']}</td>"
+                        f"<td style='padding:3px 6px;color:#fbbf24;font-weight:700;'>{_si['prem']}</td>"
+                        f"<td style='padding:3px 6px;color:#cbd5e1;'>{_si['vol']}</td>"
+                        f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['cnt']}</td>"
+                        f"<td style='padding:3px 6px;color:#38bdf8;'>{_si['oi']}</td>"
+                        f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['note']}</td>"
+                        f"</tr>"
+                    )
+        except Exception:
+            pass
     if not _stream_rows_html:
         _stream_rows_html = "<tr><td colspan='11' style='padding:8px;text-align:center;color:#64748b;'>수집된 해당 티커 대형 옵션 체결 내역이 없습니다.</td></tr>"
 
@@ -1769,6 +1837,29 @@ if nav_menu == "⚡ 무무 실시간 차트":
       </div>
       <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
       </div>
+      <div id="tv_flow_box" style="background:#070b12; border-top:1px solid #1e293b; height:215px; overflow-y:auto; flex-shrink:0; font-family:monospace; font-size:11px;">
+        <table style="width:100%; border-collapse:collapse; text-align:center;">
+          <thead>
+            <tr style="background:#0c1322; color:#94a3b8; border-bottom:1px solid #1e293b; position:sticky; top:0;">
+              <th style="padding:4px 6px;">TIME (ET)</th>
+              <th style="padding:4px 6px;">EXP</th>
+              <th style="padding:4px 6px;">STRIKE</th>
+              <th style="padding:4px 6px;">LEVEL</th>
+              <th style="padding:4px 6px;">C/P</th>
+              <th style="padding:4px 6px;">B/S</th>
+              <th style="padding:4px 6px;">PREM</th>
+              <th style="padding:4px 6px;">Volume</th>
+              <th style="padding:4px 6px;">구간 체결</th>
+              <th style="padding:4px 6px;">OI (Δ)</th>
+              <th style="padding:4px 6px;">NOTE</th>
+            </tr>
+          </thead>
+          <tbody>{_stream_rows_html}</tbody>
+        </table>
+        <div style="padding:4px 8px; font-size:10px; color:#64748b; border-top:1px solid #1e293b;">
+          실시간 옵션 플로우 · Volume=해당 체결 수량 · 구간 체결=동일 계약 전체 횟수 · OI=확정 잔고
+        </div>
+      </div>
       <div style="padding-right:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; background:#080c14;">
       {''.join([
           '<div id="tv_cvd" style="width:100%; height:130px; border-top:1px solid #2a2e39;"></div>' if x == "CVD(누적델타)" else
@@ -1778,29 +1869,6 @@ if nav_menu == "⚡ 무무 실시간 차트":
           for x in sub_order
       ])}
       </div>
-      </div>
-    </div>
-    <div id="tv_flow_box" style="background:#070b12; border-top:1px solid #1e293b; height:215px; overflow-y:auto; flex-shrink:0; font-family:monospace; font-size:11px;">
-      <table style="width:100%; border-collapse:collapse; text-align:center;">
-        <thead>
-          <tr style="background:#0c1322; color:#94a3b8; border-bottom:1px solid #1e293b; position:sticky; top:0;">
-            <th style="padding:4px 6px;">TIME (ET)</th>
-            <th style="padding:4px 6px;">EXP</th>
-            <th style="padding:4px 6px;">STRIKE</th>
-            <th style="padding:4px 6px;">LEVEL</th>
-            <th style="padding:4px 6px;">C/P</th>
-            <th style="padding:4px 6px;">B/S</th>
-            <th style="padding:4px 6px;">PREM</th>
-            <th style="padding:4px 6px;">Volume</th>
-            <th style="padding:4px 6px;">구간 체결</th>
-            <th style="padding:4px 6px;">OI (Δ)</th>
-            <th style="padding:4px 6px;">NOTE</th>
-          </tr>
-        </thead>
-        <tbody>{_stream_rows_html}</tbody>
-      </table>
-      <div style="padding:4px 8px; font-size:10px; color:#64748b; border-top:1px solid #1e293b;">
-        실시간 옵션 플로우 · Volume=해당 체결 수량 · 구간 체결=동일 계약 전체 횟수 · OI=확정 잔고
       </div>
     </div>
     </div>
@@ -1970,10 +2038,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
           {{ p: d.pw, txt: (d.pw || "") + " GEX WALL PUT", col: "#cbd5e1", dash: [6, 4], xp: 0.42 }},
         ];
         const chartRight = Math.max(120, mw - 94);
+        let topClampY = 34, botClampY = mh - 46;
         lvSpecs.forEach(lv => {{
           if (!lv.p) return;
-          const y = cs.priceToCoordinate(Number(lv.p));
-          if (y === null || y < 12 || y > mh - 12) return;
+          let y = cs.priceToCoordinate(Number(lv.p));
+          if (y === null) return;
+          if (y < 24) {{ y = topClampY; topClampY += 18; }}
+          else if (y > mh - 36) {{ y = botClampY; botClampY -= 18; }}
           ctx.save();
           ctx.strokeStyle = lv.col;
           ctx.lineWidth = 1.3;
