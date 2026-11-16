@@ -4918,13 +4918,30 @@ if nav_menu == "🎯 행사가별·동반 체결":
             [_sum_row]
         )
 
-        # OPTION 전략 스타일 표: EXP ET | 계약 | 이전 OI | 최신 OI | ΔOI | 당일 수량 | |GEX|·1% | OPEN/CLOSE/롤오버 판정
-        df_top10 = df_yf_f.copy()
+        # OPTION 전략 스타일 표: 0DTE(단기) + 20일(월간/주간 만기) 균형 포함 + 만기 필터
+        _avail_exps = sorted(df_yf_f["만기일"].dropna().astype(str).str[:10].unique().tolist())
+        _exp_pick = st.selectbox(
+            "OPTION 전략 만기 필터 (기본: 단기 + 20일 등 주요 만기 함께 표시)",
+            ["전체 (단기 + 20일 주요 만기)"] + _avail_exps,
+            key=f"opt_strat_exp_{tk_f}",
+        )
+        df_top10_base = df_yf_f.copy()
         if spot_live > 0:
-            df_top10 = df_top10[(df_top10["행사가"] >= spot_live * 0.70) & (df_top10["행사가"] <= spot_live * 1.30)]
-        if df_top10.empty:
-            df_top10 = df_yf_f.copy()
-        df_top10 = df_top10.sort_values(["거래량", "OI"], ascending=False).head(10)
+            _near_base = df_top10_base[(df_top10_base["행사가"] >= spot_live * 0.70) & (df_top10_base["행사가"] <= spot_live * 1.30)]
+            if not _near_base.empty:
+                df_top10_base = _near_base
+        if _exp_pick != "전체 (단기 + 20일 주요 만기)":
+            df_top10 = df_top10_base[df_top10_base["만기일"].astype(str).str[:10] == _exp_pick].copy()
+            df_top10["_abs_gex"] = df_top10["GEX($M)"].abs()
+            df_top10 = df_top10.sort_values(["_abs_gex", "OI", "거래량"], ascending=False).head(12)
+        else:
+            _exp0 = _avail_exps[0] if _avail_exps else ""
+            _df_e0 = df_top10_base[df_top10_base["만기일"].astype(str).str[:10] == _exp0].sort_values(["거래량", "OI"], ascending=False).head(5)
+            _df_later = df_top10_base[df_top10_base["만기일"].astype(str).str[:10] != _exp0].copy()
+            _df_later["_abs_gex"] = _df_later["GEX($M)"].abs()
+            _df_later = _df_later.sort_values(["_abs_gex", "OI", "거래량"], ascending=False).head(6)
+            df_top10 = pd.concat([_df_e0, _df_later], ignore_index=True)
+        df_top10 = df_top10.sort_values(["만기일", "행사가"], ascending=[True, True])
         _top_rows_html = []
         for _, _rt in df_top10.iterrows():
             _cp_c = "#10b981" if _rt["구분"] == "Call" else "#f43f5e"
