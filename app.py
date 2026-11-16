@@ -749,6 +749,64 @@ if st.sidebar.button("🚀 오늘의 대형체결·문샷·뉴스 전체 전송"
 # ================= TAB 0: TODAY COMPREHENSIVE REVIEW =================
 
 # ================= TAB MOOMOO: REALTIME CHART & ORDERBOOK =================
+@st.cache_resource
+def _start_live_quote_server():
+    import threading, sqlite3
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    _db_p = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+
+    class _QHandler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+        def do_GET(self):
+            try:
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path != "/quote":
+                    self.send_response(404); self.end_headers(); return
+                qs = urllib.parse.parse_qs(parsed.query)
+                sym = (qs.get("sym", ["US.SOXL"])[0] or "US.SOXL").strip()
+                out = {"ok": False, "sym": sym}
+                if os.path.exists(_db_p):
+                    con_q = sqlite3.connect(f"file:{_db_p}?mode=ro", uri=True, timeout=2)
+                    row = con_q.execute("SELECT ts, data FROM quotes WHERE sym=?", (sym,)).fetchone()
+                    con_q.close()
+                    if row and row[1]:
+                        qd = json.loads(row[1])
+                        px = 0.0
+                        for ek in ("overnight_price", "after_price", "pre_price", "ext_price", "last_price", "px", "price"):
+                            v = float(qd.get(ek) or 0)
+                            if v > 0:
+                                px = v; break
+                        out = {
+                            "ok": px > 0,
+                            "sym": sym,
+                            "px": round(px, 2),
+                            "ts": int(row[0] or time.time()),
+                            "vol": float(qd.get("volume") or qd.get("vol") or 0),
+                        }
+                body = json.dumps(out).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_response(500); self.end_headers()
+
+    def _run():
+        try:
+            ThreadingHTTPServer(("0.0.0.0", 8502), _QHandler).serve_forever()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return True
+
+_start_live_quote_server()
+
 if nav_menu == "⚡ 무무 실시간 차트":
     import sqlite3
     import streamlit.components.v1 as components
@@ -1484,6 +1542,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     tv_payload = json.dumps({
         "tk": clean_tk,
+        "sym": sel_syn if q_map else f"US.{clean_tk}",
+        "tf_sec": tf_sec,
         "tf_cur": tf_opt,
         "tf_sets": tf_bundles,
         "candles": cur_bundle["candles"],
@@ -1867,8 +1927,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }}
         syncingX = false;
       }}));
-      if (d.candles && d.candles.length > 110) {{
-        chart.timeScale().setVisibleLogicalRange({{ from: d.candles.length - 110, to: d.candles.length + 4 }});
+      if (d.candles && d.candles.length > 80) {{
+        chart.timeScale().setVisibleLogicalRange({{ from: d.candles.length - 80, to: d.candles.length + 4 }});
       }} else {{
         chart.timeScale().fitContent();
       }}
@@ -2017,6 +2077,47 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }}
       document.addEventListener("fullscreenchange", syncSize);
       window.addEventListener("resize", syncSize);
+
+      // 2초마다 무무 실시간 시세를 직접 받아 마지막 캔들만 상하로 움직임 (화면 깜빡임 0%)
+      let liveLastBar = (d.candles && d.candles.length) ? Object.assign({{}}, d.candles[d.candles.length - 1]) : null;
+      let curTfSec = Number(d.tf_sec || 60);
+      document.querySelectorAll(".tv-tf").forEach(b => {{
+        b.addEventListener("click", () => {{
+          const m = {{"1분봉": 60, "5분봉": 300, "10분봉": 600, "15분봉": 900, "1일봉": 86400}};
+          curTfSec = m[b.dataset.tf] || 60;
+          const tfB = (d.tf_sets && d.tf_sets[b.dataset.tf]) ? d.tf_sets[b.dataset.tf] : null;
+          if (tfB && tfB.candles && tfB.candles.length) {{
+            liveLastBar = Object.assign({{}}, tfB.candles[tfB.candles.length - 1]);
+          }}
+        }});
+      }});
+      setInterval(async () => {{
+        try {{
+          if (!liveLastBar || curTfSec >= 86400) return;
+          const host = window.location.hostname || "127.0.0.1";
+          const resp = await fetch(`http://${{host}}:8502/quote?sym=${{encodeURIComponent(d.sym || "")}}`, {{ cache: "no-store" }});
+          if (!resp.ok) return;
+          const q = await resp.json();
+          if (!q || !q.ok || !q.px) return;
+          const px = Number(q.px);
+          const nowSec = Math.floor(Date.now() / 1000);
+          const barT = Math.floor(nowSec / curTfSec) * curTfSec;
+          if (barT > Number(liveLastBar.time)) {{
+            const prevC = Number(liveLastBar.close);
+            liveLastBar = {{ time: barT, open: prevC, high: Math.max(prevC, px), low: Math.min(prevC, px), close: px }};
+          }} else {{
+            liveLastBar.close = px;
+            liveLastBar.high = Math.max(Number(liveLastBar.high), px);
+            liveLastBar.low = Math.min(Number(liveLastBar.low), px);
+          }}
+          cs.update(liveLastBar);
+          if (hudEl) {{
+            const chgP = liveLastBar.open ? (((liveLastBar.close - liveLastBar.open) / liveLastBar.open) * 100).toFixed(2) : "0.00";
+            const colP = liveLastBar.close >= liveLastBar.open ? "#10b981" : "#ef4444";
+            hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 ${{liveLastBar.open}} 고 ${{liveLastBar.high}} 저 ${{liveLastBar.low}} 종 <b style="color:${{colP}};">${{liveLastBar.close}} (${{chgP}}%)</b> <span style="color:#10b981;">● LIVE</span>`;
+          }}
+        }} catch (e) {{}}
+      }}, 2000);
     </script>
     """
     components.html(tv_html, height=total_h)
