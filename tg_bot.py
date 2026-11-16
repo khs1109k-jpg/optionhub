@@ -35,6 +35,7 @@ INLINE_MENU = {
             {"text": "📅 실발 예상변동폭", "callback_data": "cmd:em"},
         ],
         [
+            {"text": "🚨 큰 옵션 체결", "callback_data": "cmd:big"},
             {"text": "🔥 $10M+ 대형체결", "callback_data": "cmd:scan"},
             {"text": "🎯 조용한 OI 급증", "callback_data": "cmd:oi"}, {"text": "🚀 Top 10 문샷", "callback_data": "cmd:moon"},
         ],
@@ -58,6 +59,7 @@ def set_bot_commands(token):
         {"command": "flow", "description": "🔥 종목별 옵션 플로우 (예: /flow TSLA)"},
         {"command": "oi", "description": "🎯 전일 대비 조용한 OI 급증 TOP 10"},
         {"command": "vol", "description": "⚡ 장중 실시간 Vol > OI 신규 매집 스캔"},
+        {"command": "big", "description": "🚨 큰 옵션 체결 생성·전송 (예: /big PLTR)"},
         {"command": "em", "description": "📅 실적 발표 D-10 예상 변동폭 · Wall"},
     ]
     try:
@@ -544,6 +546,68 @@ def handle_command(token, chat_id, text):
         if len(lines) == 1:
             lines.append("해당 종목의 기록이 없습니다.")
         send_msg(token, chat_id, "\n".join(lines))
+
+    elif low.startswith("/big") or cmd == "cmd:big":
+        parts = cmd.split()
+        tk_flt = parts[1].strip().upper() if (low.startswith("/big") and len(parts) >= 2) else ""
+        try:
+            sh_all = fetch_sheet_rows("전체") + fetch_sheet_rows("ES")
+        except Exception:
+            sh_all = []
+        items_out = []
+        seen_k = set()
+        # 1) Google Sheets flows ($500K+)
+        for sr in reversed(sh_all):
+            tk = str(sr.get("Ticker (티커)", "")).strip().upper()
+            if not tk or (tk_flt and tk != tk_flt):
+                continue
+            p_raw = str(sr.get("Premium (프리미엄)", "")).strip()
+            p_usd = parse_prem_usd(p_raw)
+            if p_usd < 500_000:
+                continue
+            k_s = str(sr.get("Strike Price (행사가)", "")).replace("$", "").replace(",", "").strip().rstrip(".")
+            cp_s = str(sr.get("Option Type (구분)", "Call")).strip()
+            cp_ch = "C" if "C" in cp_s.upper() else "P"
+            exp_s = str(sr.get("Expiration Date (만기일)", "")).strip()
+            exp_short = exp_s[5:10] if len(exp_s) >= 10 else exp_s
+            ch_s = str(sr.get("Characteristics (주문유형/특징)", "")).strip()
+            side_s = "BUY" if ("BUY" in ch_s.upper() or "ASK" in ch_s.upper() or "A" == ch_s.upper()[:1]) else ("SELL" if ("SELL" in ch_s.upper() or "BID" in ch_s.upper()) else "MID")
+            is_bull = (cp_ch == "C" and side_s == "BUY") or (cp_ch == "P" and side_s == "SELL")
+            is_bear = (cp_ch == "C" and side_s == "SELL") or (cp_ch == "P" and side_s == "BUY")
+            emo = "🟢" if is_bull else ("🔴" if is_bear else "⚪")
+            prem_lbl = f"${p_usd/1e6:.2f}M" if p_usd >= 1e6 else f"${p_usd/1e3:.1f}K"
+            uk = f"{tk}|{k_s}{cp_ch}|{exp_short}|{side_s}|{prem_lbl}"
+            if uk in seen_k:
+                continue
+            seen_k.add(uk)
+            tag_lbl = "SWEEP" if "SWEEP" in ch_s.upper() else ("BLOCK" if "BLOCK" in ch_s.upper() else (ch_s[:24] or "LARGE FLOW"))
+            items_out.append((p_usd, f"{emo} {tk} {k_s}{cp_ch} {exp_short} {side_s} {prem_lbl} · {tag_lbl}"))
+        # 2) Also include saved BIG_FLOWS_PATH records if sheet has fewer than 12
+        if os.path.exists(BIG_FLOWS_PATH):
+            try:
+                b_arr = json.load(open(BIG_FLOWS_PATH, "r", encoding="utf-8"))
+                for blk in b_arr:
+                    for r in blk.get("records", []):
+                        tk = str(r.get("tk", "")).upper()
+                        if tk_flt and tk != tk_flt:
+                            continue
+                        p_usd = float(r.get("prem_m", 0)) * 1e6
+                        cp_ch = "C" if r.get("cp") == "Call" else "P"
+                        uk = f"{tk}|{r.get('strike')}{cp_ch}|{r.get('exp')}|{r.get('side')}|{r.get('prem_str')}"
+                        if uk in seen_k:
+                            continue
+                        seen_k.add(uk)
+                        items_out.append((p_usd, f"{r.get('emoji','⚪')} {tk} {r.get('strike'):g}{cp_ch} {r.get('exp')} {r.get('side')} {r.get('prem_str')} · {r.get('qty',0):,}계약 · {r.get('tag','')}"))
+            except Exception:
+                pass
+        items_out.sort(key=lambda x: x[0], reverse=True)
+        top_items = [x[1] for x in items_out[:12]]
+        if top_items:
+            hdr = f"🚨 큰 옵션 체결 {len(top_items)}건" + (f" ({tk_flt})" if tk_flt else "")
+            ftr = "(🟢 = 콜 매수·풋 매도 강세 · 🔴 = 약세 · 🟡 = 헤지 후보)"
+            send_msg(token, chat_id, hdr + "\n" + "\n".join(top_items) + "\n" + ftr)
+        else:
+            send_msg(token, chat_id, f"🚨 {tk_flt or '전체'} 기준 $500K 이상 큰 옵션 체결이 아직 없습니다.")
 
     elif low.startswith("/스캔") or cmd == "cmd:scan":
         parts = cmd.split()
