@@ -1043,6 +1043,24 @@ if nav_menu == "⚡ 무무 실시간 차트":
         elif candles:
             cur["px"] = candles[-1]["close"]
 
+    # 무무 DB가 30초 이상 멈춰 있으면 야후 실시간(프리/애프터 포함) 1분봉 최신가로 보완
+    _mm_ts = 0
+    try:
+        if q_map and sel_syn in q_map:
+            _mm_ts = int(raw_d.get("ts") or 0)
+    except Exception:
+        _mm_ts = 0
+    if (cur["px"] <= 0 or (time.time() - _mm_ts > 30 and _mm_ts > 0)) or not q_map:
+        try:
+            import yfinance as _yf_live
+            _h_live = _yf_live.Ticker(clean_tk).history(period="1d", interval="1m", prepost=True)
+            if _h_live is not None and not _h_live.empty:
+                _yf_lp = float(_h_live["Close"].dropna().iloc[-1])
+                if _yf_lp > 0 and not q_map:
+                    cur["px"] = _yf_lp
+        except Exception:
+            pass
+
     _prev_c = 0.0
     try:
         _prev_c = float(raw_d.get("prev_close_price") or raw_d.get("prev_close") or 0)
@@ -2157,13 +2175,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     if auto_rf:
         components.html(
-            """<script>
-            setTimeout(function(){
+            f"""<!-- {time.time()} --><script>
+            setTimeout(function(){{
               const btns = window.parent.document.querySelectorAll('button');
-              for (const b of btns) {
-                if ((b.innerText || '').includes('실시간 새로고침')) { b.click(); break; }
-              }
-            }, 5000);
+              for (const b of btns) {{
+                if ((b.innerText || '').includes('실시간 새로고침')) {{ b.click(); break; }}
+              }}
+            }}, 5000);
             </script>""",
             height=0,
         )
