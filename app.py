@@ -766,11 +766,34 @@ def _start_live_quote_server():
                     self.send_response(404); self.end_headers(); return
                 qs = urllib.parse.parse_qs(parsed.query)
                 sym = (qs.get("sym", ["US.SOXL"])[0] or "US.SOXL").strip()
-                out = {"ok": False, "sym": sym}
+                sec_step = max(60, int(qs.get("sec", ["60"])[0] or 60))
+                out = {"ok": False, "sym": sym, "bars": []}
                 if os.path.exists(_db_p):
                     con_q = sqlite3.connect(f"file:{_db_p}?mode=ro", uri=True, timeout=2)
                     row = con_q.execute("SELECT ts, data FROM quotes WHERE sym=?", (sym,)).fetchone()
+                    since_t = int(time.time()) - max(sec_step * 40, 3600)
+                    h_rows = con_q.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? AND ts>=? ORDER BY ts ASC", (sym, since_t)).fetchall()
                     con_q.close()
+                    bars_out = []
+                    if h_rows:
+                        b_map = {}
+                        for hts, hpx, hvol in h_rows:
+                            bt = (int(hts) // sec_step) * sec_step
+                            hp = round(float(hpx or 0), 2)
+                            hv = float(hvol or 0)
+                            if hp <= 0:
+                                continue
+                            if bt not in b_map:
+                                b_map[bt] = {"time": bt, "open": hp, "high": hp, "low": hp, "close": hp, "v0": hv, "v1": hv}
+                            else:
+                                b = b_map[bt]
+                                b["high"] = max(b["high"], hp)
+                                b["low"] = min(b["low"], hp)
+                                b["close"] = hp
+                                b["v1"] = hv
+                        for bt in sorted(b_map.keys()):
+                            b = b_map[bt]
+                            bars_out.append({"time": b["time"], "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "volume": max(0.0, b["v1"] - b["v0"])})
                     if row and row[1]:
                         qd = json.loads(row[1])
                         px = 0.0
@@ -784,6 +807,7 @@ def _start_live_quote_server():
                             "px": round(px, 2),
                             "ts": int(row[0] or time.time()),
                             "vol": float(qd.get("volume") or qd.get("vol") or 0),
+                            "bars": bars_out[-30:],
                         }
                 body = json.dumps(out).encode("utf-8")
                 self.send_response(200)
@@ -2088,10 +2112,20 @@ if nav_menu == "⚡ 무무 실시간 차트":
         try {{
           if (!liveLastBar || curTfSec >= 86400) return;
           const host = window.location.hostname || "127.0.0.1";
-          const resp = await fetch(`http://${{host}}:8502/quote?sym=${{encodeURIComponent(d.sym || "")}}`, {{ cache: "no-store" }});
+          const resp = await fetch(`http://${{host}}:8502/quote?sym=${{encodeURIComponent(d.sym || "")}}&sec=${{curTfSec}}`, {{ cache: "no-store" }});
           if (!resp.ok) return;
           const q = await resp.json();
           if (!q || !q.ok || !q.px) return;
+          if (Array.isArray(q.bars) && q.bars.length) {{
+            for (const b of q.bars) {{
+              if (Number(b.time) >= Number(liveLastBar.time)) {{
+                const barObj = {{ time: Number(b.time), open: Number(b.open), high: Number(b.high), low: Number(b.low), close: Number(b.close) }};
+                cs.update(barObj);
+                if (Number(b.time) > Number(liveLastBar.time)) liveLastBar = Object.assign({{}}, barObj);
+                else liveLastBar = Object.assign(liveLastBar, barObj);
+              }}
+            }}
+          }}
           const px = Number(q.px);
           const nowSec = Math.floor(Date.now() / 1000);
           const barT = Math.floor(nowSec / curTfSec) * curTfSec;
@@ -2104,6 +2138,16 @@ if nav_menu == "⚡ 무무 실시간 차트":
             liveLastBar.low = Math.min(Number(liveLastBar.low), px);
           }}
           cs.update(liveLastBar);
+          if (typeof sCvd !== "undefined" && sCvd && d.cvd && d.cvd.length) {{
+            const lastCvd = Number(d.cvd[d.cvd.length - 1].value || 0);
+            const dSign = liveLastBar.close >= liveLastBar.open ? 1 : -1;
+            const dAmt = Math.max(Math.abs(liveLastBar.close - liveLastBar.open) * 50000, 1000) * dSign;
+            sCvd.update({{ time: liveLastBar.time, value: lastCvd + dAmt }});
+          }}
+          if (typeof sBii !== "undefined" && sBii && liveLastBar.high > liveLastBar.low) {{
+            const biiVal = Number((((2 * liveLastBar.close - liveLastBar.high - liveLastBar.low) / (liveLastBar.high - liveLastBar.low)) * 50).toFixed(2));
+            sBii.update({{ time: liveLastBar.time, value: biiVal }});
+          }}
           if (hudEl) {{
             const chgP = liveLastBar.open ? (((liveLastBar.close - liveLastBar.open) / liveLastBar.open) * 100).toFixed(2) : "0.00";
             const colP = liveLastBar.close >= liveLastBar.open ? "#10b981" : "#ef4444";
