@@ -914,22 +914,29 @@ if nav_menu == "⚡ 무무 실시간 차트":
     }
     yf_per, yf_int, tf_sec = tf_map.get(tf_opt, ("5d", "5m", 300))
     candles = []
-    @st.cache_data(ttl=5, show_spinner=False)
+    @st.cache_data(ttl=10, show_spinner=False)
     def _fetch_moomoo_opend_klines(sym_s, tf_lbl):
+        import socket, concurrent.futures
         out_k = []
         try:
+            with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+                pass
+        except Exception:
+            return out_k
+        def _worker():
+            res_k = []
             from moomoo import OpenQuoteContext, KLType, RET_OK
             _kl_map = {"1분봉": KLType.K_1M, "5분봉": KLType.K_5M, "15분봉": KLType.K_15M, "1일봉": KLType.K_DAY}
             _kl_t = _kl_map.get(tf_lbl)
             if _kl_t is None:
-                return out_k
+                return res_k
             qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
             try:
                 ret, df_k = qctx.get_cur_kline(sym_s, 180, _kl_t)
                 if ret == RET_OK and df_k is not None and not df_k.empty:
                     for _, kr in df_k.iterrows():
                         _tk_ts = int(pd.Timestamp(str(kr["time_key"])).tz_localize("America/New_York").timestamp())
-                        out_k.append({
+                        res_k.append({
                             "time": _tk_ts,
                             "open": round(float(kr["open"]), 2),
                             "high": round(float(kr["high"]), 2),
@@ -939,8 +946,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         })
             finally:
                 qctx.close()
+            return res_k
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                fut = _ex.submit(_worker)
+                out_k = fut.result(timeout=1.5)
         except Exception:
-            pass
+            out_k = []
         return out_k
 
     @st.cache_data(ttl=10, show_spinner=False)
@@ -967,11 +979,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     tf_sec_map = {"1분봉": 60, "5분봉": 300, "10분봉": 600, "15분봉": 900, "1일봉": 86400}
     _mm_sym_use = sel_syn if q_map else f"US.{clean_tk}"
-    _mm_1m = _fetch_moomoo_opend_klines(_mm_sym_use, "1분봉")
-    _mm_5m = _fetch_moomoo_opend_klines(_mm_sym_use, "5분봉")
+    _mm_cur_k = _fetch_moomoo_opend_klines(_mm_sym_use, tf_opt) if tf_opt in ("1분봉", "5분봉") else []
     raw_tf_sets = {
-        "1분봉": _fetch_tf_candles(clean_tk, "2d", "1m", False) + _mm_1m,
-        "5분봉": _fetch_tf_candles(clean_tk, "5d", "5m", False) + _mm_5m,
+        "1분봉": _fetch_tf_candles(clean_tk, "2d", "1m", False) + (_mm_cur_k if tf_opt == "1분봉" else []),
+        "5분봉": _fetch_tf_candles(clean_tk, "5d", "5m", False) + (_mm_cur_k if tf_opt == "5분봉" else []),
         "10분봉": _fetch_tf_candles(clean_tk, "5d", "5m", True),
         "1일봉": _fetch_tf_candles(clean_tk, "1y", "1d", False),
     }
