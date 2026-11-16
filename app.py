@@ -1033,17 +1033,31 @@ if nav_menu == "⚡ 무무 실시간 차트":
         except Exception:
             pass
 
-    if ext_px > 0:
+    # 무무 실시간 체결가 우선 적용 (ticker 틱 -> 시간외 시세 -> quote_hist 최신 틱 -> quotes last_price -> 캔들 종가)
+    _tick_px = 0.0
+    _tkr_list = aux_map.get("ticker")
+    if isinstance(_tkr_list, dict):
+        _tkr_list = _tkr_list.get("ticker") or _tkr_list.get("data") or _tkr_list.get("items")
+    if isinstance(_tkr_list, list) and _tkr_list:
+        try:
+            _last_t = _tkr_list[-1]
+            if isinstance(_last_t, dict):
+                _tick_px = float(_last_t.get("price") or _last_t.get("px") or 0)
+        except Exception:
+            pass
+    _hist_last_px = float(hist_rows[-1][1]) if (hist_rows and len(hist_rows[-1]) >= 2 and float(hist_rows[-1][1] or 0) > 0) else 0.0
+    if _tick_px > 0:
+        cur["px"] = _tick_px
+    elif ext_px > 0:
         cur["px"] = ext_px
-    if bp_num > 0 and ap_num > 0 and bp_num <= ap_num:
-        _mid_ba = round((bp_num + ap_num) / 2.0, 2)
-        if cur["px"] <= 0 or abs(cur["px"] - _mid_ba) / max(_mid_ba, 1e-6) > 0.005:
-            cur["px"] = _mid_ba
-            _prev_c = float(raw_d.get("prev_close_price") or raw_d.get("prev_close") or 0)
-            if _prev_c > 0:
-                cur["chg"] = round((cur["px"] - _prev_c) / _prev_c * 100.0, 2)
+    elif _hist_last_px > 0:
+        cur["px"] = _hist_last_px
     elif cur["px"] == 0 and candles:
         cur["px"] = candles[-1]["close"]
+
+    _prev_c = float(raw_d.get("prev_close_price") or raw_d.get("prev_close") or 0)
+    if _prev_c > 0 and cur["px"] > 0:
+        cur["chg"] = round((cur["px"] - _prev_c) / _prev_c * 100.0, 2)
 
     if cur["px"] > 0:
         _px_sync = round(float(cur["px"]), 2)
