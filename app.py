@@ -760,7 +760,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     db_path = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
     col_r1, col_r2, col_r3 = st.columns([2.6, 0.9, 0.9])
     with col_r2:
-        auto_rf = st.toggle("⏱️ 3초 자동 갱신", value=True, key="mm_auto_rf")
+        auto_rf = st.toggle("⏱️ 차트 15초 자동 갱신", value=False, key="mm_auto_rf")
     with col_r3:
         if st.button("🔄 실시간 새로고침", use_container_width=True):
             st.rerun()
@@ -1184,15 +1184,60 @@ if nav_menu == "⚡ 무무 실시간 차트":
     </div>
     """, unsafe_allow_html=True)
 
-    m1, m2, m3, m4, m5 = st.columns([1.05, 1.35, 0.9, 0.75, 0.95])
-    _m1_delta = f"{cur.get('diff', 0):+.2f} ({cur['chg']:+.2f}%)" if cur.get("chg") is not None else None
-    m1.metric("현재가 (실시간)", f"${cur['px']:,.2f}" if cur["px"] else "-", _m1_delta)
-    m2.metric("Bid / Ask", f"{bid_px_s} / {ask_px_s}")
-    _v_num = float(cur["vol"] or 0)
-    _v_str = f"{_v_num/1e6:,.2f}M" if _v_num >= 1e6 else (f"{_v_num/1e3:,.1f}K" if _v_num >= 1e3 else (f"{int(_v_num):,}" if _v_num > 0 else "-"))
-    m3.metric("당일 거래량", _v_str)
-    m4.metric("Zero Gamma", f"${zg_lv:g}" if zg_lv else "-")
-    m5.metric("Call / Put Wall", f"${cw_lv:g} / ${pw_lv:g}" if (cw_lv and pw_lv) else f"${cw_lv or '-'} / ${pw_lv or '-'}")
+    def _render_live_kpi_bar():
+        _lx_px, _lx_chg, _lx_diff, _lx_vol = cur["px"], cur.get("chg"), cur.get("diff", 0), cur["vol"]
+        _lx_bid, _lx_ask = bid_px_s, ask_px_s
+        try:
+            if os.path.exists(db_path):
+                _c_lx = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+                _qr = _c_lx.execute("SELECT data FROM quotes WHERE sym=?", (sel_syn,)).fetchone()
+                if _qr and _qr[0]:
+                    _qd = json.loads(_qr[0])
+                    _qp = 0.0
+                    for _k_e in ("overnight_price", "after_price", "pre_price", "ext_price", "last_price", "px", "price"):
+                        if float(_qd.get(_k_e) or 0) > 0:
+                            _qp = float(_qd.get(_k_e))
+                            break
+                    if _qp > 0:
+                        _lx_px = _qp
+                        _pc = float(_qd.get("prev_close_price") or _qd.get("prev_close") or 0)
+                        if _pc <= 0 and merged_tf_sets.get("1일봉"):
+                            _db = merged_tf_sets["1일봉"]
+                            _pc = float(_db[-2]["close"] if len(_db) >= 2 else _db[-1]["open"])
+                        if _pc > 0:
+                            _lx_diff = round(_lx_px - _pc, 2)
+                            _lx_chg = round((_lx_px - _pc) / _pc * 100.0, 2)
+                    if float(_qd.get("volume") or _qd.get("vol") or 0) > 0:
+                        _lx_vol = float(_qd.get("volume") or _qd.get("vol"))
+                    if float(_qd.get("bid_price") or _qd.get("bid") or 0) > 0:
+                        _lx_bid = f"${float(_qd.get('bid_price') or _qd.get('bid')):,.2f}"
+                    if float(_qd.get("ask_price") or _qd.get("ask") or 0) > 0:
+                        _lx_ask = f"${float(_qd.get('ask_price') or _qd.get('ask')):,.2f}"
+                _c_lx.close()
+        except Exception:
+            pass
+        _v_num = float(_lx_vol or 0)
+        _v_str = f"{_v_num/1e6:,.2f}M" if _v_num >= 1e6 else (f"{_v_num/1e3:,.1f}K" if _v_num >= 1e3 else (f"{int(_v_num):,}" if _v_num > 0 else "-"))
+        _px_s = f"${_lx_px:,.2f}" if _lx_px else "-"
+        _chg_col = "#10b981" if (_lx_chg or 0) >= 0 else "#ef4444"
+        _chg_s = f"{_lx_diff:+.2f} ({_lx_chg:+.2f}%)" if _lx_chg is not None else ""
+        _zg_s = f"${zg_lv:g}" if zg_lv else "-"
+        _cw_pw_s = f"${cw_lv:g} / ${pw_lv:g}" if (cw_lv and pw_lv) else f"${cw_lv or '-'} / ${pw_lv or '-'}"
+        st.markdown(
+            f"""<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;background:#0b101b;border:1px solid #1e293b;border-radius:8px;padding:10px 14px;margin-bottom:6px;">
+              <div><div style="font-size:11px;color:#94a3b8;">현재가 (실시간)</div><div style="font-size:24px;font-weight:700;color:#f8fafc;line-height:1.2;">{_px_s}</div><div style="font-size:12px;font-weight:600;color:{_chg_col};">{_chg_s}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">Bid / Ask</div><div style="font-size:20px;font-weight:700;color:#e2e8f0;line-height:1.3;">{_lx_bid} / {_lx_ask}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">당일 거래량</div><div style="font-size:22px;font-weight:700;color:#e2e8f0;line-height:1.25;">{_v_str}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">Zero Gamma</div><div style="font-size:22px;font-weight:700;color:#fbbf24;line-height:1.25;">{_zg_s}</div></div>
+              <div><div style="font-size:11px;color:#94a3b8;">Call / Put Wall</div><div style="font-size:22px;font-weight:700;color:#e2e8f0;line-height:1.25;">{_cw_pw_s}</div></div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+    if hasattr(st, "fragment"):
+        st.fragment(run_every="3s")(_render_live_kpi_bar)()
+    else:
+        _render_live_kpi_bar()
 
     with st.expander("⚙️ 지표 편집 (차트 오버레이 · 일목 · 보조지표 · 기간 설정)", expanded=False):
         ed_l, ed_r = st.columns([1.3, 1.0])
@@ -1930,13 +1975,38 @@ if nav_menu == "⚡ 무무 실시간 차트":
       resizeDraw();
       const fsBtn = document.getElementById("tv_fs");
       const tvWrap = document.getElementById("tv_wrap");
+      let fakeFs = false;
+      let prevFrameStyle = "";
+      function setFakeFs(on) {{
+        fakeFs = on;
+        const fe = window.frameElement;
+        if (fe) {{
+          if (on) {{
+            prevFrameStyle = fe.getAttribute("style") || "";
+            fe.setAttribute("style", "position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:999999!important;background:#080c14!important;border:0!important;");
+          }} else {{
+            fe.setAttribute("style", prevFrameStyle);
+          }}
+        }}
+        fsBtn.textContent = on ? "✕ 축소" : "⛶ 전체화면 확대";
+        setTimeout(syncSize, 60);
+      }}
       fsBtn.onclick = () => {{
-        if (!document.fullscreenElement) tvWrap.requestFullscreen().catch(() => {{}});
-        else document.exitFullscreen().catch(() => {{}});
+        if (fakeFs || document.fullscreenElement) {{
+          if (document.fullscreenElement) document.exitFullscreen().catch(() => {{}});
+          if (fakeFs) setFakeFs(false);
+        }} else {{
+          if (tvWrap.requestFullscreen) {{
+            tvWrap.requestFullscreen().catch(() => setFakeFs(true));
+          }} else {{
+            setFakeFs(true);
+          }}
+        }}
       }};
+      window.addEventListener("keydown", (e) => {{ if (e.key === "Escape" && fakeFs) setFakeFs(false); }});
       function syncSize() {{
-        const isFs = !!document.fullscreenElement;
-        const mh = isFs ? Math.max(420, window.innerHeight - 60 - (subCharts.length * 130)) : 460;
+        const isFs = !!document.fullscreenElement || fakeFs;
+        const mh = isFs ? Math.max(420, window.innerHeight - 64 - (subCharts.length * 120)) : 460;
         elMain.style.height = mh + "px";
         vpCv.style.height = mh + "px";
         drCv.style.height = mh + "px";
@@ -2248,18 +2318,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     else:
         st.caption("아직 포착된 큰손 풋/콜 내역이 없습니다. (장중 Vol/OI 1.5x 이상 또는 무무 옵션 체결 시 자동 누적)")
 
-    if auto_rf:
-        components.html(
-            f"""<!-- {time.time()} --><script>
-            setTimeout(function(){{
-              const btns = window.parent.document.querySelectorAll('button');
-              for (const b of btns) {{
-                if ((b.innerText || '').includes('실시간 새로고침')) {{ b.click(); break; }}
-              }}
-            }}, 3000);
-            </script>""",
-            height=0,
-        )
+    # (전체 페이지 깜빡임 방지를 위해 강제 전체 새로고침 타이머 제거 — 상단 시세만 3초 무깜빡임 갱신)
 
     if parsed_q:
         st.subheader("📋 전체 수신 종목 실시간 시세표")
