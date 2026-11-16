@@ -753,6 +753,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     import sqlite3
     import streamlit.components.v1 as components
 
+    st.markdown("<style>div[data-stale='true']{opacity:1!important;transition:none!important;}</style>", unsafe_allow_html=True)
     st.title("⚡ 무무(Moomoo) 트레이딩뷰 실시간 차트")
     st.caption("TradingView Lightweight Charts 엔진 기반 · 무무 실시간 시세 + VWAP·볼린저밴드 + 옵션 Call/Put Wall·Zero Gamma")
 
@@ -1001,19 +1002,58 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     merged_tf_sets = {k: _merge_tf_candles(v, tf_sec_map.get(k, 300)) for k, v in raw_tf_sets.items()}
     candles = list(merged_tf_sets.get(tf_opt) or _merge_tf_candles(_fetch_tf_candles(clean_tk, yf_per, yf_int, tf_opt == "10분봉"), tf_sec))
-    if cur["px"] == 0 and candles:
-        cur["px"] = candles[-1]["close"]
+
+    # 시간외/실시간 호가(Bid/Ask)와 현재가·마지막 캔들 일치화
+    raw_d = cur.get("raw") if isinstance(cur.get("raw"), dict) else {}
+    ext_px = 0.0
+    for _ek in ("overnight_price", "after_price", "pre_price", "ext_price"):
+        try:
+            _ev = float(raw_d.get(_ek) or 0)
+            if _ev > 0:
+                ext_px = _ev
+                break
+        except Exception:
+            pass
 
     bk_top = aux_map.get("book") or {}
     bids_top = bk_top.get("Bid") or bk_top.get("bids") or []
     asks_top = bk_top.get("Ask") or bk_top.get("asks") or []
-    bid_px_s = f"${float(bids_top[0][0]):,.2f}" if bids_top and len(bids_top[0]) >= 2 else "-"
-    ask_px_s = f"${float(asks_top[0][0]):,.2f}" if asks_top and len(asks_top[0]) >= 2 else "-"
-    if bid_px_s == "-" and isinstance(cur.get("raw"), dict):
-        bp = cur["raw"].get("bid_price") or cur["raw"].get("bid")
-        ap = cur["raw"].get("ask_price") or cur["raw"].get("ask")
-        if bp: bid_px_s = f"${float(bp):,.2f}"
-        if ap: ask_px_s = f"${float(ap):,.2f}"
+    bp_num, ap_num = 0.0, 0.0
+    try:
+        if raw_d.get("bid_price") or raw_d.get("bid"):
+            bp_num = float(raw_d.get("bid_price") or raw_d.get("bid") or 0)
+        if raw_d.get("ask_price") or raw_d.get("ask"):
+            ap_num = float(raw_d.get("ask_price") or raw_d.get("ask") or 0)
+    except Exception:
+        pass
+    if (bp_num <= 0 or ap_num <= 0) and bids_top and asks_top:
+        try:
+            bp_num = float(bids_top[0][0])
+            ap_num = float(asks_top[0][0])
+        except Exception:
+            pass
+
+    if ext_px > 0:
+        cur["px"] = ext_px
+    if bp_num > 0 and ap_num > 0 and bp_num <= ap_num:
+        _mid_ba = round((bp_num + ap_num) / 2.0, 2)
+        if cur["px"] <= 0 or abs(cur["px"] - _mid_ba) / max(_mid_ba, 1e-6) > 0.005:
+            cur["px"] = _mid_ba
+            _prev_c = float(raw_d.get("prev_close_price") or raw_d.get("prev_close") or 0)
+            if _prev_c > 0:
+                cur["chg"] = round((cur["px"] - _prev_c) / _prev_c * 100.0, 2)
+    elif cur["px"] == 0 and candles:
+        cur["px"] = candles[-1]["close"]
+
+    if candles and cur["px"] > 0:
+        _lc = dict(candles[-1])
+        _lc["close"] = round(float(cur["px"]), 2)
+        _lc["high"] = max(float(_lc["high"]), _lc["close"])
+        _lc["low"] = min(float(_lc["low"]), _lc["close"])
+        candles[-1] = _lc
+
+    bid_px_s = f"${bp_num:,.2f}" if bp_num > 0 else "-"
+    ask_px_s = f"${ap_num:,.2f}" if ap_num > 0 else "-"
 
     tot_net_g_mm = round(sum(float(x.get("net_g", 0) or 0) for x in opt_bars), 2) if opt_bars else 0.0
     tot_c_oi_mm = sum(int(x.get("c_oi", 0) or 0) for x in opt_bars)
@@ -2096,10 +2136,17 @@ if nav_menu == "⚡ 무무 실시간 차트":
         st.caption("아직 포착된 큰손 풋/콜 내역이 없습니다. (장중 Vol/OI 1.5x 이상 또는 무무 옵션 체결 시 자동 누적)")
 
     if auto_rf:
-        if con is not None:
-            con.close()
-        time.sleep(5)
-        st.rerun()
+        components.html(
+            """<script>
+            setTimeout(function(){
+              const btns = window.parent.document.querySelectorAll('button');
+              for (const b of btns) {
+                if ((b.innerText || '').includes('실시간 새로고침')) { b.click(); break; }
+              }
+            }, 5000);
+            </script>""",
+            height=0,
+        )
 
     if parsed_q:
         st.subheader("📋 전체 수신 종목 실시간 시세표")
@@ -4715,11 +4762,37 @@ if nav_menu == "🎯 행사가별·동반 체결":
     base_tks_f = ["SOXL", "SPY", "NVDA", "VIX", "SPX", "QQQ", "TSLA", "MU", "AMD", "PLTR", "SMH", "IWM", "META", "AMZN", "AAPL"]
     all_tks_f = list(dict.fromkeys(base_tks_f + sorted(list(mm_q.keys())) + sheet_tks))
 
-    fc1, fc2, fc3 = st.columns([1.2, 1.2, 1.6])
+    fc1, fc2, fc3, fc4 = st.columns([1.1, 1.1, 1.2, 1.4])
     sel_tk_f = fc1.selectbox("종목 선택", all_tks_f, index=0, key="flow_stk_tk")
     custom_tk_f = fc2.text_input("직접 입력 (선택)", "", placeholder="예: SOXL, SPY, VIX, BA", key="flow_stk_cus").strip().upper()
     tk_f = custom_tk_f if custom_tk_f else sel_tk_f
     use_yf_live = fc3.checkbox("야후 실시간 OI · GEX 결합 조회", value=True, key="flow_use_yf")
+    if fc4.button("🔄 지금 OI·GEX 스냅샷 수집 & 저장", type="primary", use_container_width=True, key="btn_flow_save_oi"):
+        st.cache_data.clear()
+        with st.spinner(f"{tk_f} 실시간 OI·GEX 스냅샷 수집 & 저장 중..."):
+            _s_rows, _s_px, _s_st = fetch_yahoo_oi(tk_f)
+        if _s_st == "OK" and _s_rows:
+            from datetime import datetime as _dt_f
+            _now_f = _dt_f.now().strftime("%Y-%m-%d %H:%M")
+            _c_oi_f = sum(x["OI"] for x in _s_rows if x["구분"] == "Call")
+            _p_oi_f = sum(x["OI"] for x in _s_rows if x["구분"] == "Put")
+            _ng_f = round(sum(x["GEX($M)"] for x in _s_rows), 2)
+            _nd_f = round(sum(x["DEX($M)"] for x in _s_rows), 2)
+            oi_hist_all.setdefault(tk_f, []).append({
+                "수집시각": _now_f,
+                "Spot": _s_px,
+                "Call_OI": _c_oi_f,
+                "Put_OI": _p_oi_f,
+                "Put_Call_OI_Ratio": round(_p_oi_f / _c_oi_f, 2) if _c_oi_f > 0 else 0,
+                "Net_GEX_M": _ng_f,
+                "Net_DEX_M": _nd_f,
+                "상세": _s_rows,
+            })
+            save_json_file(OI_PATH, oi_hist_all)
+            st.toast(f"✅ {tk_f} (${_s_px}) OI·GEX 스냅샷 저장 완료!")
+            st.rerun()
+        else:
+            st.error(f"수집 중 오류: {_s_st}")
 
     # =========================================================
     # [상단 도구] 🚨 텔레그램 큰 옵션 체결 붙여넣기 & AI 키 설정
