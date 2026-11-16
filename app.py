@@ -1728,7 +1728,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     })
 
     tv_html = f"""
-    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#0b101b; border:1px solid #1e293b; border-radius:6px; padding:6px 12px; margin-bottom:6px; font-family:monospace; font-size:12px;">
+    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#0b101b; border:1px solid #1e293b; border-radius:6px; padding:6px 12px; margin-bottom:6px; font-family:monospace; font-size:12px; color:#cbd5e1;">
       <span>🟢 <b>CALL WALL</b>: <b style="color:#10b981;">{f"${cw_lv:g}" if cw_lv else "-"}</b></span>
       <span>🔴 <b>PUT WALL</b>: <b style="color:#ef4444;">{f"${pw_lv:g}" if pw_lv else "-"}</b></span>
       <span>🟡 <b>FLIP GAMMA</b>: <b style="color:#f59e0b;">{f"${zg_lv:g}" if zg_lv else "-"}</b></span>
@@ -1922,11 +1922,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 14 || y > mh - 14) return;
-            const wc = Math.round(b.c * 145 * sc);
-            const wp = Math.round(b.put * 145 * sc);
+            const wc = b.c > 0 ? Math.max(2, Math.round(b.c * 160 * sc)) : 0;
+            const wp = b.put > 0 ? Math.max(2, Math.round(b.put * 160 * sc)) : 0;
             if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.90)"; ctx.fillRect(0, y - 3, wp, 6); }}
             if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.92)"; ctx.fillRect(wp, y - 3, wc, 6); }}
-            if (wc + wp > Math.max(18, Math.round(28 * sc))) {{
+            if (wc + wp >= 14) {{
               ctx.font = "bold 9px monospace";
               ctx.fillStyle = "#e2e8f0";
               ctx.fillText("C " + fmtM(b.c_m) + " · P " + fmtM(b.p_m), wc + wp + 5, y + 3);
@@ -1978,19 +1978,20 @@ if nav_menu == "⚡ 무무 실시간 차트":
             }}
           }}
           if (visVols.length) {{
-            const maxV = Math.max(...visVols.map(v => v.val), 1);
             visVols.sort((a, b) => b.val - a.val);
+            const capV = visVols.length >= 2 ? Math.max(visVols[1].val * 1.15, 1) : Math.max(visVols[0].val, 1);
             const picked = [];
             for (const cand of visVols) {{
-              if (picked.every(p => Math.abs(p.x - cand.x) > 58)) {{
+              if (picked.every(p => Math.abs(p.x - cand.x) > 64)) {{
                 picked.push(cand);
                 if (picked.length >= 5) break;
               }}
             }}
+            const plotBot = mh - 28;
             picked.forEach(p => {{
               const lbl = p.val >= 1e6 ? (p.val / 1e6).toFixed(1) + "M" : (p.val >= 1e3 ? (p.val / 1e3).toFixed(1) + "K" : String(Math.round(p.val)));
-              const barH = Math.max(8, Math.round((p.val / maxV) * (mh * 0.16)));
-              const boxY = Math.max(24, mh - barH - 22);
+              const barH = Math.min(Math.round(mh * 0.17), Math.max(10, Math.round((p.val / capV) * (mh * 0.15))));
+              const boxY = Math.min(mh - 46, Math.max(24, plotBot - barH - 18));
               ctx.save();
               ctx.font = "bold 9px monospace";
               const bw = ctx.measureText(lbl).width + 8;
