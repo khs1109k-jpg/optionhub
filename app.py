@@ -914,12 +914,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
     }
     yf_per, yf_int, tf_sec = tf_map.get(tf_opt, ("5d", "5m", 300))
     candles = []
-    @st.cache_data(ttl=60, show_spinner=False)
+    @st.cache_data(ttl=10, show_spinner=False)
     def _fetch_tf_candles(tk_s, per_s, int_s, resamp_10=False):
         out = []
         try:
             import yfinance as yf
-            d_y = yf.Ticker(tk_s).history(period=per_s, interval=int_s)
+            d_y = yf.Ticker(tk_s).history(period=per_s, interval=int_s, prepost=(int_s != "1d"))
             if not d_y.empty:
                 if resamp_10:
                     d_y = d_y.resample("10min").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
@@ -986,8 +986,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 l_px = float(g["px"].min())
                 c_px = float(g["px"].iloc[-1])
                 v_diff = float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0))
-                # 주말/장마감 무거래 정지 구간 평탄화 틱 제외
-                if v_diff <= 0 and h_px <= l_px and merged:
+                # 가격 변동 없는 완전 정지 틱만 제외 (실시간 가격 변동 틱은 반영)
+                if v_diff <= 0 and h_px <= l_px and merged and abs(c_px - merged[-1]["close"]) < 1e-6:
                     continue
                 merged.append({
                     "time": int(m_ts),
@@ -1075,19 +1075,45 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     if cur["px"] > 0:
         _px_sync = round(float(cur["px"]), 2)
+        _now_sec = int(time.time())
         for _tfk, _tfl in merged_tf_sets.items():
             if _tfl:
-                _lc = dict(_tfl[-1])
-                _lc["close"] = _px_sync
-                _lc["high"] = max(float(_lc["high"]), _px_sync)
-                _lc["low"] = min(float(_lc["low"]), _px_sync)
-                _tfl[-1] = _lc
+                _step = tf_sec_map.get(_tfk, 300)
+                _cur_bar_t = (_now_sec // _step) * _step
+                if _tfk != "1일봉" and _cur_bar_t > int(_tfl[-1]["time"]) and abs(_px_sync - float(_tfl[-1]["close"])) >= 0.01:
+                    _prev_cl = float(_tfl[-1]["close"])
+                    _tfl.append({
+                        "time": _cur_bar_t,
+                        "open": _prev_cl,
+                        "high": max(_prev_cl, _px_sync),
+                        "low": min(_prev_cl, _px_sync),
+                        "close": _px_sync,
+                        "volume": 0.0,
+                    })
+                else:
+                    _lc = dict(_tfl[-1])
+                    _lc["close"] = _px_sync
+                    _lc["high"] = max(float(_lc["high"]), _px_sync)
+                    _lc["low"] = min(float(_lc["low"]), _px_sync)
+                    _tfl[-1] = _lc
         if candles:
-            _lc0 = dict(candles[-1])
-            _lc0["close"] = _px_sync
-            _lc0["high"] = max(float(_lc0["high"]), _px_sync)
-            _lc0["low"] = min(float(_lc0["low"]), _px_sync)
-            candles[-1] = _lc0
+            _cur_c_t = (_now_sec // tf_sec) * tf_sec
+            if tf_opt != "1일봉" and _cur_c_t > int(candles[-1]["time"]) and abs(_px_sync - float(candles[-1]["close"])) >= 0.01:
+                _prev_c0 = float(candles[-1]["close"])
+                candles.append({
+                    "time": _cur_c_t,
+                    "open": _prev_c0,
+                    "high": max(_prev_c0, _px_sync),
+                    "low": min(_prev_c0, _px_sync),
+                    "close": _px_sync,
+                    "volume": 0.0,
+                })
+            else:
+                _lc0 = dict(candles[-1])
+                _lc0["close"] = _px_sync
+                _lc0["high"] = max(float(_lc0["high"]), _px_sync)
+                _lc0["low"] = min(float(_lc0["low"]), _px_sync)
+                candles[-1] = _lc0
 
     bid_px_s = f"${bp_num:,.2f}" if bp_num > 0 else "-"
     ask_px_s = f"${ap_num:,.2f}" if ap_num > 0 else "-"
