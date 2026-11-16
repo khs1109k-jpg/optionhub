@@ -1063,7 +1063,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
             if isinstance(bars_data, list) and bars_data and isinstance(bars_data[0], dict):
                 for b in bars_data:
                     t_raw = b.get("time_key") or b.get("time") or b.get("ts") or b.get("t")
-                    ts_sec = int(pd.Timestamp(t_raw).timestamp()) if isinstance(t_raw, str) else int(float(t_raw))
+                    if isinstance(t_raw, str):
+                        _pts = pd.Timestamp(t_raw)
+                        if _pts.tzinfo is None:
+                            _pts = _pts.tz_localize("America/New_York")
+                        ts_sec = int(_pts.timestamp())
+                    else:
+                        ts_sec = int(float(t_raw))
                     moomoo_bars.append({
                         "time": ts_sec,
                         "open": float(b.get("open", b.get("o", 0))),
@@ -1089,8 +1095,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 l_px = float(g["px"].min())
                 c_px = float(g["px"].iloc[-1])
                 v_diff = float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0))
-                # 가격 변동 없는 완전 정지 틱만 제외 (실시간 가격 변동 틱은 반영)
-                if v_diff <= 0 and h_px <= l_px and merged and abs(c_px - merged[-1]["close"]) < 1e-6:
+                # 무무 quote_hist 캔들은 가격 변화가 있거나 최근 12시간 이내 틱이면 무조건 유지
+                if v_diff <= 0 and h_px <= l_px and merged and abs(c_px - merged[-1]["close"]) < 1e-6 and (time.time() - int(m_ts) > 43200):
                     continue
                 merged.append({
                     "time": int(m_ts),
