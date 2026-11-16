@@ -4710,45 +4710,61 @@ if nav_menu == "📰 대형 옵션 체결":
         save_json_file(_gcal_p, _gcal_list)
         st.toast(f"✅ 구글 캘린더에 해석 포함 {_cal_cnt}건 등록 완료!")
 
-    # 다크 테마 테이블 렌더링 (스크린샷 1:1 스타일)
+    # 다크 네이비 대장마켓 1:1 스타일 테이블 렌더링
     if _f_rows:
         _trs = []
-        for _r in _f_rows[:60]:
-            _cp_cls = "background:#0f5132;color:#75b798;border:1px solid #198754;" if _r["cp"] == "Call" else "background:#58151c;color:#ea868f;border:1px solid #dc3545;"
-            _sd_cls = "color:#4ade80;font-weight:700;" if _r["side"] == "BUY" else ("color:#f87171;font-weight:700;" if _r["side"] == "SELL" else "color:#9aa0a6;font-weight:700;")
-            _st_cls = "background:#1e3a5f;color:#93c5fd;" if _r["status"] == "신규" else "background:#3b2f1e;color:#fcd34d;"
+        for _ri, _r in enumerate(_f_rows[:30]):
+            _cp_cls = "background:#0b3b2c;color:#4ade80;border:1px solid #166534;" if _r["cp"] == "Call" else "background:#4c1d24;color:#fb7185;border:1px solid #9f1239;"
+            _sd_lbl = "-" if _r["side"] in ("MID", "-") else _r["side"]
+            _sd_cls = "color:#34d399;font-weight:700;" if _sd_lbl == "BUY" else ("color:#f87171;font-weight:700;" if _sd_lbl == "SELL" else "color:#94a3b8;font-weight:700;")
             _k_lbl = f"{_r['strike']:g} {'CALL' if _r['cp']=='Call' else 'PUT'}"
+            _exp_fmt = str(_r["exp"]).replace("-", "/")
+            _exp_pill = f"<span style='border:1px solid #334155;background:#0f172a;color:#cbd5e1;padding:3px 9px;border-radius:6px;font-size:12px;'>{_exp_fmt}</span>"
+            _rank_badge = f"<span style='border:1px solid #b45309;background:rgba(217,119,6,0.15);color:#fbbf24;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:700;margin-right:8px;'>#{_ri+1}</span>" if _ri < 2 else ""
+            _prem_cell = (
+                f"<span style='border:1px solid #b45309;background:rgba(217,119,6,0.12);color:#fbbf24;padding:3px 10px;border-radius:6px;font-weight:800;'>{_r['prem_str']}</span>"
+                if _ri < 2 else f"<span style='color:#e2e8f0;font-weight:700;'>{_r['prem_str']}</span>"
+            )
+            _int_col = "#34d399" if _r["sent"] == "강세" else ("#f87171" if _r["sent"] == "약세" else "#94a3b8")
             _trs.append(
-                f"<tr style='border-bottom:1px solid #26292e;'>"
-                f"<td style='padding:8px 10px;font-weight:700;color:#fff;'>{_r['tk']}</td>"
-                f"<td style='padding:8px 10px;color:#9aa0a6;font-size:12.5px;'>{_r['exp']}</td>"
-                f"<td style='padding:8px 10px;'><span style='{_st_cls}padding:2px 7px;border-radius:4px;font-size:11.5px;font-weight:600;'>{_r['status']}</span></td>"
-                f"<td style='padding:8px 10px;'><span style='{_cp_cls}padding:3px 9px;border-radius:5px;font-size:12px;font-weight:700;display:inline-block;min-width:86px;text-align:center;'>{_k_lbl}</span></td>"
-                f"<td style='padding:8px 10px;{_sd_cls}'>{_r['side']}</td>"
-                f"<td style='padding:8px 10px;text-align:right;color:#e2e8f0;font-variant-numeric:tabular-nums;'>{_r['qty']:,}</td>"
-                f"<td style='padding:8px 10px;text-align:right;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;'>{_r['prem_str']}</td>"
-                f"<td style='padding:8px 10px;color:#cbd5e1;font-size:12.5px;'>{_r['emoji']} {_r['interp']}</td>"
+                f"<tr style='border-bottom:1px solid #1e293b;'>"
+                f"<td style='padding:8px 10px;'><b style='color:#f8fafc;font-size:13.5px;'>{_r['tk']}</b><br><span style='font-size:10.5px;color:#64748b;'>단일 대량</span></td>"
+                f"<td style='padding:8px 10px;text-align:center;'>{_exp_pill}</td>"
+                f"<td style='padding:8px 10px;text-align:center;color:#94a3b8;font-size:12px;'>수집</td>"
+                f"<td style='padding:8px 10px;text-align:center;'><span style='{_cp_cls}padding:4px 12px;border-radius:6px;font-size:12.5px;font-weight:700;display:inline-block;min-width:112px;text-align:center;'>{_k_lbl}</span></td>"
+                f"<td style='padding:8px 10px;text-align:center;{_sd_cls}'>{_sd_lbl}</td>"
+                f"<td style='padding:8px 10px;text-align:right;color:#e2e8f0;font-weight:600;font-variant-numeric:tabular-nums;'>{_rank_badge}{_r['qty']:,}</td>"
+                f"<td style='padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums;'>{_prem_cell}</td>"
+                f"<td style='padding:8px 10px;color:{_int_col};font-size:12px;'>{_r['interp']}</td>"
                 f"</tr>"
             )
         _tbl_html = (
-            "<div style='background:#0f1419;border:1px solid #26292e;border-radius:10px;overflow-x:auto;margin:8px 0 14px;'>"
+            "<div style='background:#0b1220;border:1px solid #1e293b;border-radius:12px;overflow-x:auto;margin:8px 0 14px;'>"
             "<table style='width:100%;border-collapse:collapse;font-size:13px;'>"
-            "<thead><tr style='background:#161b22;border-bottom:1px solid #30363d;color:#8b949e;text-align:left;font-size:12px;'>"
-            "<th style='padding:9px 10px;'>종목</th><th style='padding:9px 10px;'>EXP</th><th style='padding:9px 10px;'>상태</th>"
-            "<th style='padding:9px 10px;'>계약</th><th style='padding:9px 10px;'>BUY/SELL</th>"
-            "<th style='padding:9px 10px;text-align:right;'>수량</th><th style='padding:9px 10px;text-align:right;'>총 PREM</th>"
-            "<th style='padding:9px 10px;'>해석</th></tr></thead>"
+            "<thead><tr style='background:#0f172a;border-bottom:1px solid #1e293b;color:#94a3b8;text-align:left;font-size:12px;'>"
+            "<th style='padding:10px;'>종목</th><th style='padding:10px;text-align:center;'>EXP</th><th style='padding:10px;text-align:center;'>ET</th>"
+            "<th style='padding:10px;text-align:center;'>계약</th><th style='padding:10px;text-align:center;'>BUY/SELL</th>"
+            "<th style='padding:10px;text-align:right;'>수량</th><th style='padding:10px;text-align:right;'>총 PREM</th>"
+            "<th style='padding:10px;'>해석</th></tr></thead>"
             f"<tbody>{''.join(_trs)}</tbody></table></div>"
         )
         st.markdown(_tbl_html, unsafe_allow_html=True)
 
-        # 하단 종합 요약 박스
-        with st.container(border=True):
-            st.markdown(
-                f"**전체: 강세 `${_bull_sum:.2f}M` vs 약세 `${_bear_sum:.2f}M`** (MID `${_mid_sum:.2f}M`) → **{_overall_lbl}**"
-            )
-            if _tk_summary_lines:
-                st.markdown("  \n".join(_tk_summary_lines))
+        # 하단 대장마켓 스타일 종목별 해석 박스
+        _sum_bullets_html = []
+        for _ln in _tk_summary_lines:
+            _clean_ln = _ln.replace("**", "")
+            _bcol = "#f87171" if "약세 우위" in _clean_ln else ("#34d399" if "강세 우위" in _clean_ln else "#fbbf24")
+            _sum_bullets_html.append(f"<div style='color:{_bcol};font-size:13px;line-height:1.7;'>{_clean_ln}</div>")
+        _today_et = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+        st.markdown(
+            f"<div style='background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:14px 18px;'>"
+            f"<div style='color:#f8fafc;font-weight:700;font-size:14.5px;margin-bottom:8px;'>종목별 해석 · 전체: 강세 ${_bull_sum:.1f}M vs 약세 ${_bear_sum:.1f}M → {_overall_lbl}</div>"
+            f"{''.join(_sum_bullets_html)}"
+            f"<div style='color:#64748b;font-size:11px;margin-top:10px;'>{_today_et} ET · 체결 집계(계약별 합계) · BUY?/SELL? = 방향 추정 · 강세 = 콜 매수·풋 매도 / 약세 = 콜 매도·풋 매수 · 해석은 방향 추정 기반 참고용 · 상위 {min(len(_f_rows), 30)}개 · 대장마켓</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
     else:
         st.info("조건에 맞는 대형 옵션 체결이 없습니다. 필터를 조정하거나 위 붙여넣기 상자에서 체결 내역을 추가해 주세요.")
 
@@ -5198,7 +5214,37 @@ if nav_menu == "🎯 행사가별·동반 체결":
    * A. 롱 ({tk_f} 본주 진입) 전략: 현재가 추격 매수 적합성 판정(Approve/Reject) + 당일 1회 한정 진입가 / 당일 익절가 / 기계적 손절가
    * B. 숏 ({_inv_tk} 인버스 진입) 전략: 현재가 진입 적합성 판정 + 리젝션(윗꼬리) 또는 브레이크아웃(지지 붕괴) 기준 진입가 / 당일 익절가 / 기계적 손절가
    * C. 관망 (Hold / No Trade) 조건: 딜러 피닝이나 GEX 공백으로 손익비가 1:1 미만으로 무너지는 진입 금지 가격대 명시"""
-                _, _proto_out = run_ai_analysis(_proto_prompt)
+                _ok_pr, _proto_out = run_ai_analysis(_proto_prompt)
+                if not _ok_pr:
+                    # API 키/Ollama 미설정 시 자체 정량 역학 엔진으로 100% 자동 출력
+                    _zg_v = float(_zg_f) if _zg_f else round(_spot_use * 1.03, 2)
+                    _is_pos = (_tot_gex >= 0) and (_spot_use >= _zg_v)
+                    _reg_s = "포지티브 감마(+GEX)" if _is_pos else "네거티브 감마(-GEX)"
+                    _hedge_s = "하락 시 매수·상승 시 매도(변동성 억제·박스권)" if _is_pos else "하락 시 현물 추가 매도(Sell Dip)·상승 시 추격 매수(변동성 증폭)"
+                    _cw_v = float(_cw_f) if _cw_f > 0 else round(_spot_use * 1.08, 2)
+                    _pw_v = float(_pw_f) if _pw_f > 0 else round(_spot_use * 0.90, 2)
+                    _mid_lo = round(min(_spot_use, _zg_v) * 0.99, 2)
+                    _mid_hi = round(max(_spot_use, _zg_v) * 1.01, 2)
+                    _long_reject = "Reject (추격 매수 거부)" if not _is_pos else "조건부 진입 가능"
+                    _proto_out = (
+                        f"### 1. 데이터 역학 구조 (Regime & Nodes)\n"
+                        f"* **감마 체제 판정**: 현재가 `${_spot_use:,.2f}` ({_proto_sess}) vs 감마 플립 `${_zg_v:,.2f}` → **{_reg_s}** (`총 Net GEX ${_tot_gex:+.2f}M`). 딜러 기본 헷징 방향은 **{_hedge_s}**입니다.\n"
+                        f"* **콜/풋 월 & 마찰 노드**: 메인 저항 **Call Wall `${_cw_v:g}`**, 메인 지지 **Put Wall `${_pw_v:g}`**, P/C 비율 `Vol {_pc_vol} · OI {_pc_oi}`. 상위 마찰 행사가:\n"
+                        + chr(10).join(f"  {ln}" for ln in _top_lines[:5]) + "\n\n"
+                        f"### 2. 기계적 실행 프로토콜 (Long / Short / Hold)\n"
+                        f"*(당일 진입·청산 · 일본 증권사 차금결제 제한 1일 1회 왕복 기준 · 모든 가격 `{tk_f}` 주가 기준)*\n\n"
+                        f"* **A. 롱 (`{tk_f}` 본주 진입) 전략**\n"
+                        f"  * **현재가 추격 매수**: **{_long_reject}**\n"
+                        f"  * **승인 진입가**: 1안 **Put Wall `${_pw_v:g}` ~ `${_pw_v*1.01:,.2f}`** 지지 확인 시 / 2안 **Flip `${_zg_v:,.2f}`** 상향 돌파 안착 시\n"
+                        f"  * **당일 익절가**: 1차 `${(_spot_use+_cw_v)/2:,.2f}` / 2차 **Call Wall `${_cw_v:g}`**\n"
+                        f"  * **기계적 손절가**: `${_pw_v*0.99:,.2f}` 하향 이탈 시 즉각 청산\n"
+                        f"* **B. 숏 (`{_inv_tk}` 인버스 진입) 전략**\n"
+                        f"  * **타점 A (리젝션 숏)**: `${_zg_v:,.2f}` (Flip) 또는 **Call Wall `${_cw_v:g}`** 도달 후 윗꼬리 저항 시 `{_inv_tk}` 매수\n"
+                        f"  * **타점 B (브레이크아웃 숏)**: `${_spot_use*0.98:,.2f}` 하단 노드 거래량 동반 이탈 시 `{_inv_tk}` 추격 매수\n"
+                        f"  * **당일 익절가 / 손절가**: 익절 **Put Wall `${_pw_v:g}`** / 손절 `${_cw_v*1.01:,.2f}` 돌파 안착 시\n"
+                        f"* **C. 관망 (Hold / No Trade) 조건**\n"
+                        f"  * **`${_mid_lo:,.2f}` ~ `${_mid_hi:,.2f}`** 구간 횡보 시 상·하단 GEX 마찰이 겹쳐 손익비 `1:1` 미만이므로 매매를 중지하고 대기합니다."
+                    )
                 st.session_state[f"proto_report_{tk_f}"] = _proto_out
 
         if _pc4.button("📩 프로토콜 텔레그램 전송", use_container_width=True, key=f"btn_proto_tg_{tk_f}"):
