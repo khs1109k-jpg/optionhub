@@ -947,12 +947,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
             finally:
                 qctx.close()
             return res_k
+        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
-                fut = _ex.submit(_worker)
-                out_k = fut.result(timeout=1.5)
+            fut = _ex.submit(_worker)
+            out_k = fut.result(timeout=1.0)
         except Exception:
             out_k = []
+        finally:
+            _ex.shutdown(wait=False)
         return out_k
 
     @st.cache_data(ttl=10, show_spinner=False)
