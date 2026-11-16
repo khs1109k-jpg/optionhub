@@ -1867,8 +1867,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }}
         syncingX = false;
       }}));
-      if (candles.length > 110) {{
-        chart.timeScale().setVisibleLogicalRange({{ from: candles.length - 110, to: candles.length + 4 }});
+      if (d.candles && d.candles.length > 110) {{
+        chart.timeScale().setVisibleLogicalRange({{ from: d.candles.length - 110, to: d.candles.length + 4 }});
       }} else {{
         chart.timeScale().fitContent();
       }}
