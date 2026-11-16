@@ -1655,20 +1655,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       const elMain = document.getElementById("tv_main");
       const chart = LightweightCharts.createChart(elMain, baseOpt);
       const cs = chart.addCandlestickSeries({{
-        upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350",
-        autoscaleInfoProvider: (original) => {{
-          const res = original();
-          if (res && res.priceRange) {{
-            const refP = d.candles.length ? d.candles[d.candles.length - 1].close : 0;
-            [d.cw, d.pw, d.zg, d.sig_h, d.sig_l].forEach(lv => {{
-              if (lv && (!refP || (lv >= refP * 0.72 && lv <= refP * 1.28))) {{
-                if (lv < res.priceRange.minValue) res.priceRange.minValue = lv * 0.992;
-                if (lv > res.priceRange.maxValue) res.priceRange.maxValue = lv * 1.008;
-              }}
-            }});
-          }}
-          return res;
-        }}
+        upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350"
       }});
       cs.setData(d.candles);
       let vs = null;
