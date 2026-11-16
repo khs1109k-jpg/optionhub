@@ -5134,6 +5134,86 @@ if nav_menu == "🎯 행사가별·동반 체결":
             _top_rows_html,
             "※ ΔOI(+) + 거래량 동반 = 신규 유입(OPEN) | ΔOI(-) + 거래량 동반 = 기존 포지션 청산(CLOSE) | 복수 만기 동시 대량 거래 = 롤오버 후보"
         )
+
+        # [추가] 옵션 데이터 기반 기계적 데이트레이딩 터미널 (1일 1회 왕복 · 롱/숏/관망)
+        with st.expander("📋 추가 ΔOI · 주요 체결 텍스트 붙여넣기 (선택 · 미입력 시 자동 데이터 사용)", expanded=False):
+            _proto_extra = st.text_area(
+                "외부 알림/체결 데이터 (예: 53 PUT +2,130, 60 CALL +3,738, 15:59 60C BUY $358.6K 등)",
+                height=80,
+                key=f"proto_extra_{tk_f}",
+            )
+        _pc1, _pc2, _pc3, _pc4 = st.columns([1.0, 1.0, 1.5, 1.0])
+        _proto_sess = _pc1.selectbox("장 상태", ["데이장", "장전", "본장", "애프터"], key=f"proto_sess_{tk_f}")
+        _proto_px_ov = _pc2.number_input("현재가 수동(0=자동)", min_value=0.0, value=0.0, step=0.1, format="%.2f", key=f"proto_px_{tk_f}")
+        if _pc3.button(f"🤖 {tk_f} 기계적 데이트레이딩 터미널 실행", type="primary", use_container_width=True, key=f"btn_proto_gen_{tk_f}"):
+            with st.spinner(f"{tk_f} 감마 구조·ΔOI·3대 프로토콜(롱/숏/관망) 분석 중..."):
+                _inv_tk = {"SOXL": "SOXS", "TQQQ": "SQQQ", "SPXL": "SPXS", "NVDA": "NVD", "TSLA": "TSLQ"}.get(tk_f, f"{tk_f} 인버스/풋")
+                _top_lines = []
+                for _, _rt in df_top10.iterrows():
+                    _exp_s = str(_rt["만기일"])[:10]
+                    _k_f = float(_rt["행사가"])
+                    _pq = prev_oi_map.get((_exp_s, _rt["구분"], _k_f))
+                    _oq = int(_rt["OI"])
+                    _doi_v = (_oq - _pq) if _pq is not None else 0
+                    _gk = abs(float(_rt["GEX($M)"])) * 1000.0
+                    _gs = f"${_gk:,.1f}K" if _gk < 1000 else f"${_gk/1000.0:,.2f}M"
+                    _top_lines.append(
+                        f"- {_exp_s} {_k_f:g} {_rt['구분'].upper()}: 이전OI={_pq if _pq is not None else '-'}, 최신OI={_oq:,}, ΔOI={_doi_v:+,}, 거래량={int(_rt['거래량']):,}, |GEX|={_gs}"
+                    )
+                # 구글 시트 + 텔레그램 큰 체결 + 무무 옵션 플로우 자동 수집
+                _auto_flows = []
+                if not df_tk_sh.empty:
+                    for _, _sr in df_tk_sh.head(12).iterrows():
+                        _auto_flows.append(f"[시트] {_sr.get('체결시간','')} {_sr.get('만기일','')} {_sr.get('행사가','')} {_sr.get('구분','')} {_sr.get('매수/매도','')} ${_sr.get('프리미엄',0):,.0f} ({_sr.get('유형','')})")
+                for _th in (tg_hits or [])[:12]:
+                    _auto_flows.append(f"[TG] {_th.get('exp','')} {_th.get('strike','')} {_th.get('cp','')} {_th.get('side','')} {_th.get('prem_str','')} ({_th.get('qty',0):,}계약 · {_th.get('tag','')})")
+                _auto_flow_txt = chr(10).join(_auto_flows) if _auto_flows else "수신된 외부 대량 체결 없음 (체인 기준 분석)"
+
+                _spot_use = _proto_px_ov if _proto_px_ov > 0 else spot_live
+                _regime_txt = "포지티브 감마(+GEX)" if _tot_gex >= 0 else "네거티브 감마(-GEX)"
+                _proto_prompt = f"""[시스템 프롬프트: 옵션 데이터 기반 기계적 데이트레이딩 터미널 모드]
+너는 감정, 위로, 매크로 내러티브(뉴스/시황), 주관적 추측을 완전히 배제하고 오직 아래 입력된 옵션 데이터(GEX, 행사가별 거래량, OI 변화)의 수학적/기계적 역학만으로 답변하는 데이터 터미널이다.
+
+[입력 변수]
+- 분석 대상 티커: {tk_f} (대응 인버스 ETF: {_inv_tk}, 모든 가격 레벨은 {tk_f} 주가 기준 통일 표기)
+- 현재가 및 장 상태: ${_spot_use:,.2f} / {_proto_sess}
+- 감마 플립(Gamma Flip): {f'${_zg_f:g}' if _zg_f else '미산출'}
+- Call Wall: ${_cw_f:g} | Put Wall: ${_pw_f:g} | 총 Net GEX: ${_tot_gex:+.2f}M ({_regime_txt})
+- P/C 비율: Vol {_pc_vol} · OI {_pc_oi}
+- 행사가별 ΔOI 및 |GEX| 상위:
+{chr(10).join(_top_lines)}
+- 자동 연동 대량 체결 (구글 시트 · 텔레그램):
+{_auto_flow_txt}
+- 추가 수동 입력: {_proto_extra.strip() if _proto_extra.strip() else '없음'}
+
+[트레이더 제약 조건]
+- 타임프레임: 오버나잇 없는 순수 '당일 진입 · 당일 청산' 데이트레이딩 (당일 마찰 노드 기준).
+- 계좌 제약(일본 증권사 현물 계좌 차금결제 제한): 당일 매수 후 매도한 자금으로 동일 종목 당일 재매수 불가 → 가장 승률 높은 자리에서 '1일 1회 왕복(One Shot, One Kill)' 기준.
+
+[출력 포맷 - 반드시 아래 2개 섹션으로만 기계적 출력]
+1. 데이터 역학 구조 (Regime & Nodes)
+   * 현재가 vs 감마 플립 위치 비교를 통한 포지티브/네거티브 감마 체제 판정 (딜러 기본 헷징 방향 명시)
+   * 메인 Call Wall / Put Wall 위치와 행사가별 거래량(Volume)·ΔOI 이상 급증 구간(마찰 노드) 상관관계 해체
+2. 기계적 실행 프로토콜 (Long / Short / Hold)
+   * A. 롱 ({tk_f} 본주 진입) 전략: 현재가 추격 매수 적합성 판정(Approve/Reject) + 당일 1회 한정 진입가 / 당일 익절가 / 기계적 손절가
+   * B. 숏 ({_inv_tk} 인버스 진입) 전략: 현재가 진입 적합성 판정 + 리젝션(윗꼬리) 또는 브레이크아웃(지지 붕괴) 기준 진입가 / 당일 익절가 / 기계적 손절가
+   * C. 관망 (Hold / No Trade) 조건: 딜러 피닝이나 GEX 공백으로 손익비가 1:1 미만으로 무너지는 진입 금지 가격대 명시"""
+                _, _proto_out = run_ai_analysis(_proto_prompt)
+                st.session_state[f"proto_report_{tk_f}"] = _proto_out
+
+        if _pc4.button("📩 프로토콜 텔레그램 전송", use_container_width=True, key=f"btn_proto_tg_{tk_f}"):
+            _rep_txt = st.session_state.get(f"proto_report_{tk_f}", "")
+            if _rep_txt:
+                if send_telegram_msg(tg_token, tg_chat_id, f"🧭 *[{tk_f} 기계적 3대 프로토콜]*\n\n{_rep_txt}")[0]:
+                    st.toast("✅ 텔레그램 전송 완료!")
+                else:
+                    st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
+            else:
+                st.toast("먼저 프로토콜을 생성해 주세요.")
+
+        if st.session_state.get(f"proto_report_{tk_f}"):
+            with st.container(border=True):
+                st.markdown(st.session_state[f"proto_report_{tk_f}"])
     else:
         st.info("야후 실시간 옵션 체인 조회를 켜면 전체 요약 표와 ΔOI 전략 맵이 표시됩니다.")
 
