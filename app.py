@@ -1045,12 +1045,21 @@ if nav_menu == "⚡ 무무 실시간 차트":
     elif cur["px"] == 0 and candles:
         cur["px"] = candles[-1]["close"]
 
-    if candles and cur["px"] > 0:
-        _lc = dict(candles[-1])
-        _lc["close"] = round(float(cur["px"]), 2)
-        _lc["high"] = max(float(_lc["high"]), _lc["close"])
-        _lc["low"] = min(float(_lc["low"]), _lc["close"])
-        candles[-1] = _lc
+    if cur["px"] > 0:
+        _px_sync = round(float(cur["px"]), 2)
+        for _tfk, _tfl in merged_tf_sets.items():
+            if _tfl:
+                _lc = dict(_tfl[-1])
+                _lc["close"] = _px_sync
+                _lc["high"] = max(float(_lc["high"]), _px_sync)
+                _lc["low"] = min(float(_lc["low"]), _px_sync)
+                _tfl[-1] = _lc
+        if candles:
+            _lc0 = dict(candles[-1])
+            _lc0["close"] = _px_sync
+            _lc0["high"] = max(float(_lc0["high"]), _px_sync)
+            _lc0["low"] = min(float(_lc0["low"]), _px_sync)
+            candles[-1] = _lc0
 
     bid_px_s = f"${bp_num:,.2f}" if bp_num > 0 else "-"
     ask_px_s = f"${ap_num:,.2f}" if ap_num > 0 else "-"
