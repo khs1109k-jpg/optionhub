@@ -1735,7 +1735,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <span>🔵 <b>1σ 상단/하단</b>: <b style="color:#38bdf8;">{f"${sig_l_lv:g} ~ ${sig_h_lv:g}" if (sig_h_lv and sig_l_lv) else "-"}</b></span>
       <span>⚪ <b>OPEN</b>: <b style="color:#e2e8f0;">{f"${merged_tf_sets['1일봉'][-1]['open']:g}" if merged_tf_sets.get("1일봉") else "-"}</b></span>
     </div>
-    <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden;">
+    <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
       <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 끌기=이동 · 휠=확대/축소</span>
       <div style="display:flex; align-items:center; gap:5px;">
@@ -1780,7 +1780,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       </div>
       </div>
     </div>
-    <div style="background:#070b12; border-top:1px solid #1e293b; max-height:225px; overflow-y:auto; font-family:monospace; font-size:11px;">
+    <div id="tv_flow_box" style="background:#070b12; border-top:1px solid #1e293b; height:215px; overflow-y:auto; flex-shrink:0; font-family:monospace; font-size:11px;">
       <table style="width:100%; border-collapse:collapse; text-align:center;">
         <thead>
           <tr style="background:#0c1322; color:#94a3b8; border-bottom:1px solid #1e293b; position:sticky; top:0;">
@@ -1919,18 +1919,43 @@ if nav_menu == "⚡ 무무 실시간 차트":
           }});
         }}
         if (d.show_vpvr_opt && d.opt_bars && d.opt_bars.length) {{
+          const visBars = [];
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
-            if (y === null || y < 14 || y > mh - 14) return;
-            const wc = b.c > 0 ? Math.max(2, Math.round(b.c * 160 * sc)) : 0;
-            const wp = b.put > 0 ? Math.max(2, Math.round(b.put * 160 * sc)) : 0;
-            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.90)"; ctx.fillRect(0, y - 3, wp, 6); }}
-            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.92)"; ctx.fillRect(wp, y - 3, wc, 6); }}
-            if (wc + wp >= 14) {{
-              ctx.font = "bold 9px monospace";
-              ctx.fillStyle = "#e2e8f0";
-              ctx.fillText("C " + fmtM(b.c_m) + " · P " + fmtM(b.p_m), wc + wp + 5, y + 3);
+            if (y === null || y < 16 || y > mh - 28) return;
+            const totM = Math.max(Number(b.c_m || 0) + Number(b.p_m || 0), (Number(b.c || 0) + Number(b.put || 0)) * 0.1);
+            if (totM > 0) visBars.push({{ b, y, totM }});
+          }});
+          const visMax = Math.max(...visBars.map(x => x.totM), 1e-6);
+          visBars.forEach(({{ b, y, totM }}) => {{
+            const cVal = Number(b.c_m || 0) > 0 ? Number(b.c_m) : Number(b.c || 0) * 0.1;
+            const pVal = Number(b.p_m || 0) > 0 ? Number(b.p_m) : Number(b.put || 0) * 0.1;
+            const barSpan = Math.max(18, Math.round((totM / visMax) * Math.min(180, mw * 0.22)));
+            const wp = pVal > 0 ? Math.max(4, Math.round(barSpan * (pVal / (cVal + pVal)))) : 0;
+            const wc = cVal > 0 ? Math.max(4, barSpan - wp) : 0;
+            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.92)"; ctx.fillRect(0, y - 4, wp, 8); }}
+            if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.94)"; ctx.fillRect(wp, y - 4, wc, 8); }}
+            let xOff = wp + wc + 5;
+            const isCw = d.cw && Math.abs(b.p - Number(d.cw)) <= 0.5;
+            const isPw = d.pw && Math.abs(b.p - Number(d.pw)) <= 0.5;
+            const isZg = d.zg && Math.abs(b.p - Number(d.zg)) <= 0.5;
+            if (isPw || isCw || isZg) {{
+              const tag = isPw ? "P" : (isCw ? "C" : "G");
+              const tCol = isPw ? "#ef4444" : (isCw ? "#22c55e" : "#f59e0b");
+              ctx.strokeStyle = tCol; ctx.lineWidth = 1;
+              ctx.fillStyle = "#080c14"; ctx.fillRect(xOff, y - 6, 12, 12);
+              ctx.strokeRect(xOff, y - 6, 12, 12);
+              ctx.font = "bold 9px monospace"; ctx.fillStyle = tCol;
+              ctx.fillText(tag, xOff + 3, y + 3);
+              xOff += 16;
             }}
+            ctx.font = "bold 9px monospace";
+            ctx.fillStyle = "#22c55e";
+            const cTxt = "C " + fmtM(cVal);
+            ctx.fillText(cTxt, xOff, y + 3);
+            const cwPx = ctx.measureText(cTxt).width + 6;
+            ctx.fillStyle = "#f87171";
+            ctx.fillText("P " + fmtM(pVal), xOff + cwPx, y + 3);
           }});
         }}
         // 중앙 라벨 수평 옵션 레벨선 (CALL / GAMMA / GEX CALL / SIG_L / OPEN / DELTA / SIG_H / GEX WALL PUT)
@@ -2306,12 +2331,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
       window.addEventListener("keydown", (e) => {{ if (e.key === "Escape" && fakeFs) setFakeFs(false); }});
       function syncSize() {{
         const isFs = !!document.fullscreenElement || fakeFs;
-        const mh = isFs ? Math.max(420, window.innerHeight - 64 - (subCharts.length * 120)) : 460;
+        const flowBox = document.getElementById("tv_flow_box");
+        const flowH = isFs ? 200 : 215;
+        if (flowBox) flowBox.style.height = flowH + "px";
+        const subH = isFs ? 90 : 130;
+        const mh = isFs ? Math.max(260, window.innerHeight - 48 - flowH - (subCharts.length * subH)) : 460;
         elMain.style.height = mh + "px";
         vpCv.style.height = mh + "px";
         drCv.style.height = mh + "px";
+        const rlEl = document.getElementById("tv_rail");
+        if (rlEl) rlEl.style.height = mh + "px";
         chart.applyOptions({{ width: elMain.clientWidth, height: mh }});
-        subCharts.forEach(sc => sc.applyOptions({{ width: elMain.clientWidth }}));
+        subCharts.forEach(sc => {{
+          const pEl = sc.chartElement ? sc.chartElement().parentElement : null;
+          if (pEl) pEl.style.height = subH + "px";
+          sc.applyOptions({{ width: elMain.clientWidth, height: subH }});
+        }});
         drCv.width = elMain.clientWidth; drCv.height = mh; redraw();
         drawVpvr();
       }}
