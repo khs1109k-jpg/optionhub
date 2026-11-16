@@ -791,9 +791,16 @@ def _start_live_quote_server():
                                 b["low"] = min(b["low"], hp)
                                 b["close"] = hp
                                 b["v1"] = hv
+                        _prev_c_b, _prev_v_b = None, None
                         for bt in sorted(b_map.keys()):
                             b = b_map[bt]
-                            bars_out.append({"time": b["time"], "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "volume": max(0.0, b["v1"] - b["v0"])})
+                            _op = _prev_c_b if (_prev_c_b is not None and b["high"] == b["low"]) else b["open"]
+                            _hi = max(_op, b["high"])
+                            _lo = min(_op, b["low"])
+                            _vd = max(0.0, b["v1"] - _prev_v_b) if (_prev_v_b is not None and b["v1"] >= _prev_v_b) else max(0.0, b["v1"] - b["v0"])
+                            bars_out.append({"time": b["time"], "open": _op, "high": _hi, "low": _lo, "close": b["close"], "volume": _vd})
+                            _prev_c_b = b["close"]
+                            _prev_v_b = b["v1"]
                     if row and row[1]:
                         qd = json.loads(row[1])
                         px = 0.0
@@ -1113,23 +1120,34 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if hist_rows:
             df_h = pd.DataFrame(hist_rows, columns=["ts", "px", "vol"])
             df_h["min_ts"] = (df_h["ts"] // sec_step).astype(int) * sec_step
+            _prev_hc = float(merged[-1]["close"]) if merged else None
+            _prev_hv = None
             for m_ts, g in df_h.groupby("min_ts"):
                 o_px = float(g["px"].iloc[0])
                 h_px = float(g["px"].max())
                 l_px = float(g["px"].min())
                 c_px = float(g["px"].iloc[-1])
-                v_diff = float(max(g["vol"].iloc[-1] - g["vol"].iloc[0], 0))
-                # 무무 quote_hist 캔들은 가격 변화가 있거나 최근 12시간 이내 틱이면 무조건 유지
+                _v_end = float(g["vol"].iloc[-1] or 0)
+                _v_beg = float(g["vol"].iloc[0] or 0)
+                v_diff = float(max(_v_end - _prev_hv, 0)) if (_prev_hv is not None and _v_end >= _prev_hv) else float(max(_v_end - _v_beg, 0))
+                if h_px <= l_px and _prev_hc is not None:
+                    o_px = _prev_hc
+                    h_px = max(o_px, c_px)
+                    l_px = min(o_px, c_px)
                 if v_diff <= 0 and h_px <= l_px and merged and abs(c_px - merged[-1]["close"]) < 1e-6 and (time.time() - int(m_ts) > 43200):
+                    _prev_hc = c_px
+                    _prev_hv = _v_end
                     continue
                 merged.append({
                     "time": int(m_ts),
-                    "open": o_px,
-                    "high": h_px,
-                    "low": l_px,
-                    "close": c_px,
+                    "open": round(o_px, 2),
+                    "high": round(h_px, 2),
+                    "low": round(l_px, 2),
+                    "close": round(c_px, 2),
                     "volume": v_diff,
                 })
+                _prev_hc = c_px
+                _prev_hv = _v_end
         c_dict = {}
         for c in merged:
             if c["close"] <= 0:
@@ -2127,7 +2145,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       setInterval(async () => {{
         try {{
           if (!liveLastBar || curTfSec >= 86400) return;
-          const host = window.location.hostname || "127.0.0.1";
+          const host = (window.parent && window.parent.location && window.parent.location.hostname) || window.location.hostname || "132.226.3.145";
           const resp = await fetch(`http://${{host}}:8502/quote?sym=${{encodeURIComponent(d.sym || "")}}&sec=${{curTfSec}}`, {{ cache: "no-store" }});
           if (!resp.ok) return;
           const q = await resp.json();
