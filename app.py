@@ -1368,7 +1368,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             c_o1, c_o2, c_o3 = st.columns(3)
             show_vwap = c_o1.checkbox("VWAP", value=False, key="ed_vwap")
             show_bb = c_o2.checkbox("볼린저", value=False, key="ed_bb")
-            show_ma = c_o3.checkbox("이동평균(MA)", value=False, key="ed_ma")
+            show_ma = c_o3.checkbox("이동평균(MA)", value=True, key="ed_ma")
             c_o4, c_o5, c_o6 = st.columns(3)
             show_cw = c_o4.checkbox("콜월 (Call Wall)", value=True, key="ed_cw")
             c_l1, c_l2, c_l3, c_l4 = st.columns(4)
@@ -1601,8 +1601,89 @@ if nav_menu == "⚡ 무무 실시간 차트":
             sig_h_lv = round(last_c_sig * (1.0 + hv20_1d_std), 2)
             sig_l_lv = round(last_c_sig * (1.0 - hv20_1d_std), 2)
 
+    # 하단 실시간 옵션 체결 스트림 테이블 생성 (image_d34ba1.jpg 스타일)
+    _stream_items = []
+    try:
+        _big_list = load_json_file(BIG_FLOWS_PATH, [])
+        for _bf in _big_list:
+            if str(_bf.get("tk", "")).upper() == clean_tk:
+                _stream_items.append({
+                    "tm": str(_bf.get("tm", _bf.get("time", "-")))[:8],
+                    "exp": str(_bf.get("exp", "-"))[-5:],
+                    "stk": str(_bf.get("stk", _bf.get("strike", "-"))).replace("$", ""),
+                    "cp": "C" if "C" in str(_bf.get("cp", "")).upper() else "P",
+                    "bs": "BUY" if "BUY" in str(_bf.get("bs", _bf.get("side", "BUY"))).upper() or "ASK" in str(_bf.get("bs", "")).upper() else "SELL",
+                    "prem": str(_bf.get("prem", "-")),
+                    "vol": str(_bf.get("vol", "-")),
+                    "cnt": str(_bf.get("cnt", "-")),
+                    "oi": str(_bf.get("oi", "-")),
+                    "note": str(_bf.get("typ", _bf.get("note", "—"))),
+                })
+    except Exception:
+        pass
+    try:
+        _tk_flows = [r for r in all_raw_flows if len(r) >= 15 and str(r[1]).upper() == clean_tk]
+        for _rf in _tk_flows[-15:]:
+            _cp_ch = "C" if "C" in str(_rf[3]).upper() else "P"
+            _bs_str = "BUY" if ("A" in str(_rf[4]).upper() or "BUY" in str(_rf[4]).upper()) else "SELL"
+            _stk_raw = str(_rf[7]).replace("$", "").strip()
+            _exp_raw = str(_rf[5])[-5:]
+            _tm_raw = str(_rf[2]).replace(" AM", "").replace(" PM", "").strip()[:5]
+            _vol_raw = str(_rf[9]) if str(_rf[9]) not in ("-", "nan", "") else "-"
+            _oi_raw = str(_rf[10]) if str(_rf[10]) not in ("-", "nan", "") else "-"
+            _note_raw = str(_rf[13]) if str(_rf[13]) not in ("-", "nan", "") else "—"
+            _stream_items.append({
+                "tm": _tm_raw, "exp": _exp_raw, "stk": _stk_raw,
+                "cp": _cp_ch, "bs": _bs_str, "prem": str(_rf[14]),
+                "vol": _vol_raw, "cnt": "-", "oi": _oi_raw, "note": _note_raw,
+            })
+    except Exception:
+        pass
+    def _match_lv_tag(_stk_s):
+        try:
+            _sv = float(str(_stk_s).replace(",", "").replace("$", ""))
+        except Exception:
+            return "—"
+        if zg_lv and abs(_sv - float(zg_lv)) <= 0.5: return "GAMMA"
+        if delta_lv and abs(_sv - float(delta_lv)) <= 0.5: return "DELTA · GEX PUT"
+        if pw_lv and abs(_sv - float(pw_lv)) <= 0.5: return "PUT · GEX WALL"
+        if cw_lv and abs(_sv - float(cw_lv)) <= 0.5: return "CALL · GEX WALL"
+        if gex_c_lv and abs(_sv - float(gex_c_lv)) <= 0.5: return "GEX CALL"
+        if gex_p_lv and abs(_sv - float(gex_p_lv)) <= 0.5: return "GEX PUT"
+        return "—"
+    _stream_rows_html = ""
+    for _si in _stream_items[:12]:
+        _lv_tag = _match_lv_tag(_si["stk"])
+        _cp_col = "#22c55e" if _si["cp"] == "C" else "#ef4444"
+        _bs_col = "#22c55e" if _si["bs"] == "BUY" else "#cbd5e1"
+        _row_bdr = ""
+        if _si["bs"] == "BUY" and _si["cp"] == "C":
+            _row_bdr = "outline:1px solid #22c55e; background:rgba(16,185,129,0.08);"
+        elif _si["bs"] == "BUY" and _si["cp"] == "P" and _lv_tag != "—":
+            _row_bdr = "outline:1px solid #ef4444; background:rgba(239,68,68,0.08);"
+        elif _lv_tag != "—":
+            _row_bdr = "background:rgba(245,158,11,0.04);"
+        _lv_col = "#f59e0b" if _lv_tag != "—" else "#64748b"
+        _stream_rows_html += (
+            f"<tr style='border-bottom:1px solid #1e293b; {_row_bdr}'>"
+            f"<td style='padding:3px 6px;color:#cbd5e1;'>{_si['tm']}</td>"
+            f"<td style='padding:3px 6px;color:#cbd5e1;'>{_si['exp']}</td>"
+            f"<td style='padding:3px 6px;color:#f87171;font-weight:700;'>{_si['stk']}</td>"
+            f"<td style='padding:3px 6px;color:{_lv_col};font-weight:700;'>{_lv_tag}</td>"
+            f"<td style='padding:3px 6px;color:{_cp_col};font-weight:700;'>{_si['cp']}</td>"
+            f"<td style='padding:3px 6px;color:{_bs_col};font-weight:700;'>{_si['bs']}</td>"
+            f"<td style='padding:3px 6px;color:#fbbf24;font-weight:700;'>{_si['prem']}</td>"
+            f"<td style='padding:3px 6px;color:#cbd5e1;'>{_si['vol']}</td>"
+            f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['cnt']}</td>"
+            f"<td style='padding:3px 6px;color:#38bdf8;'>{_si['oi']}</td>"
+            f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['note']}</td>"
+            f"</tr>"
+        )
+    if not _stream_rows_html:
+        _stream_rows_html = "<tr><td colspan='11' style='padding:8px;text-align:center;color:#64748b;'>수집된 해당 티커 대형 옵션 체결 내역이 없습니다.</td></tr>"
+
     pane_cnt = int(show_cvd) + int(show_bii) + int(show_macd) + int(show_rsi)
-    total_h = 520 + pane_cnt * 135
+    total_h = 520 + pane_cnt * 135 + 245
 
     tv_payload = json.dumps({
         "tk": clean_tk,
@@ -1680,9 +1761,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <div style="display:flex; width:100%;">
       <div style="position:relative; flex:1; min-width:0;">
       <div id="tv_main" style="width:100%; height:460px;"></div>
-      <div id="tv_hud" style="position:absolute; top:8px; right:76px; z-index:4; background:rgba(15,23,42,0.85); border:1px solid #334155; border-radius:6px; padding:5px 10px; font-family:monospace; font-size:11px; color:#e2e8f0; pointer-events:none;"></div>
+      <div id="tv_hud" style="position:absolute; top:6px; left:8px; z-index:4; background:rgba(8,12,20,0.78); border-radius:4px; padding:4px 8px; font-family:monospace; font-size:11px; line-height:1.35; color:#e2e8f0; pointer-events:none;"></div>
+      <div id="tv_hud_r" style="position:absolute; top:6px; right:98px; z-index:4; text-align:right; font-family:monospace; font-size:11px; line-height:1.35; color:#cbd5e1; pointer-events:none;"></div>
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
-      <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:680px; height:460px; pointer-events:none; z-index:2;"></canvas>
+      <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:2;"></canvas>
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
       </div>
       <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
@@ -1696,6 +1778,29 @@ if nav_menu == "⚡ 무무 실시간 차트":
           for x in sub_order
       ])}
       </div>
+      </div>
+    </div>
+    <div style="background:#070b12; border-top:1px solid #1e293b; max-height:225px; overflow-y:auto; font-family:monospace; font-size:11px;">
+      <table style="width:100%; border-collapse:collapse; text-align:center;">
+        <thead>
+          <tr style="background:#0c1322; color:#94a3b8; border-bottom:1px solid #1e293b; position:sticky; top:0;">
+            <th style="padding:4px 6px;">TIME (ET)</th>
+            <th style="padding:4px 6px;">EXP</th>
+            <th style="padding:4px 6px;">STRIKE</th>
+            <th style="padding:4px 6px;">LEVEL</th>
+            <th style="padding:4px 6px;">C/P</th>
+            <th style="padding:4px 6px;">B/S</th>
+            <th style="padding:4px 6px;">PREM</th>
+            <th style="padding:4px 6px;">Volume</th>
+            <th style="padding:4px 6px;">구간 체결</th>
+            <th style="padding:4px 6px;">OI (Δ)</th>
+            <th style="padding:4px 6px;">NOTE</th>
+          </tr>
+        </thead>
+        <tbody>{_stream_rows_html}</tbody>
+      </table>
+      <div style="padding:4px 8px; font-size:10px; color:#64748b; border-top:1px solid #1e293b;">
+        실시간 옵션 플로우 · Volume=해당 체결 수량 · 구간 체결=동일 계약 전체 횟수 · OI=확정 잔고
       </div>
     </div>
     </div>
@@ -1739,9 +1844,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
       styleTfBtns(d.tf_cur);
       const sVwap = d.vwap.length ? chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}) : null;
       if (sVwap) sVwap.setData(d.vwap);
-      const sMa20 = d.ma20.length ? chart.addLineSeries({{ color:"#22c55e", lineWidth:1, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sMa20 = d.ma20.length ? chart.addLineSeries({{ color:"#22c55e", lineWidth:1.5, lastValueVisible:true, priceLineVisible:false, title:"MA20" }}) : null;
       if (sMa20) sMa20.setData(d.ma20);
-      const sMa200 = d.ma200.length ? chart.addLineSeries({{ color:"#eab308", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}) : null;
+      const sMa200 = d.ma200.length ? chart.addLineSeries({{ color:"#eab308", lineWidth:2, lastValueVisible:true, priceLineVisible:false, title:"MA200" }}) : null;
       if (sMa200) sMa200.setData(d.ma200);
       const sBbUp = d.bb_up.length ? chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}) : null;
       const sBbDn = d.bb_dn.length ? chart.addLineSeries({{ color:"rgba(168,85,247,0.7)", lineWidth:1, lineStyle:2, lastValueVisible:false, priceLineVisible:false }}) : null;
@@ -1758,15 +1863,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
       if (sSpanB) sSpanB.setData(d.span_b);
       if (sChikou) sChikou.setData(d.chikou);
 
-      if (d.cw) cs.createPriceLine({{ price:d.cw, color:"#10b981", lineWidth:2, lineStyle:2, title:"CALL WALL" }});
-      if (d.pw) cs.createPriceLine({{ price:d.pw, color:"#ef4444", lineWidth:2, lineStyle:2, title:"PUT WALL" }});
-      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"#f59e0b", lineWidth:2, lineStyle:1, title:"FLIP GAMMA" }});
-      if (d.sig_h) cs.createPriceLine({{ price:d.sig_h, color:"#f87171", lineWidth:1, lineStyle:2, title:"1σ 상단" }});
-      if (d.sig_l) cs.createPriceLine({{ price:d.sig_l, color:"#38bdf8", lineWidth:1, lineStyle:2, title:"1σ 하단" }});
-      if (d.open_px) cs.createPriceLine({{ price:d.open_px, color:"#e2e8f0", lineWidth:1.5, lineStyle:0, title:"OPEN" }});
-      if (d.delta_k) cs.createPriceLine({{ price:d.delta_k, color:"#eab308", lineWidth:1, lineStyle:3, title:"DELTA" }});
-      if (d.gex_c_k) cs.createPriceLine({{ price:d.gex_c_k, color:"#22c55e", lineWidth:1, lineStyle:3, title:"GEX CALL" }});
-      if (d.gex_p_k) cs.createPriceLine({{ price:d.gex_p_k, color:"#fb7185", lineWidth:1, lineStyle:3, title:"GEX PUT" }});
+      if (d.cw) cs.createPriceLine({{ price:d.cw, color:"rgba(16,185,129,0)", lineWidth:1, lineVisible:false, axisLabelVisible:true, title:"" }});
+      if (d.pw) cs.createPriceLine({{ price:d.pw, color:"rgba(239,68,68,0)", lineWidth:1, lineVisible:false, axisLabelVisible:true, title:"" }});
+      if (d.zg) cs.createPriceLine({{ price:d.zg, color:"rgba(245,158,11,0)", lineWidth:1, lineVisible:false, axisLabelVisible:true, title:"" }});
+      if (d.open_px) cs.createPriceLine({{ price:d.open_px, color:"rgba(226,232,240,0)", lineWidth:1, lineVisible:false, axisLabelVisible:true, title:"" }});
 
       // VPVR + 좌측 Call(초록)/Put(빨강) 가로 막대 그리기
       const vpCv = document.getElementById("tv_vpvr");
@@ -1795,16 +1895,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
         drawCloud();
         drawRail();
         const mh = elMain.clientHeight || 460;
-        vpCv.width = 680; vpCv.height = mh;
+        const mw = elMain.clientWidth || 800;
+        vpCv.width = mw; vpCv.height = mh;
         const ctx = vpCv.getContext("2d");
-        ctx.clearRect(0, 0, 680, mh);
+        ctx.clearRect(0, 0, mw, mh);
         const sc = d.bar_scale || 2.2;
+        const fmtM = (m) => {{
+          const v = Number(m || 0);
+          if (v >= 1.0) return "$" + v.toFixed(2) + "M";
+          return "$" + (v * 1000).toFixed(1) + "K";
+        }};
         if (d.show_vpvr && d.vpvr && d.vpvr.length) {{
           d.vpvr.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
             if (y === null || y < 0 || y > mh) return;
             const w = Math.max(4, Math.round(b.pct * 220 * sc));
-            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.38)" : "rgba(56,189,248,0.24)";
+            ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.34)" : "rgba(56,189,248,0.20)";
             ctx.fillRect(0, y - 5, w, 10);
             if (b.pct >= 0.99) {{
               ctx.font = "bold 9px monospace"; ctx.fillStyle = "#fbbf24";
@@ -1815,16 +1921,90 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if (d.show_vpvr_opt && d.opt_bars && d.opt_bars.length) {{
           d.opt_bars.forEach(b => {{
             const y = cs.priceToCoordinate(b.p);
-            if (y === null || y < 0 || y > mh) return;
+            if (y === null || y < 14 || y > mh - 14) return;
             const wc = Math.round(b.c * 145 * sc);
             const wp = Math.round(b.put * 145 * sc);
-            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.88)"; ctx.fillRect(0, y - 3, wp, 6); }}
+            if (wp > 0) {{ ctx.fillStyle = "rgba(239,68,68,0.90)"; ctx.fillRect(0, y - 3, wp, 6); }}
             if (wc > 0) {{ ctx.fillStyle = "rgba(16,185,129,0.92)"; ctx.fillRect(wp, y - 3, wc, 6); }}
-            if (wc + wp > Math.max(22, Math.round(32 * sc))) {{
-              ctx.font = "10px monospace"; ctx.fillStyle = "#e2e8f0";
-              ctx.fillText("C" + b.c_m + "/P" + b.p_m, wc + wp + 4, y + 3);
+            if (wc + wp > Math.max(18, Math.round(28 * sc))) {{
+              ctx.font = "bold 9px monospace";
+              ctx.fillStyle = "#e2e8f0";
+              ctx.fillText("C " + fmtM(b.c_m) + " · P " + fmtM(b.p_m), wc + wp + 5, y + 3);
             }}
           }});
+        }}
+        // 중앙 라벨 수평 옵션 레벨선 (CALL / GAMMA / GEX CALL / SIG_L / OPEN / DELTA / SIG_H / GEX WALL PUT)
+        const lvSpecs = [
+          {{ p: d.cw, txt: "CALL " + (d.cw || ""), col: "#22c55e", dash: [6, 4], xp: 0.50 }},
+          {{ p: d.zg, txt: "GAMMA " + (d.zg || ""), col: "#f59e0b", dash: [6, 4], xp: 0.50 }},
+          {{ p: d.gex_c_k, txt: (d.gex_c_k || "") + " GEX CALL", col: "#38bdf8", dash: [5, 4], xp: 0.50 }},
+          {{ p: d.sig_l, txt: "SIG_L " + (d.sig_l || ""), col: "#3b82f6", dash: [5, 4], xp: 0.32 }},
+          {{ p: d.open_px, txt: "OPEN " + (d.open_px || ""), col: "#e2e8f0", dash: [4, 3], xp: 0.60, solidBg: true }},
+          {{ p: d.delta_k, txt: (d.delta_k || "") + " DELTA GEX PUT", col: "#f97316", dash: [6, 4], xp: 0.52 }},
+          {{ p: d.sig_h, txt: "SIG_H " + (d.sig_h || ""), col: "#ef4444", dash: [5, 4], xp: 0.32 }},
+          {{ p: d.pw, txt: (d.pw || "") + " GEX WALL PUT", col: "#cbd5e1", dash: [6, 4], xp: 0.42 }},
+        ];
+        const chartRight = Math.max(120, mw - 94);
+        lvSpecs.forEach(lv => {{
+          if (!lv.p) return;
+          const y = cs.priceToCoordinate(Number(lv.p));
+          if (y === null || y < 12 || y > mh - 12) return;
+          ctx.save();
+          ctx.strokeStyle = lv.col;
+          ctx.lineWidth = 1.3;
+          ctx.setLineDash(lv.dash);
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(chartRight, y); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.font = "bold 10px monospace";
+          const tw = ctx.measureText(lv.txt).width + 12;
+          const bx = Math.max(8, Math.min(chartRight - tw - 8, Math.round(chartRight * lv.xp - tw / 2)));
+          ctx.fillStyle = lv.solidBg ? "#f8fafc" : "#080c14";
+          ctx.fillRect(bx, y - 8, tw, 16);
+          ctx.strokeStyle = lv.col;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(bx, y - 8, tw, 16);
+          ctx.fillStyle = lv.solidBg ? "#0f172a" : lv.col;
+          ctx.fillText(lv.txt, bx + 6, y + 3.5);
+          ctx.restore();
+        }});
+        // 금색 테두리 거래량 스파이크 박스 (상위 5개)
+        if (d.volumes && d.volumes.length) {{
+          const visVols = [];
+          for (let i = 0; i < d.volumes.length; i++) {{
+            const v = d.volumes[i];
+            const vx = chart.timeScale().timeToCoordinate(v.time);
+            if (vx !== null && vx >= 50 && vx <= chartRight - 30 && Number(v.value) > 0) {{
+              visVols.push({{ x: vx, val: Number(v.value) }});
+            }}
+          }}
+          if (visVols.length) {{
+            const maxV = Math.max(...visVols.map(v => v.val), 1);
+            visVols.sort((a, b) => b.val - a.val);
+            const picked = [];
+            for (const cand of visVols) {{
+              if (picked.every(p => Math.abs(p.x - cand.x) > 58)) {{
+                picked.push(cand);
+                if (picked.length >= 5) break;
+              }}
+            }}
+            picked.forEach(p => {{
+              const lbl = p.val >= 1e6 ? (p.val / 1e6).toFixed(1) + "M" : (p.val >= 1e3 ? (p.val / 1e3).toFixed(1) + "K" : String(Math.round(p.val)));
+              const barH = Math.max(8, Math.round((p.val / maxV) * (mh * 0.16)));
+              const boxY = Math.max(24, mh - barH - 22);
+              ctx.save();
+              ctx.font = "bold 9px monospace";
+              const bw = ctx.measureText(lbl).width + 8;
+              const bx = Math.round(p.x - bw / 2);
+              ctx.fillStyle = "rgba(8,12,20,0.92)";
+              ctx.fillRect(bx, boxY, bw, 14);
+              ctx.strokeStyle = "#eab308";
+              ctx.lineWidth = 1;
+              ctx.strokeRect(bx, boxY, bw, 14);
+              ctx.fillStyle = "#fef08a";
+              ctx.fillText(lbl, bx + 4, boxY + 10);
+              ctx.restore();
+            }});
+          }}
         }}
       }}
       function drawRail() {{
@@ -1942,13 +2122,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }});
 
       const hudEl = document.getElementById("tv_hud");
-      if (hudEl) {{
-        const cTxt = d.candles.length ? d.candles[d.candles.length-1].close : "-";
-        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 종가 <b style="color:#f8fafc;">$${{cTxt}}` +
-          (d.cw ? ` · <span style="color:#10b981;">CW $${{d.cw}}</span>` : "") +
-          (d.pw ? ` · <span style="color:#ef4444;">PW $${{d.pw}}</span>` : "") +
-          (d.zg ? ` · <span style="color:#f59e0b;">γ $${{d.zg}}</span>` : "");
+      const hudREl = document.getElementById("tv_hud_r");
+      function updateHud(bar, isLive) {{
+        if (!hudEl) return;
+        const b = bar || (d.candles.length ? d.candles[d.candles.length-1] : null);
+        const l1 = `<b style="color:#f8fafc;font-size:12px;">${{d.tk}}</b> <span style="color:#94a3b8;">1DAY</span>` +
+          (d.cw ? ` <span style="color:#22c55e;">CALL ${{d.cw}}</span>` : "") +
+          (d.pw ? ` <span style="color:#f87171;">PUT ${{d.pw}}</span>` : "") +
+          (d.zg ? ` <span style="color:#f59e0b;">GAMMA ${{d.zg}}</span>` : "") +
+          (d.delta_k ? ` <span style="color:#38bdf8;">DELTA ${{d.delta_k}}</span>` : "");
+        const colP = (b && b.close >= b.open) ? "#22c55e" : "#ef4444";
+        const l2 = b ? `O <b style="color:#e2e8f0;">${{b.open}}</b>  H <b style="color:#e2e8f0;">${{b.high}}</b>  L <b style="color:#e2e8f0;">${{b.low}}</b>  C <b style="color:${{colP}};">${{b.close}}</b>` + (isLive ? ` <span style="color:#22c55e;">● LIVE</span>` : "") : "";
+        hudEl.innerHTML = l1 + (l2 ? `<br>${{l2}}` : "");
+        if (hudREl && b) {{
+          hudREl.innerHTML = `<b style="color:#f8fafc;font-size:12px;">LAST ${{b.close}}</b><br><span style="color:#38bdf8;">${{d.tf_cur || "1분봉"}}</span>`;
+        }}
       }}
+      updateHud(null, false);
       let syncingX = false;
       chart.subscribeCrosshairMove(param => {{
         if (!syncingX) {{
@@ -1962,9 +2152,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if (!hudEl || !param || !param.time) return;
         const bar = param.seriesData.get(cs);
         if (!bar) return;
-        const chgP = bar.open ? (((bar.close - bar.open) / bar.open) * 100).toFixed(2) : "0.00";
-        const colP = bar.close >= bar.open ? "#10b981" : "#ef4444";
-        hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 ${{bar.open}} 고 ${{bar.high}} 저 ${{bar.low}} 종 <b style="color:${{colP}};">${{bar.close}} (${{chgP}}%)`;
+        updateHud(bar, false);
       }});
       subLinks.forEach(lk => lk.c.subscribeCrosshairMove(param => {{
         if (syncingX) return;
@@ -2187,11 +2375,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             const biiVal = Number((((2 * liveLastBar.close - liveLastBar.high - liveLastBar.low) / (liveLastBar.high - liveLastBar.low)) * 50).toFixed(2));
             sBii.update({{ time: liveLastBar.time, value: biiVal }});
           }}
-          if (hudEl) {{
-            const chgP = liveLastBar.open ? (((liveLastBar.close - liveLastBar.open) / liveLastBar.open) * 100).toFixed(2) : "0.00";
-            const colP = liveLastBar.close >= liveLastBar.open ? "#10b981" : "#ef4444";
-            hudEl.innerHTML = `<span style="color:#38bdf8;font-weight:700;">${{d.tk}}</span> · 시 ${{liveLastBar.open}} 고 ${{liveLastBar.high}} 저 ${{liveLastBar.low}} 종 <b style="color:${{colP}};">${{liveLastBar.close}} (${{chgP}}%)</b> <span style="color:#10b981;">● LIVE</span>`;
-          }}
+          updateHud(liveLastBar, true);
         }} catch (e) {{}}
       }}, 2000);
     </script>
