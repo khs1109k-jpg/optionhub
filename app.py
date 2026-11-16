@@ -760,7 +760,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     db_path = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
     col_r1, col_r2, col_r3 = st.columns([2.6, 0.9, 0.9])
     with col_r2:
-        auto_rf = st.toggle("⏱️ 5초 자동 갱신", value=False, key="mm_auto_rf")
+        auto_rf = st.toggle("⏱️ 3초 자동 갱신", value=True, key="mm_auto_rf")
     with col_r3:
         if st.button("🔄 실시간 새로고침", use_container_width=True):
             st.rerun()
@@ -817,7 +817,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         sel_syn = f"US.{clean_tk}"
         cur = q_map.get(sel_syn, {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"})
     with sel_c3:
-        tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=1, horizontal=True, key="mm_tf")
+        tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=0, horizontal=True, key="mm_tf")
 
     @st.cache_data(ttl=300, show_spinner=False)
     def _cached_opt_snapshot(tk_sym):
@@ -914,6 +914,35 @@ if nav_menu == "⚡ 무무 실시간 차트":
     }
     yf_per, yf_int, tf_sec = tf_map.get(tf_opt, ("5d", "5m", 300))
     candles = []
+    @st.cache_data(ttl=5, show_spinner=False)
+    def _fetch_moomoo_opend_klines(sym_s, tf_lbl):
+        out_k = []
+        try:
+            from moomoo import OpenQuoteContext, KLType, RET_OK
+            _kl_map = {"1분봉": KLType.K_1M, "5분봉": KLType.K_5M, "15분봉": KLType.K_15M, "1일봉": KLType.K_DAY}
+            _kl_t = _kl_map.get(tf_lbl)
+            if _kl_t is None:
+                return out_k
+            qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            try:
+                ret, df_k = qctx.get_cur_kline(sym_s, 180, _kl_t)
+                if ret == RET_OK and df_k is not None and not df_k.empty:
+                    for _, kr in df_k.iterrows():
+                        _tk_ts = int(pd.Timestamp(str(kr["time_key"])).tz_localize("America/New_York").timestamp())
+                        out_k.append({
+                            "time": _tk_ts,
+                            "open": round(float(kr["open"]), 2),
+                            "high": round(float(kr["high"]), 2),
+                            "low": round(float(kr["low"]), 2),
+                            "close": round(float(kr["close"]), 2),
+                            "volume": float(kr.get("volume", 0) or 0),
+                        })
+            finally:
+                qctx.close()
+        except Exception:
+            pass
+        return out_k
+
     @st.cache_data(ttl=10, show_spinner=False)
     def _fetch_tf_candles(tk_s, per_s, int_s, resamp_10=False):
         out = []
@@ -937,9 +966,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
         return out
 
     tf_sec_map = {"1분봉": 60, "5분봉": 300, "10분봉": 600, "15분봉": 900, "1일봉": 86400}
+    _mm_sym_use = sel_syn if q_map else f"US.{clean_tk}"
+    _mm_1m = _fetch_moomoo_opend_klines(_mm_sym_use, "1분봉")
+    _mm_5m = _fetch_moomoo_opend_klines(_mm_sym_use, "5분봉")
     raw_tf_sets = {
-        "1분봉": _fetch_tf_candles(clean_tk, "2d", "1m", False),
-        "5분봉": _fetch_tf_candles(clean_tk, "5d", "5m", False),
+        "1분봉": _fetch_tf_candles(clean_tk, "2d", "1m", False) + _mm_1m,
+        "5분봉": _fetch_tf_candles(clean_tk, "5d", "5m", False) + _mm_5m,
         "10분봉": _fetch_tf_candles(clean_tk, "5d", "5m", True),
         "1일봉": _fetch_tf_candles(clean_tk, "1y", "1d", False),
     }
@@ -1139,7 +1171,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     </div>
     """, unsafe_allow_html=True)
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5 = st.columns([1.05, 1.35, 0.9, 0.75, 0.95])
     _m1_delta = f"{cur.get('diff', 0):+.2f} ({cur['chg']:+.2f}%)" if cur.get("chg") is not None else None
     m1.metric("현재가 (실시간)", f"${cur['px']:,.2f}" if cur["px"] else "-", _m1_delta)
     m2.metric("Bid / Ask", f"{bid_px_s} / {ask_px_s}")
@@ -1777,7 +1809,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }}
         syncingX = false;
       }}));
-      chart.timeScale().fitContent();
+      if (candles.length > 110) {{
+        chart.timeScale().setVisibleLogicalRange({{ from: candles.length - 110, to: candles.length + 4 }});
+      }} else {{
+        chart.timeScale().fitContent();
+      }}
       const initR = chart.timeScale().getVisibleLogicalRange();
       subCharts.forEach(sc => {{ if (initR) sc.timeScale().setVisibleLogicalRange(initR); else sc.timeScale().fitContent(); }});
       let syncing = false;
@@ -2207,7 +2243,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
               for (const b of btns) {{
                 if ((b.innerText || '').includes('실시간 새로고침')) {{ b.click(); break; }}
               }}
-            }}, 5000);
+            }}, 3000);
             </script>""",
             height=0,
         )
