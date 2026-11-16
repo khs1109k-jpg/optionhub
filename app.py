@@ -1130,7 +1130,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     "close": c_px,
                     "volume": v_diff,
                 })
-        c_dict = {c["time"]: c for c in merged if c["close"] > 0}
+        c_dict = {}
+        for c in merged:
+            if c["close"] <= 0:
+                continue
+            t_k = c["time"]
+            if t_k not in c_dict:
+                c_dict[t_k] = dict(c)
+            else:
+                ex = c_dict[t_k]
+                # 단일 틱(H==L, vol==0)으로 기존 OHLCV 봉을 덮어쓰지 않고 H/L 확장 및 거래량 보존
+                if (c["high"] > c["low"]) and (ex["high"] <= ex["low"]):
+                    c_dict[t_k] = dict(c)
+                else:
+                    ex["high"] = max(float(ex["high"]), float(c["high"]))
+                    ex["low"] = min(float(ex["low"]), float(c["low"]))
+                    ex["close"] = float(c["close"])
+                    ex["volume"] = max(float(ex.get("volume", 0) or 0), float(c.get("volume", 0) or 0))
         return [c_dict[k] for k in sorted(c_dict.keys())]
 
     merged_tf_sets = {k: _merge_tf_candles(v, tf_sec_map.get(k, 300)) for k, v in raw_tf_sets.items()}
@@ -2118,11 +2134,16 @@ if nav_menu == "⚡ 무무 실시간 차트":
           if (!q || !q.ok || !q.px) return;
           if (Array.isArray(q.bars) && q.bars.length) {{
             for (const b of q.bars) {{
-              if (Number(b.time) >= Number(liveLastBar.time)) {{
-                const barObj = {{ time: Number(b.time), open: Number(b.open), high: Number(b.high), low: Number(b.low), close: Number(b.close) }};
+              const bt = Number(b.time);
+              if (bt > Number(liveLastBar.time)) {{
+                const barObj = {{ time: bt, open: Number(b.open), high: Number(b.high), low: Number(b.low), close: Number(b.close) }};
                 cs.update(barObj);
-                if (Number(b.time) > Number(liveLastBar.time)) liveLastBar = Object.assign({{}}, barObj);
-                else liveLastBar = Object.assign(liveLastBar, barObj);
+                liveLastBar = Object.assign({{}}, barObj);
+              }} else if (bt === Number(liveLastBar.time)) {{
+                liveLastBar.high = Math.max(Number(liveLastBar.high), Number(b.high));
+                liveLastBar.low = Math.min(Number(liveLastBar.low), Number(b.low));
+                liveLastBar.close = Number(b.close);
+                cs.update(liveLastBar);
               }}
             }}
           }}
