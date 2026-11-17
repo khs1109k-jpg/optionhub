@@ -6384,12 +6384,16 @@ if nav_menu == "🎯 행사가별·동반 체결":
         _pc_vol = round(_p_vol / max(_c_vol, 1), 2)
         _pc_oi = round(_p_oi / max(_c_oi, 1), 2)
         _tot_gex = round(float(df_yf_f["GEX($M)"].sum()), 2)
-        _c_near = _c_all[(_c_all["행사가"] >= spot_live * 0.60) & (_c_all["행사가"] <= spot_live * 1.40)] if spot_live > 0 else _c_all
-        _p_near = _p_all[(_p_all["행사가"] >= spot_live * 0.60) & (_p_all["행사가"] <= spot_live * 1.40)] if spot_live > 0 else _p_all
+        _c_near = _c_all[(_c_all["행사가"] >= spot_live * 0.98) & (_c_all["행사가"] <= spot_live * 1.25)] if spot_live > 0 else _c_all
+        if _c_near.empty and spot_live > 0:
+            _c_near = _c_all[_c_all["행사가"] >= spot_live * 0.98]
         if _c_near.empty: _c_near = _c_all
+        _p_near = _p_all[(_p_all["행사가"] >= spot_live * 0.80) & (_p_all["행사가"] <= spot_live * 1.02)] if spot_live > 0 else _p_all
+        if _p_near.empty and spot_live > 0:
+            _p_near = _p_all[_p_all["행사가"] <= spot_live * 1.02]
         if _p_near.empty: _p_near = _p_all
-        _cw_f = float(_c_near.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _c_near.empty else 0.0
-        _pw_f = float(_p_near.sort_values("OI", ascending=False).iloc[0]["행사가"]) if not _p_near.empty else 0.0
+        _cw_f = float(_c_near.groupby("행사가")["OI"].sum().idxmax()) if not _c_near.empty else 0.0
+        _pw_f = float(_p_near.groupby("행사가")["OI"].sum().idxmax()) if not _p_near.empty else 0.0
         _zg_f = calc_zero_gamma(df_yf_f, spot_live)
         _gex_regime = "+GEX (변동성 억제 · 박스권)" if _tot_gex >= 0 else "-GEX (변동성 증폭 · 추세추종)"
         _gex_col = "#10b981" if _tot_gex >= 0 else "#ef4444"
