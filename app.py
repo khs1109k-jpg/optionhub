@@ -6893,6 +6893,174 @@ if nav_menu == "🎯 행사가별·동반 체결":
                 st.session_state["sqz_scan_html"]
             )
 
+    if spot_live > 0:
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _fetch_flow_tv_ohlcv(_sym_tv, _tf_tv):
+            import concurrent.futures, yfinance as _yf_tv
+            _tf_cfg = {
+                "5분봉": ("5d", "5m"),
+                "15분봉": ("10d", "15m"),
+                "1시간봉": ("1mo", "1h"),
+                "1일봉": ("6mo", "1d"),
+            }
+            _per, _itv = _tf_cfg.get(_tf_tv, ("5d", "5m"))
+            def _dl_tv():
+                _h = _yf_tv.Ticker(_sym_tv).history(period=_per, interval=_itv, prepost=(_itv != "1d"))
+                if _h is None or _h.empty:
+                    return []
+                _out = []
+                for _idx, _row in _h.iterrows():
+                    try:
+                        _o = float(_row["Open"]); _hi = float(_row["High"]); _lo = float(_row["Low"]); _cl = float(_row["Close"])
+                        _v = float(_row.get("Volume", 0) or 0)
+                        if any(pd.isna(x) for x in (_o, _hi, _lo, _cl)):
+                            continue
+                        _ts = int(pd.Timestamp(_idx).timestamp()) + 9 * 3600
+                        _out.append({"time": _ts, "open": round(_o, 2), "high": round(_hi, 2), "low": round(_lo, 2), "close": round(_cl, 2), "vol": round(_v, 0)})
+                    except Exception:
+                        pass
+                return _out[-220:]
+            _ex_tv = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                return _ex_tv.submit(_dl_tv).result(timeout=2.5)
+            except Exception:
+                return []
+            finally:
+                _ex_tv.shutdown(wait=False)
+
+        _tv_h1, _tv_h2 = st.columns([2.2, 1.0])
+        _tv_h1.markdown(f"**📈 {tk_f} 트레이딩뷰 차트 · Flip Gamma / Call Wall / Put Wall**")
+        _tv_tf_sel = _tv_h2.radio("타임프레임", ["5분봉", "15분봉", "1시간봉", "1일봉"], horizontal=True, label_visibility="collapsed", key=f"flow_tv_tf_{tk_f}")
+        _tv_bars = _fetch_flow_tv_ohlcv(tk_f, _tv_tf_sel)
+        if _tv_bars:
+            _tv_bars = [dict(b) for b in _tv_bars]
+            _last_b = _tv_bars[-1]
+            _last_b["close"] = round(float(spot_live), 2)
+            _last_b["high"] = round(max(float(_last_b["high"]), float(spot_live)), 2)
+            _last_b["low"] = round(min(float(_last_b["low"]), float(spot_live)), 2)
+            _closes_tv = [b["close"] for b in _tv_bars]
+            _ma20_tv, _ma200_tv, _vol_tv = [], [], []
+            for _bi, _b in enumerate(_tv_bars):
+                if _bi >= 19:
+                    _ma20_tv.append({"time": _b["time"], "value": round(sum(_closes_tv[_bi-19:_bi+1]) / 20.0, 2)})
+                if _bi >= 59:
+                    _w_ma = min(200, _bi + 1)
+                    _ma200_tv.append({"time": _b["time"], "value": round(sum(_closes_tv[_bi-_w_ma+1:_bi+1]) / float(_w_ma), 2)})
+                _is_up = _b["close"] >= _b["open"]
+                _vol_tv.append({"time": _b["time"], "value": _b["vol"], "color": "rgba(16,185,129,0.55)" if _is_up else "rgba(239,68,68,0.55)"})
+
+            _cw_v_tv = float(_cw_f) if (not df_yf_f.empty and _cw_f) else 0.0
+            _pw_v_tv = float(_pw_f) if (not df_yf_f.empty and _pw_f) else 0.0
+            _zg_v_tv = float(_zg_f) if (not df_yf_f.empty and _zg_f) else 0.0
+            _mp_v_tv = float(_mp_f) if (not df_yf_f.empty and _mp_f) else 0.0
+
+            _tv_payload = json.dumps({
+                "tk": tk_f,
+                "tf": _tv_tf_sel,
+                "spot": round(float(spot_live), 2),
+                "cw": round(_cw_v_tv, 2),
+                "pw": round(_pw_v_tv, 2),
+                "flip": round(_zg_v_tv, 2),
+                "mp": round(_mp_v_tv, 2),
+                "candles": [{"time": b["time"], "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"]} for b in _tv_bars],
+                "vol": _vol_tv,
+                "ma20": _ma20_tv,
+                "ma200": _ma200_tv,
+            })
+
+            _tv_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  html, body {{ margin:0; padding:0; background:#07111e; color:#e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow:hidden; }}
+  #hud {{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:8px 12px; background:#0b1626; border-bottom:1px solid #1e3a5f; font-size:12px; font-family:monospace; }}
+  .badge {{ padding:2px 7px; border-radius:4px; font-weight:700; }}
+  #tv_box {{ width:100%; height:415px; position:relative; }}
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="tv_box"></div>
+<script>
+const D = {_tv_payload};
+const hud = document.getElementById("hud");
+const pills = [
+  `<span style="font-size:14px;font-weight:800;color:#fff;">${{D.tk}} ${{D.tf}}</span>`,
+  `<span class="badge" style="background:rgba(56,189,248,0.16);color:#38bdf8;border:1px solid #38bdf8;">현재가 $${{D.spot.toFixed(2)}}</span>`,
+  D.cw > 0 ? `<span class="badge" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid #10b981;">Call Wall $${{D.cw}}</span>` : "",
+  D.pw > 0 ? `<span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid #ef4444;">Put Wall $${{D.pw}}</span>` : "",
+  D.flip > 0 ? `<span class="badge" style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid #fbbf24;">Flip Gamma $${{D.flip}}</span>` : "",
+  D.mp > 0 ? `<span class="badge" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid #a855f7;">Max Pain $${{D.mp}}</span>` : "",
+  `<span style="color:#64748b;margin-left:auto;font-size:11px;">드래그=이동 · 휠=확대/축소 · 더블클릭=초기화</span>`
+].filter(Boolean).join("");
+hud.innerHTML = pills;
+
+const el = document.getElementById("tv_box");
+const chart = LightweightCharts.createChart(el, {{
+  layout: {{ background: {{ color: "#07111e" }}, textColor: "#94a3b8", fontSize: 11 }},
+  grid: {{ vertLines: {{ color: "#112236" }}, horzLines: {{ color: "#112236" }} }},
+  crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+  rightPriceScale: {{ borderColor: "#1e3a5f", autoScale: false, scaleMargins: {{ top: 0.08, bottom: 0.22 }} }},
+  timeScale: {{ borderColor: "#1e3a5f", timeVisible: true, secondsVisible: false }},
+  handleScroll: {{ mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true }},
+  handleScale: {{ axisPressedMouseMove: true, mouseWheel: true, pinch: true }},
+}});
+
+const candleSeries = chart.addCandlestickSeries({{
+  upColor: "#10b981", downColor: "#ef4444",
+  borderUpColor: "#10b981", borderDownColor: "#ef4444",
+  wickUpColor: "#10b981", wickDownColor: "#ef4444",
+}});
+candleSeries.setData(D.candles);
+
+const volSeries = chart.addHistogramSeries({{
+  priceFormat: {{ type: "volume" }},
+  priceScaleId: "vol_scale",
+}});
+chart.priceScale("vol_scale").applyOptions({{ scaleMargins: {{ top: 0.82, bottom: 0 }} }});
+volSeries.setData(D.vol);
+
+if (D.ma20.length > 0) {{
+  const ma20s = chart.addLineSeries({{ color: "#22c55e", lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true, title: "MA20" }});
+  ma20s.setData(D.ma20);
+}}
+if (D.ma200.length > 0) {{
+  const ma200s = chart.addLineSeries({{ color: "#eab308", lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true, title: "MA200" }});
+  ma200s.setData(D.ma200);
+}}
+
+const addLv = (price, color, style, title) => {{
+  if (!price || price <= 0) return;
+  candleSeries.createPriceLine({{
+    price: price,
+    color: color,
+    lineWidth: 2,
+    lineStyle: style,
+    axisLabelVisible: true,
+    title: title,
+  }});
+}};
+addLv(D.cw, "#10b981", LightweightCharts.LineStyle.Dashed, "CALL WALL");
+addLv(D.pw, "#ef4444", LightweightCharts.LineStyle.Dashed, "PUT WALL");
+addLv(D.flip, "#fbbf24", LightweightCharts.LineStyle.LargeDashed, "FLIP GAMMA");
+addLv(D.mp, "#a855f7", LightweightCharts.LineStyle.Dotted, "MAX PAIN");
+
+chart.timeScale().fitContent();
+el.addEventListener("dblclick", () => {{
+  chart.priceScale("right").applyOptions({{ autoScale: true }});
+  chart.timeScale().fitContent();
+  setTimeout(() => chart.priceScale("right").applyOptions({{ autoScale: false }}), 80);
+}});
+window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWidth, height: el.clientHeight }}));
+</script>
+</body>
+</html>
+"""
+            st.components.v1.html(_tv_html, height=465, scrolling=False)
+
     if not df_yf_f.empty and spot_live > 0:
         try:
             import plotly.graph_objects as _go_fl
