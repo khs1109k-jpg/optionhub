@@ -1002,8 +1002,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
     oi_hist_m = load_json_file(OI_PATH, {})
     cw_lv = pw_lv = zg_lv = sig_h_lv = sig_l_lv = delta_lv = gex_c_lv = gex_p_lv = None
     opt_bars = []
-    if clean_tk in oi_hist_m and oi_hist_m[clean_tk]:
-        snap_m = oi_hist_m[clean_tk][-1]
+    _opt_src_tk = opt_tk if opt_tk in oi_hist_m else clean_tk
+    if _opt_src_tk in oi_hist_m and oi_hist_m[_opt_src_tk]:
+        snap_m = oi_hist_m[_opt_src_tk][-1]
         det_m = snap_m.get("상세", [])
         spot_m = float(snap_m.get("Spot", cur["px"] or 0) or 0)
         calls_m = [x for x in det_m if x.get("구분") == "Call"]
@@ -1058,11 +1059,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     p_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Put")]["OI"].sum()) if "OI" in df_dm.columns else 0
                     net_g_k = float(df_dm[df_dm["행사가"] == k]["GEX($M)"].sum()) if "GEX($M)" in df_dm.columns else 0.0
                     opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 4), "p_m": round(pv, 4), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
-    _snap_dt_str = str(oi_hist_m.get(clean_tk, [{}])[-1].get("수집시각", ""))[:10] if (clean_tk in oi_hist_m and oi_hist_m[clean_tk]) else ""
+    _snap_dt_str = str(oi_hist_m.get(_opt_src_tk, [{}])[-1].get("수집시각", ""))[:10] if (_opt_src_tk in oi_hist_m and oi_hist_m[_opt_src_tk]) else ""
     _today_k_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     if (not opt_bars) or (_snap_dt_str != _today_k_str) or (cw_lv is not None and pw_lv is not None and cw_lv == pw_lv):
         try:
-            y_rows, y_sp = _cached_opt_snapshot(clean_tk)
+            y_rows, y_sp = _cached_opt_snapshot(opt_tk)
             if y_rows:
                 df_yd = pd.DataFrame(y_rows)
                 sp_ref = float(y_sp or cur["px"] or 0)
@@ -1364,6 +1365,24 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if cur["px"] <= 0 and merged_tf_sets.get("1분봉"):
         _c1m = merged_tf_sets["1분봉"]
         cur["px"] = float(_c1m[-1]["close"])
+        if opt_tk != clean_tk and cur["px"] > 0:
+            try:
+                _ref_etf_px = float((oi_hist_m.get(opt_tk, [{}])[-1].get("Spot") if oi_hist_m.get(opt_tk) else 0) or 0)
+                if _ref_etf_px <= 0:
+                    _, _ref_etf_px = _cached_opt_snapshot(opt_tk)
+                    _ref_etf_px = float(_ref_etf_px or 0)
+                if _ref_etf_px > 0 and (cur["px"] / _ref_etf_px > 2.0 or _ref_etf_px / cur["px"] > 2.0):
+                    _pr_scale = cur["px"] / _ref_etf_px
+                    if cw_lv: cw_lv = round(float(cw_lv) * _pr_scale, 2)
+                    if pw_lv: pw_lv = round(float(pw_lv) * _pr_scale, 2)
+                    if zg_lv: zg_lv = round(float(zg_lv) * _pr_scale, 2)
+                    if delta_lv: delta_lv = round(float(delta_lv) * _pr_scale, 2)
+                    if gex_c_lv: gex_c_lv = round(float(gex_c_lv) * _pr_scale, 2)
+                    if gex_p_lv: gex_p_lv = round(float(gex_p_lv) * _pr_scale, 2)
+                    for _ob in opt_bars:
+                        _ob["p"] = round(float(_ob["p"]) * _pr_scale, 2)
+            except Exception:
+                pass
         if merged_tf_sets.get("1일봉") and len(merged_tf_sets["1일봉"]) >= 2:
             _pc1 = float(merged_tf_sets["1일봉"][-2]["close"])
             if _pc1 > 0:
