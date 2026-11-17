@@ -1177,8 +1177,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     if _yd_p.empty: _yd_p = df_yd[df_yd["구분"] == "Put"]
                     if not _yd_c.empty and (cw_lv is None or _snap_dt_str != _today_k_str or cw_lv == pw_lv):
                         cw_lv = float(_yd_c.sort_values("OI", ascending=False).iloc[0]["행사가"])
+                        _yd_cn = _yd_c[(_yd_c["행사가"] >= sp_ref * 0.94) & (_yd_c["행사가"] <= sp_ref * 1.06)] if sp_ref > 0 else _yd_c
+                        if _yd_cn.empty: _yd_cn = _yd_c
+                        gex_c_lv = float(_yd_cn.assign(_ag=_yd_cn["GEX($M)"].abs()).sort_values("_ag", ascending=False).iloc[0]["행사가"])
                     if not _yd_p.empty and (pw_lv is None or _snap_dt_str != _today_k_str or cw_lv == pw_lv):
                         pw_lv = float(_yd_p.sort_values("OI", ascending=False).iloc[0]["행사가"])
+                        _yd_pn = _yd_p[(_yd_p["행사가"] >= sp_ref * 0.94) & (_yd_p["행사가"] <= sp_ref * 1.06)] if sp_ref > 0 else _yd_p
+                        if _yd_pn.empty: _yd_pn = _yd_p
+                        gex_p_lv = float(_yd_pn.assign(_ag=_yd_pn["GEX($M)"].abs()).sort_values("_ag", ascending=False).iloc[0]["행사가"])
                     if zg_lv is None or _snap_dt_str != _today_k_str:
                         _zg_y = calc_zero_gamma(df_yd, sp_ref)
                         if _zg_y: zg_lv = _zg_y
@@ -1655,7 +1661,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_chikou = ic_5.checkbox("후행스팬", value=False, key="ed_ichi_chi")
             st.markdown("**아래 보조지표 (위로 ⬆️ · 아래로 ⬇️ · 빼기 ❌)**")
             if "mm_sub_order" not in st.session_state:
-                st.session_state["mm_sub_order"] = ["CVD(누적델타)", "BII(체결강도)", "MACD"]
+                st.session_state["mm_sub_order"] = []
             sub_order = list(st.session_state["mm_sub_order"])
             for si, sname in enumerate(sub_order):
                 sc_n, sc_u, sc_d, sc_x = st.columns([2.2, 0.6, 0.6, 0.6])
@@ -2182,6 +2188,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         <button class="tv-tf" data-tf="1일봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1일봉</button>
         <button id="tv_tog_vpvr" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">매물대</button>
         <button id="tv_tog_opt" style="background:#1e293b;color:#4ade80;border:1px solid #22c55e;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">콜풋막대</button>
+        <button id="tv_tog_flow" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">옵션표</button>
         <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 10px;cursor:pointer;font-weight:700;">⛶ 전체화면 확대</button>
       </div>
     </div>
@@ -2323,6 +2330,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
       syncBarBtns();
       if (btnTogVpvr) btnTogVpvr.onclick = () => {{ d.show_vpvr = !d.show_vpvr; syncBarBtns(); drawVpvr(); }};
       if (btnTogOpt) btnTogOpt.onclick = () => {{ d.show_vpvr_opt = !d.show_vpvr_opt; syncBarBtns(); drawVpvr(); }};
+      const btnTogFlow = document.getElementById("tv_tog_flow");
+      const flowBoxEl = document.getElementById("tv_flow_box");
+      if (btnTogFlow && flowBoxEl) {{
+        btnTogFlow.onclick = () => {{
+          const on = flowBoxEl.style.display === "none";
+          flowBoxEl.style.display = on ? "block" : "none";
+          btnTogFlow.style.background = on ? "#0284c7" : "#1e293b";
+          btnTogFlow.style.color = on ? "#fff" : "#94a3b8";
+          btnTogFlow.style.borderColor = on ? "#38bdf8" : "#334155";
+          setTimeout(syncSize, 30);
+        }};
+      }}
       const sVwap = d.vwap.length ? chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}) : null;
       if (sVwap) sVwap.setData(d.vwap);
       const sMa20 = d.ma20.length ? chart.addLineSeries({{ color:"#22c55e", lineWidth:1.5, lastValueVisible:true, priceLineVisible:false, title:"MA20" }}) : null;
@@ -2430,17 +2449,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
               ctx.fillText(tag, xOff + 3, y + 3);
               xOff += 16;
             }}
-            ctx.font = "bold 11px monospace";
-            const cTxt = "C " + fmtM(cVal);
-            const pTxt = "P " + fmtM(pVal);
-            const cwPx = ctx.measureText(cTxt).width + 8;
-            const pwPx = ctx.measureText(pTxt).width + 6;
-            ctx.fillStyle = "rgba(8,12,20,0.88)";
-            ctx.fillRect(xOff - 2, y - 8, cwPx + pwPx + 2, 16);
-            ctx.fillStyle = "#4ade80";
-            ctx.fillText(cTxt, xOff, y + 4);
-            ctx.fillStyle = "#fca5a5";
-            ctx.fillText(pTxt, xOff + cwPx, y + 4);
+            // 왼쪽 막대 옆 금액 숫자는 가독성을 위해 기본 숨김
           }});
         }}
         // 중앙 라벨 수평 옵션 레벨선 (CALL / GAMMA / GEX CALL / SIG_L / OPEN / DELTA / SIG_H / GEX WALL PUT)
