@@ -978,11 +978,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "SK하이닉스": "000660.KS", "하이닉스": "000660.KS", "000660": "000660.KS",
         "삼성전자": "005930.KS", "005930": "005930.KS",
     }
+    _OPT_PROXY_MAP = {
+        "NQ=F": "QQQ", "^NDX": "QQQ", "NQ": "QQQ",
+        "ES=F": "SPY", "^GSPC": "SPY", "ES": "SPY", "SPX": "SPY",
+        "RTY=F": "IWM", "^RUT": "IWM", "YM=F": "DIA",
+        "GC=F": "GLD", "CL=F": "USO", "BTC-USD": "IBIT",
+    }
     if search_tk:
         _disp_tk = search_tk
         clean_tk = _YF_ALIAS_MAP.get(search_tk, search_tk)
         sel_syn = f"US.{_disp_tk}"
         cur = dict(q_map.get(sel_syn, {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"}))
+    opt_tk = _OPT_PROXY_MAP.get(clean_tk, clean_tk)
     with sel_c3:
         tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=0, horizontal=True, key="mm_tf")
 
@@ -1777,7 +1784,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     try:
         _big_list = load_json_file(BIG_FLOWS_PATH, [])
         for _bf in _big_list:
-            if str(_bf.get("tk", "")).upper() == clean_tk:
+            if str(_bf.get("tk", "")).upper() in (clean_tk, opt_tk):
                 _stream_items.append({
                     "tm": str(_bf.get("tm", _bf.get("time", "-")))[:8],
                     "exp": str(_bf.get("exp", "-"))[-5:],
@@ -1793,7 +1800,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     except Exception:
         pass
     try:
-        _tk_flows = [r for r in all_raw_flows if len(r) >= 15 and str(r[1]).upper() == clean_tk]
+        _tk_flows = [r for r in all_raw_flows if len(r) >= 15 and str(r[1]).upper() in (clean_tk, opt_tk)]
         for _rf in _tk_flows[-15:]:
             _cp_ch = "C" if "C" in str(_rf[3]).upper() else "P"
             _bs_str = "BUY" if ("A" in str(_rf[4]).upper() or "BUY" in str(_rf[4]).upper()) else "SELL"
@@ -1861,7 +1868,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 qo = OpenQuoteContext(host="127.0.0.1", port=11111)
                 try:
                     _now_d = pd.Timestamp.now(tz="America/New_York")
-                    _rc, _dfc = qo.get_option_chain(code=sel_syn, start=_now_d.strftime("%Y-%m-%d"), end=(_now_d + pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
+                    _rc, _dfc = qo.get_option_chain(code=f"US.{opt_tk}", start=_now_d.strftime("%Y-%m-%d"), end=(_now_d + pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
                     if _rc == RET_OK and _dfc is not None and not _dfc.empty:
                         _codes = _dfc["code"].tolist()[:80]
                         _rs, _dfs = qo.get_market_snapshot(_codes)
@@ -1905,12 +1912,16 @@ if nav_menu == "⚡ 무무 실시간 차트":
             pass
     if len(_stream_items) < 10:
         try:
-            _y_rows_st, _ = _cached_opt_snapshot(clean_tk)
+            _y_rows_st, _ = _cached_opt_snapshot(opt_tk)
             if _y_rows_st:
                 _df_yst = pd.DataFrame(_y_rows_st)
                 if "프리미엄($)" not in _df_yst.columns and "거래량" in _df_yst.columns and "현재가" in _df_yst.columns:
                     _df_yst["프리미엄($)"] = pd.to_numeric(_df_yst["거래량"], errors="coerce").fillna(0) * pd.to_numeric(_df_yst["현재가"], errors="coerce").fillna(0) * 100
                 _sp_y_lim = float(cur["px"] or 0)
+                if opt_tk != clean_tk and "Spot" in _df_yst.columns and not _df_yst.empty:
+                    _sp_y_lim = float(_df_yst["Spot"].iloc[0] or 0)
+                elif opt_tk != clean_tk:
+                    _sp_y_lim = 0.0
                 if _sp_y_lim > 0 and "행사가" in _df_yst.columns:
                     _sk_y = pd.to_numeric(_df_yst["행사가"], errors="coerce").fillna(0)
                     _df_yst = _df_yst[(_sk_y >= _sp_y_lim * 0.65) & (_sk_y <= _sp_y_lim * 1.35)]
