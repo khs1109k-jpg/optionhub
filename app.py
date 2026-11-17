@@ -6041,7 +6041,15 @@ if nav_menu == "🎯 행사가별·동반 체결":
                     _rw = json.loads(_r) if _r else {}
                 except Exception:
                     _rw = {}
-                mm_q[_s.replace("US.", "").upper()] = {"px": float(_p or 0), "chg": _ch, "vol": float(_v or 0), "ts": _t, "raw": _rw}
+                _px_live_q = float(_p or 0)
+                for _ek_q in ("overnight_price", "after_price", "pre_price", "ext_price"):
+                    try:
+                        _ev_q = float(_rw.get(_ek_q) or 0)
+                        if _ev_q > 0:
+                            _px_live_q = _ev_q; break
+                    except Exception:
+                        pass
+                mm_q[_s.replace("US.", "").upper()] = {"px": _px_live_q, "chg": _ch, "vol": float(_v or 0), "ts": _t, "raw": _rw}
             for _s, _k, _d in _c_f.execute("SELECT sym, kind, data FROM aux WHERE kind='book'").fetchall():
                 try:
                     mm_bk[_s.replace("US.", "").upper()] = json.loads(_d)
@@ -6153,7 +6161,7 @@ if nav_menu == "🎯 행사가별·동반 체결":
       <span style="color:#f8fafc; font-weight:800; font-size:15px;">{tk_f}</span>
       <span>무무 LV3 현재가: <b style="color:#38bdf8;">{f"${spot_live:,.2f}" if spot_live>0 else "-"}</b> {f"({qm['chg']:+.2f}%)" if qm.get('chg') is not None else ""}</span>
       <span>무무 호가(Top5): <b style="color:#10b981;">Bid {b_qty:,}</b> / <b style="color:#ef4444;">Ask {a_qty:,}</b> · <span style="color:#fbbf24;">{lv3_bias}</span></span>
-      <span style="color:#94a3b8; font-size:11px;">※ 무무: 미국주식 LV3 실시간 연동 · 옵션 체인: 야후+시트+텔레그램+이전OI</span>
+      <span style="color:#94a3b8; font-size:11px;">※ 무무: 미국주식 LV3 실시간 연동 · 옵션 체인: Cboe(1순위)+시트+텔레그램+이전OI</span>
     </div>
     """, unsafe_allow_html=True)
 
