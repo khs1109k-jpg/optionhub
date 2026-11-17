@@ -145,8 +145,8 @@ def fetch_cboe_oi(ticker):
         if not exp_set:
             return [], spot, "Cboe 유효 OI 없음"
         exps_sorted = sorted(e for e in exp_set if e >= now_dt.strftime("%Y-%m-%d")) or sorted(exp_set)
-        week_exps = [e for e in exps_sorted if (_dt_cb.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 7]
-        target_exps = set((week_exps if len(week_exps) >= 3 else exps_sorted[:3])[:7])
+        week_exps = [e for e in exps_sorted if (_dt_cb.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 5]
+        target_exps = set((week_exps if week_exps else exps_sorted[:2])[:4])
         rows = []
         for exp_s, is_c, K, oi, vol, o in parsed:
             if exp_s not in target_exps:
@@ -219,12 +219,12 @@ def fetch_yahoo_oi(ticker):
         _week_exps = []
         for _ex in exps:
             try:
-                if (datetime.strptime(_ex, "%Y-%m-%d").date() - now_dt.date()).days <= 7:
+                if (datetime.strptime(_ex, "%Y-%m-%d").date() - now_dt.date()).days <= 5:
                     _week_exps.append(_ex)
             except Exception:
                 pass
-        _target_exps = _week_exps if len(_week_exps) >= 3 else exps[:3]
-        for exp in _target_exps[:7]:
+        _target_exps = _week_exps if _week_exps else exps[:2]
+        for exp in _target_exps[:4]:
             try:
                 exp_dt = datetime.strptime(exp, "%Y-%m-%d")
                 T = max((exp_dt - now_dt).days / 365.0, 1.0 / 365.0)
@@ -1108,8 +1108,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         spot_m = float(snap_m.get("Spot", cur["px"] or 0) or 0)
         calls_m = [x for x in det_m if x.get("구분") == "Call"]
         puts_m = [x for x in det_m if x.get("구분") == "Put"]
-        calls_near = [x for x in calls_m if not spot_m or 0.98 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or calls_m
-        puts_near = [x for x in puts_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.02 * spot_m] or puts_m
+        calls_near = [x for x in calls_m if not spot_m or 0.98 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.18 * spot_m] or [x for x in calls_m if not spot_m or 0.98 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or calls_m
+        puts_near = [x for x in puts_m if not spot_m or 0.85 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.02 * spot_m] or [x for x in puts_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.02 * spot_m] or puts_m
         if calls_near:
             cw_lv = max(calls_near, key=lambda x: x.get("OI", 0)).get("행사가")
             gex_c_lv = max(calls_near, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
@@ -1169,9 +1169,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 if sp_ref > 0:
                     df_yd = df_yd[(df_yd["행사가"] >= sp_ref * 0.7) & (df_yd["행사가"] <= sp_ref * 1.3)]
                 if not df_yd.empty:
-                    _yd_c = df_yd[(df_yd["구분"] == "Call") & ((df_yd["행사가"] >= sp_ref * 0.98) if sp_ref > 0 else True)]
+                    _yd_c = df_yd[(df_yd["구분"] == "Call") & ((df_yd["행사가"] >= sp_ref * 0.98) & (df_yd["행사가"] <= sp_ref * 1.18) if sp_ref > 0 else True)]
+                    if _yd_c.empty: _yd_c = df_yd[(df_yd["구분"] == "Call") & ((df_yd["행사가"] >= sp_ref * 0.98) if sp_ref > 0 else True)]
                     if _yd_c.empty: _yd_c = df_yd[df_yd["구분"] == "Call"]
-                    _yd_p = df_yd[(df_yd["구분"] == "Put") & ((df_yd["행사가"] <= sp_ref * 1.02) if sp_ref > 0 else True)]
+                    _yd_p = df_yd[(df_yd["구분"] == "Put") & ((df_yd["행사가"] >= sp_ref * 0.85) & (df_yd["행사가"] <= sp_ref * 1.02) if sp_ref > 0 else True)]
+                    if _yd_p.empty: _yd_p = df_yd[(df_yd["구분"] == "Put") & ((df_yd["행사가"] <= sp_ref * 1.02) if sp_ref > 0 else True)]
                     if _yd_p.empty: _yd_p = df_yd[df_yd["구분"] == "Put"]
                     if not _yd_c.empty and (cw_lv is None or _snap_dt_str != _today_k_str or cw_lv == pw_lv):
                         cw_lv = float(_yd_c.sort_values("OI", ascending=False).iloc[0]["행사가"])
