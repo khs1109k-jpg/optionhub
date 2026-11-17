@@ -6515,7 +6515,7 @@ if nav_menu == "🎯 행사가별·동반 체결":
 
         if st.session_state.get(f"proto_report_{tk_f}"):
             with st.container(border=True):
-                st.markdown(st.session_state[f"proto_report_{tk_f}"])
+                st.markdown(str(st.session_state[f"proto_report_{tk_f}"]).replace("\\$", "$").replace("$", "\\$"))
     else:
         st.info("야후 실시간 옵션 체인 조회를 켜면 전체 요약 표와 ΔOI 전략 맵이 표시됩니다.")
 
@@ -6893,6 +6893,58 @@ if nav_menu == "🎯 행사가별·동반 체결":
                 st.session_state["sqz_scan_html"]
             )
 
+    if not df_yf_f.empty and spot_live > 0:
+        try:
+            import plotly.graph_objects as _go_fl
+            from plotly.subplots import make_subplots as _mk_sub_fl
+            _df_ch = df_yf_f[(df_yf_f["행사가"] >= spot_live * 0.72) & (df_yf_f["행사가"] <= spot_live * 1.28)].copy()
+            if not _df_ch.empty:
+                _gex_by_k = _df_ch.groupby("행사가")["GEX($M)"].sum().sort_index()
+                _call_oi_k = _df_ch[_df_ch["구분"] == "Call"].groupby("행사가")["OI"].sum().reindex(_gex_by_k.index, fill_value=0)
+                _put_oi_k = _df_ch[_df_ch["구분"] == "Put"].groupby("행사가")["OI"].sum().reindex(_gex_by_k.index, fill_value=0)
+                _fig_fl = _mk_sub_fl(
+                    rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.10, row_heights=[0.55, 0.45],
+                    subplot_titles=(f"{tk_f} 행사가별 Net GEX ($M) · 핵심 레벨 한눈에 보기", f"{tk_f} 행사가별 Call / Put 미결제약정 (OI) 벽")
+                )
+                _g_cols = ["#10b981" if v >= 0 else "#ef4444" for v in _gex_by_k.values]
+                _fig_fl.add_trace(_go_fl.Bar(
+                    x=_gex_by_k.index, y=_gex_by_k.values, name="Net GEX ($M)",
+                    marker_color=_g_cols, hovertemplate="행사가 $%{x:g}<br>Net GEX: %{y:+.2f}M<extra></extra>"
+                ), row=1, col=1)
+                _fig_fl.add_trace(_go_fl.Bar(
+                    x=_call_oi_k.index, y=_call_oi_k.values, name="Call OI",
+                    marker_color="rgba(16,185,129,0.85)", hovertemplate="행사가 $%{x:g}<br>Call OI: %{y:,}<extra></extra>"
+                ), row=2, col=1)
+                _fig_fl.add_trace(_go_fl.Bar(
+                    x=_put_oi_k.index, y=_put_oi_k.values, name="Put OI",
+                    marker_color="rgba(239,68,68,0.85)", hovertemplate="행사가 $%{x:g}<br>Put OI: %{y:,}<extra></extra>"
+                ), row=2, col=1)
+                _lv_lines = [
+                    (spot_live, "#ffffff", "solid", f"현재가 ${spot_live:,.2f}", "top"),
+                    (_zg_f, "#fbbf24", "dash", f"Flip ${float(_zg_f):g}" if _zg_f else "", "top right"),
+                    (_cw_f, "#10b981", "dot", f"Call Wall ${float(_cw_f):g}" if _cw_f else "", "top left"),
+                    (_pw_f, "#ef4444", "dot", f"Put Wall ${float(_pw_f):g}" if _pw_f else "", "bottom left"),
+                    (_mp_f, "#a855f7", "dashdot", f"MaxPain ${float(_mp_f):g}" if _mp_f else "", "bottom right"),
+                ]
+                for _lx, _lcol, _ldash, _ltxt, _lpos in _lv_lines:
+                    if _lx and float(_lx) > 0:
+                        _fig_fl.add_vline(
+                            x=float(_lx), line_color=_lcol, line_dash=_ldash, line_width=1.8,
+                            annotation_text=_ltxt, annotation_position=_lpos,
+                            annotation_font_color=_lcol, annotation_font_size=11
+                        )
+                _fig_fl.update_layout(
+                    template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
+                    height=460, barmode="group", margin=dict(l=18, r=18, t=42, b=18),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1.0),
+                    hovermode="x unified"
+                )
+                _fig_fl.update_xaxes(tickprefix="$", gridcolor="#13283d")
+                _fig_fl.update_yaxes(gridcolor="#13283d")
+                st.plotly_chart(_fig_fl, use_container_width=True, key=f"chart_flow_gex_oi_{tk_f}")
+        except Exception:
+            pass
+
     act_c1, act_c2 = st.columns(2)
     if act_c1.button(f"🤖 {tk_f} AI 매매 시나리오 생성 (Gemini / Qwen)", use_container_width=True, key="btn_ai_flow_scen"):
         with st.spinner(f"{tk_f} 옵션 수급·감마 구조를 AI로 분석 중입니다..."):
@@ -6909,7 +6961,8 @@ if nav_menu == "🎯 행사가별·동반 체결":
             ok_ai, res_ai = run_ai_analysis(prompt_s)
             st.session_state["last_flow_ai_brief"] = res_ai
     if st.session_state.get("last_flow_ai_brief"):
-        st.info(st.session_state["last_flow_ai_brief"])
+        _clean_ai_b = str(st.session_state["last_flow_ai_brief"]).replace("\\$", "$").replace("$", "\\$")
+        st.info(_clean_ai_b)
 
     if act_c2.button(f"📩 {tk_f} 전체 상황 + 체결 텔레그램 전송", type="primary", use_container_width=True, key="flow_tg_send"):
         _tg_lines = [
