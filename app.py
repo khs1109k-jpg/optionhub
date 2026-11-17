@@ -1641,7 +1641,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_1sig = c_l2.checkbox("1시그마 (1σ)", value=True, key="ed_1sig")
             show_zg = c_l3.checkbox("감마플립", value=True, key="ed_zg")
             show_open_px = c_l4.checkbox("Open (시가)", value=True, key="ed_open_px")
-            show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR · 파랑)", value=True, key="ed_vpvr_vol")
+            show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR · 파랑)", value=False, key="ed_vpvr_vol")
             show_vpvr_opt = c_o6.checkbox("좌측 콜/풋 막대(초록/빨강)", value=True, key="ed_vpvr_opt")
             show_ichi_cloud = st.checkbox("일목 구름대(Cloud)", value=False, key="ed_ichi_cloud")
             st.markdown("**일목균형표 세부 요소 (개별 넣기 · 빼기)**")
@@ -2175,6 +2175,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         <button class="tv-tf" data-tf="5분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">5분봉</button>
         <button class="tv-tf" data-tf="10분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">10분봉</button>
         <button class="tv-tf" data-tf="1일봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1일봉</button>
+        <button id="tv_tog_vpvr" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">매물대</button>
+        <button id="tv_tog_opt" style="background:#1e293b;color:#4ade80;border:1px solid #22c55e;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">콜풋막대</button>
         <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 10px;cursor:pointer;font-weight:700;">⛶ 전체화면 확대</button>
       </div>
     </div>
@@ -2288,6 +2290,23 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }});
       }}
       styleTfBtns(d.tf_cur);
+      const btnTogVpvr = document.getElementById("tv_tog_vpvr");
+      const btnTogOpt = document.getElementById("tv_tog_opt");
+      function syncBarBtns() {{
+        if (btnTogVpvr) {{
+          btnTogVpvr.style.background = d.show_vpvr ? "#0284c7" : "#1e293b";
+          btnTogVpvr.style.color = d.show_vpvr ? "#fff" : "#94a3b8";
+          btnTogVpvr.style.borderColor = d.show_vpvr ? "#38bdf8" : "#334155";
+        }}
+        if (btnTogOpt) {{
+          btnTogOpt.style.background = d.show_vpvr_opt ? "#15803d" : "#1e293b";
+          btnTogOpt.style.color = d.show_vpvr_opt ? "#fff" : "#94a3b8";
+          btnTogOpt.style.borderColor = d.show_vpvr_opt ? "#22c55e" : "#334155";
+        }}
+      }}
+      syncBarBtns();
+      if (btnTogVpvr) btnTogVpvr.onclick = () => {{ d.show_vpvr = !d.show_vpvr; syncBarBtns(); drawVpvr(); }};
+      if (btnTogOpt) btnTogOpt.onclick = () => {{ d.show_vpvr_opt = !d.show_vpvr_opt; syncBarBtns(); drawVpvr(); }};
       const sVwap = d.vwap.length ? chart.addLineSeries({{ color:"#38bdf8", lineWidth:2, lastValueVisible:false, priceLineVisible:false }}) : null;
       if (sVwap) sVwap.setData(d.vwap);
       const sMa20 = d.ma20.length ? chart.addLineSeries({{ color:"#22c55e", lineWidth:1.5, lastValueVisible:true, priceLineVisible:false, title:"MA20" }}) : null;
