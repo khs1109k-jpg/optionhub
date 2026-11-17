@@ -1108,8 +1108,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         spot_m = float(snap_m.get("Spot", cur["px"] or 0) or 0)
         calls_m = [x for x in det_m if x.get("구분") == "Call"]
         puts_m = [x for x in det_m if x.get("구분") == "Put"]
-        calls_near = [x for x in calls_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or calls_m
-        puts_near = [x for x in puts_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or puts_m
+        calls_near = [x for x in calls_m if not spot_m or 0.98 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.40 * spot_m] or calls_m
+        puts_near = [x for x in puts_m if not spot_m or 0.60 * spot_m <= float(x.get("행사가", 0) or 0) <= 1.02 * spot_m] or puts_m
         if calls_near:
             cw_lv = max(calls_near, key=lambda x: x.get("OI", 0)).get("행사가")
             gex_c_lv = max(calls_near, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0))).get("행사가")
@@ -1169,10 +1169,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 if sp_ref > 0:
                     df_yd = df_yd[(df_yd["행사가"] >= sp_ref * 0.7) & (df_yd["행사가"] <= sp_ref * 1.3)]
                 if not df_yd.empty:
-                    if (cw_lv is None or cw_lv == pw_lv) and not df_yd[df_yd["구분"] == "Call"].empty:
-                        cw_lv = float(df_yd[df_yd["구분"] == "Call"].sort_values("OI", ascending=False).iloc[0]["행사가"])
-                    if (pw_lv is None or cw_lv == pw_lv) and not df_yd[df_yd["구분"] == "Put"].empty:
-                        pw_lv = float(df_yd[df_yd["구분"] == "Put"].sort_values("OI", ascending=False).iloc[0]["행사가"])
+                    _yd_c = df_yd[(df_yd["구분"] == "Call") & ((df_yd["행사가"] >= sp_ref * 0.98) if sp_ref > 0 else True)]
+                    if _yd_c.empty: _yd_c = df_yd[df_yd["구분"] == "Call"]
+                    _yd_p = df_yd[(df_yd["구분"] == "Put") & ((df_yd["행사가"] <= sp_ref * 1.02) if sp_ref > 0 else True)]
+                    if _yd_p.empty: _yd_p = df_yd[df_yd["구분"] == "Put"]
+                    if not _yd_c.empty and (cw_lv is None or _snap_dt_str != _today_k_str or cw_lv == pw_lv):
+                        cw_lv = float(_yd_c.sort_values("OI", ascending=False).iloc[0]["행사가"])
+                    if not _yd_p.empty and (pw_lv is None or _snap_dt_str != _today_k_str or cw_lv == pw_lv):
+                        pw_lv = float(_yd_p.sort_values("OI", ascending=False).iloc[0]["행사가"])
                     if zg_lv is None or _snap_dt_str != _today_k_str:
                         _zg_y = calc_zero_gamma(df_yd, sp_ref)
                         if _zg_y: zg_lv = _zg_y
@@ -1386,7 +1390,19 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     ex["low"] = min(float(ex["low"]), float(c["low"]))
                     ex["close"] = float(c["close"])
                     ex["volume"] = max(float(ex.get("volume", 0) or 0), float(c.get("volume", 0) or 0))
-        return [c_dict[k] for k in sorted(c_dict.keys())]
+        out_sorted = [c_dict[k] for k in sorted(c_dict.keys())]
+        # 프리마켓 전환 순간(1틱 이상 튐) 직전/직후 봉 대비 몸통 밖으로 1.2% 이상 과도하게 튄 단일 꼬리 완화
+        for _si in range(1, len(out_sorted) - 1):
+            _cb = out_sorted[_si]
+            _pb = out_sorted[_si - 1]
+            _nb = out_sorted[_si + 1]
+            _ref_hi = max(_cb["open"], _cb["close"], _pb["high"], _nb["high"])
+            _ref_lo = min(_cb["open"], _cb["close"], _pb["low"], _nb["low"])
+            if _cb["high"] > _ref_hi * 1.012:
+                _cb["high"] = round(max(_cb["open"], _cb["close"]) * 1.003, 2)
+            if _cb["low"] < _ref_lo * 0.988:
+                _cb["low"] = round(min(_cb["open"], _cb["close"]) * 0.997, 2)
+        return out_sorted
 
     merged_tf_sets = {k: _merge_tf_candles(v, tf_sec_map.get(k, 300)) for k, v in raw_tf_sets.items()}
     candles = list(merged_tf_sets.get(tf_opt) or _merge_tf_candles(_fetch_tf_candles(clean_tk, yf_per, yf_int, tf_opt == "10분봉"), tf_sec))
@@ -2260,7 +2276,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       let vs = null;
       if (d.volumes.length) {{
         vs = chart.addHistogramSeries({{ priceFormat:{{type:"volume"}}, priceScaleId:"" }});
-        vs.priceScale().applyOptions({{ scaleMargins:{{ top:0.82, bottom:0 }} }});
+        vs.priceScale().applyOptions({{ scaleMargins:{{ top:0.78, bottom:0.02 }} }});
         vs.setData(d.volumes);
       }}
       function styleTfBtns(act) {{
@@ -2593,7 +2609,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
           (d.cw ? ` <span style="color:#22c55e;">CALL ${{d.cw}}</span>` : "") +
           (d.pw ? ` <span style="color:#f87171;">PUT ${{d.pw}}</span>` : "") +
           (d.zg ? ` <span style="color:#f59e0b;">GAMMA ${{d.zg}}</span>` : "") +
-          (d.delta_k ? ` <span style="color:#38bdf8;">DELTA ${{d.delta_k}}</span>` : "");
+          (d.delta_k ? ` <span style="color:#38bdf8;">DELTA ${{d.delta_k}}</span>` : "") +
+          (d.volumes && d.volumes.length ? ` <span style="color:#a78bfa;">VOL ${{fmtCompact(d.volumes.reduce((a,x)=>a+Number(x.value||0),0))}}</span>` : "");
         const colP = (b && b.close >= b.open) ? "#22c55e" : "#ef4444";
         const l2 = b ? `O <b style="color:#e2e8f0;">${{b.open}}</b>  H <b style="color:#e2e8f0;">${{b.high}}</b>  L <b style="color:#e2e8f0;">${{b.low}}</b>  C <b style="color:${{colP}};">${{b.close}}</b>` + (isLive ? ` <span style="color:#22c55e;">● LIVE</span>` : "") : "";
         hudEl.innerHTML = l1 + (l2 ? `<br>${{l2}}` : "");
