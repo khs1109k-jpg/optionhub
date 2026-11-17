@@ -1005,14 +1005,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 _df_put_near = _df_put_d[(_df_put_d["행사가"] >= 0.75 * spot_m) & (_df_put_d["행사가"] <= 1.25 * spot_m)]
                 if not _df_put_near.empty:
                     _df_put_d = _df_put_near
-            if "DEX($M)" in _df_put_d.columns and not _df_put_d.empty:
-                dex_s = _df_put_d.groupby("행사가")["DEX($M)"].sum().abs()
-                if not dex_s.empty:
-                    delta_lv = float(dex_s.idxmax())
-            elif "GEX($M)" in _df_put_d.columns and not _df_put_d.empty:
+            if "GEX($M)" in _df_put_d.columns and not _df_put_d.empty:
                 gex_ps = _df_put_d.groupby("행사가")["GEX($M)"].sum().abs()
                 if not gex_ps.empty:
                     delta_lv = float(gex_ps.idxmax())
+            elif "DEX($M)" in _df_put_d.columns and not _df_put_d.empty:
+                dex_s = _df_put_d.groupby("행사가")["DEX($M)"].sum().abs()
+                if not dex_s.empty:
+                    delta_lv = float(dex_s.idxmax())
             ref_px_sig = float(cur["px"] or spot_m or 0)
             if "IV(%)" in df_dm.columns and ref_px_sig > 0:
                 atm_iv_m = float(df_dm.iloc[(df_dm["행사가"] - ref_px_sig).abs().argsort()[:4]]["IV(%)"].mean() or 0)
@@ -1061,12 +1061,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     if sp_ref > 0 and not _df_yp.empty:
                         _df_ypn = _df_yp[(_df_yp["행사가"] >= 0.75 * sp_ref) & (_df_yp["행사가"] <= 1.25 * sp_ref)]
                         if not _df_ypn.empty: _df_yp = _df_ypn
-                    if "DEX($M)" in _df_yp.columns and not _df_yp.empty:
-                        _ydex = _df_yp.groupby("행사가")["DEX($M)"].sum().abs()
-                        if not _ydex.empty: delta_lv = float(_ydex.idxmax())
-                    elif "GEX($M)" in _df_yp.columns and not _df_yp.empty:
+                    if "GEX($M)" in _df_yp.columns and not _df_yp.empty:
                         _ygex = _df_yp.groupby("행사가")["GEX($M)"].sum().abs()
                         if not _ygex.empty: delta_lv = float(_ygex.idxmax())
+                    elif "DEX($M)" in _df_yp.columns and not _df_yp.empty:
+                        _ydex = _df_yp.groupby("행사가")["DEX($M)"].sum().abs()
+                        if not _ydex.empty: delta_lv = float(_ydex.idxmax())
                     if sig_h_lv is None and "IV(%)" in df_yd.columns and sp_ref > 0:
                         atm_iv_y = float(df_yd.iloc[(df_yd["행사가"] - sp_ref).abs().argsort()[:4]]["IV(%)"].mean() or 0)
                         if atm_iv_y > 0:
