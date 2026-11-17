@@ -8705,7 +8705,7 @@ def _save_perspicium_key(k_val):
     except Exception:
         pass
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _perspicium_get(path, params_items, api_key):
     if not api_key:
         return False, None, "Perspicium API 키가 설정되지 않았습니다."
@@ -8714,9 +8714,9 @@ def _perspicium_get(path, params_items, api_key):
         _url = f"https://perspicium.com/api/v0{path}"
         _r = requests.get(
             _url,
-            headers={"Authorization": f"ApiKey {api_key}"},
+            headers={"Authorization": f"ApiKey {api_key}", "User-Agent": "OptionHub/1.0"},
             params=list(params_items or ()),
-            timeout=5,
+            timeout=(4, 15),
         )
         try:
             _j = _r.json()
@@ -8754,11 +8754,12 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
     if not _pk_use:
         st.info("위 입력창에 Perspicium API 키를 입력·저장하시면 5가지 퀀트·옵션 분석이 바로 표시됩니다.")
     else:
-        _ok_ping, _d_ping, _e_ping = _perspicium_get("/ping", (), _pk_use)
-        if _ok_ping:
-            _pc_top2.success("🟢 Perspicium API 연결 정상")
-        else:
-            _pc_top2.warning(f"🟡 Perspicium 응답 지연/점검: {_e_ping}")
+        if _pc_top2.button("📡 연결 테스트 (/ping)", use_container_width=True, key="btn_persp_ping"):
+            _ok_ping, _d_ping, _e_ping = _perspicium_get("/ping", (), _pk_use)
+            if _ok_ping:
+                st.success("🟢 Perspicium API 연결 정상")
+            else:
+                st.warning(f"🟡 Perspicium 응답 지연/점검: {_e_ping}")
 
         _pt1, _pt2, _pt3, _pt4, _pt5 = st.tabs([
             "🔥 UOA 이상체결",
@@ -8790,103 +8791,122 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                     st.dataframe(_df_uoa, use_container_width=True, hide_index=True)
 
         with _pt2:
-            _gc1, _gc2 = st.columns([1.5, 1.5])
+            _gc1, _gc2, _gc3 = st.columns([1.4, 1.4, 1.0])
             _g_basis = _gc1.selectbox("GEX 계산 기준", ["open_interest", "volume", "total_premium"], key="persp_gex_basis")
             _g_rng = _gc2.slider("행사가 범위 (±%)", 0.15, 1.0, 0.35, 0.05, key="persp_gex_rng")
-            _m_g1, _m_g2, _m_g3 = st.columns(3)
-            for _mcol, _bs_n, _bs_lbl in [(_m_g1, "open_interest", "OI 기준 Flip"), (_m_g2, "volume", "거래량 기준 Flip"), (_m_g3, "total_premium", "프리미엄 기준 Flip")]:
-                _ok_gb, _d_gb, _ = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _bs_n), ("range_pct", str(_g_rng))), _pk_use)
-                _zl = (_d_gb or {}).get("zero_level") if _ok_gb else None
-                _mcol.metric(_bs_lbl, f"${float(_zl):,.2f}" if _zl else "-")
+            if _gc3.button("⚡ GEX 조회", type="primary", use_container_width=True, key="btn_persp_run_gex"):
+                st.session_state[f"persp_run_gex_{_p_tk}"] = True
+            if st.session_state.get(f"persp_run_gex_{_p_tk}"):
+                _m_g1, _m_g2, _m_g3 = st.columns(3)
+                for _mcol, _bs_n, _bs_lbl in [(_m_g1, "open_interest", "OI 기준 Flip"), (_m_g2, "volume", "거래량 기준 Flip"), (_m_g3, "total_premium", "프리미엄 기준 Flip")]:
+                    _ok_gb, _d_gb, _ = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _bs_n), ("range_pct", str(_g_rng))), _pk_use)
+                    _zl = (_d_gb or {}).get("zero_level") if _ok_gb else None
+                    _mcol.metric(_bs_lbl, f"${float(_zl):,.2f}" if _zl else "-")
 
-            _ok_g, _dg, _eg = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _g_basis), ("range_pct", str(_g_rng))), _pk_use)
-            if not _ok_g:
-                st.warning(f"GEX 조회 실패: {_eg}")
+                _ok_g, _dg, _eg = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _g_basis), ("range_pct", str(_g_rng))), _pk_use)
+                if not _ok_g:
+                    st.warning(f"GEX 조회 실패: {_eg}")
+                else:
+                    _net_arr = ((_dg or {}).get("series") or {}).get("net") or []
+                    if _net_arr:
+                        _df_gn = pd.DataFrame(_net_arr)
+                        import plotly.graph_objects as _go_pg
+                        _fg_p = _go_pg.Figure()
+                        _fg_p.add_trace(_go_pg.Bar(
+                            x=_df_gn["strike"], y=_df_gn["value"],
+                            marker_color=["#10b981" if float(v) >= 0 else "#ef4444" for v in _df_gn["value"]],
+                            name="Net GEX"
+                        ))
+                        if (_dg or {}).get("spot"):
+                            _fg_p.add_vline(x=float(_dg["spot"]), line_color="#ffffff", line_dash="solid", annotation_text=f"Spot ${_dg['spot']:,.2f}")
+                        if (_dg or {}).get("zero_level"):
+                            _fg_p.add_vline(x=float(_dg["zero_level"]), line_color="#fbbf24", line_dash="dash", annotation_text=f"Flip ${_dg['zero_level']:,.2f}")
+                        _fg_p.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=380, margin=dict(l=16, r=16, t=35, b=20))
+                        st.plotly_chart(_fg_p, use_container_width=True, key="persp_gex_chart")
+                    if (_dg or {}).get("highlight_strikes"):
+                        st.json(_dg["highlight_strikes"])
             else:
-                _net_arr = ((_dg or {}).get("series") or {}).get("net") or []
-                if _net_arr:
-                    _df_gn = pd.DataFrame(_net_arr)
-                    import plotly.graph_objects as _go_pg
-                    _fg_p = _go_pg.Figure()
-                    _fg_p.add_trace(_go_pg.Bar(
-                        x=_df_gn["strike"], y=_df_gn["value"],
-                        marker_color=["#10b981" if float(v) >= 0 else "#ef4444" for v in _df_gn["value"]],
-                        name="Net GEX"
-                    ))
-                    if (_dg or {}).get("spot"):
-                        _fg_p.add_vline(x=float(_dg["spot"]), line_color="#ffffff", line_dash="solid", annotation_text=f"Spot ${_dg['spot']:,.2f}")
-                    if (_dg or {}).get("zero_level"):
-                        _fg_p.add_vline(x=float(_dg["zero_level"]), line_color="#fbbf24", line_dash="dash", annotation_text=f"Flip ${_dg['zero_level']:,.2f}")
-                    _fg_p.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=380, margin=dict(l=16, r=16, t=35, b=20))
-                    st.plotly_chart(_fg_p, use_container_width=True, key="persp_gex_chart")
-                if (_dg or {}).get("highlight_strikes"):
-                    st.json(_dg["highlight_strikes"])
+                st.info("우측 `⚡ GEX 조회` 버튼을 누르면 3가지 기준 GEX를 불러옵니다.")
 
         with _pt3:
-            _ok_em, _dem, _eem = _perspicium_get("/options/expected-move", (("ticker", _p_tk), ("range_pct", "0.5")), _pk_use)
-            if _ok_em and (_dem or {}).get("table"):
-                st.subheader("📐 만기별 예상 변동폭 (1σ Expected Move)")
-                st.dataframe(pd.DataFrame(_dem["table"]), use_container_width=True, hide_index=True)
-            elif not _ok_em:
-                st.warning(f"Expected Move 조회 실패: {_eem}")
+            if st.button("📐 예상변동폭 & IV 조회", type="primary", key="btn_persp_run_em"):
+                st.session_state[f"persp_run_em_{_p_tk}"] = True
+            if st.session_state.get(f"persp_run_em_{_p_tk}"):
+                _ok_em, _dem, _eem = _perspicium_get("/options/expected-move", (("ticker", _p_tk), ("range_pct", "0.5")), _pk_use)
+                if _ok_em and (_dem or {}).get("table"):
+                    st.subheader("📐 만기별 예상 변동폭 (1σ Expected Move)")
+                    st.dataframe(pd.DataFrame(_dem["table"]), use_container_width=True, hide_index=True)
+                elif not _ok_em:
+                    st.warning(f"Expected Move 조회 실패: {_eem}")
 
-            _ok_iv, _div, _eiv = _perspicium_get("/options/iv", (("ticker", _p_tk), ("range_pct", "0.25")), _pk_use)
-            if _ok_iv and (_div or {}).get("smile"):
-                st.subheader("📈 행사가별 IV 스마일")
-                _df_sm = pd.DataFrame(_div["smile"])
-                if not _df_sm.empty:
-                    st.dataframe(_df_sm.head(40), use_container_width=True, hide_index=True)
-            elif not _ok_iv:
-                st.warning(f"IV 조회 실패: {_eiv}")
+                _ok_iv, _div, _eiv = _perspicium_get("/options/iv", (("ticker", _p_tk), ("range_pct", "0.25")), _pk_use)
+                if _ok_iv and (_div or {}).get("smile"):
+                    st.subheader("📈 행사가별 IV 스마일")
+                    _df_sm = pd.DataFrame(_div["smile"])
+                    if not _df_sm.empty:
+                        st.dataframe(_df_sm.head(40), use_container_width=True, hide_index=True)
+                elif not _ok_iv:
+                    st.warning(f"IV 조회 실패: {_eiv}")
+            else:
+                st.info("위 `📐 예상변동폭 & IV 조회` 버튼을 눌러주세요.")
 
         with _pt4:
-            _mc1, _mc2, _mc3 = st.columns(3)
+            _mc1, _mc2, _mc3, _mc4 = st.columns([1.2, 1.2, 1.2, 1.0])
             _mm_sim = _mc1.selectbox("유사도 방식", ["cosine", "dot", "spearman"], key="persp_mm_sim")
             _mm_k = _mc2.slider("비교 일수 (Kernel)", 15, 60, 30, key="persp_mm_k")
             _mm_n = _mc3.slider("Top 매칭 개수", 3, 10, 5, key="persp_mm_n")
-            _ok_mm, _dmm, _emm = _perspicium_get("/quant/market-memory", (("ticker", _p_tk), ("similarity", _mm_sim), ("kernel_size", str(_mm_k)), ("top_n", str(_mm_n))), _pk_use)
-            if not _ok_mm:
-                st.warning(f"Market Memory 조회 실패: {_emm}")
+            if _mc4.button("🧠 유사패턴 조회", type="primary", use_container_width=True, key="btn_persp_run_mm"):
+                st.session_state[f"persp_run_mm_{_p_tk}"] = True
+            if st.session_state.get(f"persp_run_mm_{_p_tk}"):
+                _ok_mm, _dmm, _emm = _perspicium_get("/quant/market-memory", (("ticker", _p_tk), ("similarity", _mm_sim), ("kernel_size", str(_mm_k)), ("top_n", str(_mm_n))), _pk_use)
+                if not _ok_mm:
+                    st.warning(f"Market Memory 조회 실패: {_emm}")
+                else:
+                    _matches = (_dmm or {}).get("matches") or []
+                    _kern = (_dmm or {}).get("kernel_prices") or []
+                    if _kern and _matches:
+                        import plotly.graph_objects as _go_mm
+                        _fg_mm = _go_mm.Figure()
+                        _k0 = float(_kern[0]) or 1.0
+                        _fg_mm.add_trace(_go_mm.Scatter(y=[round((float(x)/_k0 - 1)*100, 2) for x in _kern], mode="lines", name="현재 패턴(%)", line=dict(color="#38bdf8", width=3)))
+                        for _mi, _mt in enumerate(_matches[:5], 1):
+                            _mp_arr = (_mt.get("match_prices") or []) + (_mt.get("trailing_prices") or [])
+                            if _mp_arr:
+                                _m0 = float(_mp_arr[0]) or 1.0
+                                _lbl_m = f"#{_mi} ({_mt.get('start_date', '')}~{_mt.get('end_date', '')}, {float(_mt.get('score',0)):.3f})"
+                                _fg_mm.add_trace(_go_mm.Scatter(y=[round((float(x)/_m0 - 1)*100, 2) for x in _mp_arr], mode="lines", name=_lbl_m, opacity=0.75))
+                        _fg_mm.add_vline(x=len(_kern)-1, line_color="#fbbf24", line_dash="dash", annotation_text="현재 시점 이후 →")
+                        _fg_mm.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=400, yaxis_title="수익률(%)", margin=dict(l=16, r=16, t=35, b=20))
+                        st.plotly_chart(_fg_mm, use_container_width=True, key="persp_mm_chart")
+                    if _matches:
+                        st.dataframe(pd.DataFrame([{k: v for k, v in m.items() if not isinstance(v, list)} for m in _matches]), use_container_width=True, hide_index=True)
             else:
-                _matches = (_dmm or {}).get("matches") or []
-                _kern = (_dmm or {}).get("kernel_prices") or []
-                if _kern and _matches:
-                    import plotly.graph_objects as _go_mm
-                    _fg_mm = _go_mm.Figure()
-                    _k0 = float(_kern[0]) or 1.0
-                    _fg_mm.add_trace(_go_mm.Scatter(y=[round((float(x)/_k0 - 1)*100, 2) for x in _kern], mode="lines", name="현재 패턴(%)", line=dict(color="#38bdf8", width=3)))
-                    for _mi, _mt in enumerate(_matches[:5], 1):
-                        _mp_arr = (_mt.get("match_prices") or []) + (_mt.get("trailing_prices") or [])
-                        if _mp_arr:
-                            _m0 = float(_mp_arr[0]) or 1.0
-                            _lbl_m = f"#{_mi} ({_mt.get('start_date', '')}~{_mt.get('end_date', '')}, {float(_mt.get('score',0)):.3f})"
-                            _fg_mm.add_trace(_go_mm.Scatter(y=[round((float(x)/_m0 - 1)*100, 2) for x in _mp_arr], mode="lines", name=_lbl_m, opacity=0.75))
-                    _fg_mm.add_vline(x=len(_kern)-1, line_color="#fbbf24", line_dash="dash", annotation_text="현재 시점 이후 →")
-                    _fg_mm.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=400, yaxis_title="수익률(%)", margin=dict(l=16, r=16, t=35, b=20))
-                    st.plotly_chart(_fg_mm, use_container_width=True, key="persp_mm_chart")
-                if _matches:
-                    st.dataframe(pd.DataFrame([{k: v for k, v in m.items() if not isinstance(v, list)} for m in _matches]), use_container_width=True, hide_index=True)
+                st.info("우측 `🧠 유사패턴 조회` 버튼을 눌러주세요.")
 
         with _pt5:
-            _sc1, _sc2 = st.columns(2)
+            _sc1, _sc2, _sc3 = st.columns([1.4, 1.4, 1.0])
             _s_grp = _sc1.selectbox("계절성 단위", ["monthly", "weekday", "quarterly"], key="persp_sea_grp")
             _s_bench = _sc2.text_input("리스크 비교 벤치마크", value="SPY", key="persp_risk_bm").strip().upper() or "SPY"
+            if _sc3.button("📊 퀀트 통계 조회", type="primary", use_container_width=True, key="btn_persp_run_q5"):
+                st.session_state[f"persp_run_q5_{_p_tk}"] = True
+            if st.session_state.get(f"persp_run_q5_{_p_tk}"):
+                _ok_s, _ds, _es = _perspicium_get("/quant/seasonality", (("ticker", _p_tk), ("grouping", _s_grp), ("period", "10y")), _pk_use)
+                if _ok_s and (_ds or {}).get("stats"):
+                    st.subheader(f"📅 {_p_tk} 계절성 통계 ({_s_grp})")
+                    st.dataframe(pd.DataFrame(_ds["stats"]), use_container_width=True, hide_index=True)
+                elif not _ok_s:
+                    st.warning(f"계절성 조회 실패: {_es}")
 
-            _ok_s, _ds, _es = _perspicium_get("/quant/seasonality", (("ticker", _p_tk), ("grouping", _s_grp), ("period", "10y")), _pk_use)
-            if _ok_s and (_ds or {}).get("stats"):
-                st.subheader(f"📅 {_p_tk} 계절성 통계 ({_s_grp})")
-                st.dataframe(pd.DataFrame(_ds["stats"]), use_container_width=True, hide_index=True)
-            elif not _ok_s:
-                st.warning(f"계절성 조회 실패: {_es}")
+                _ok_rk, _drk, _erk = _perspicium_get("/quant/risk", (("ticker", _p_tk), ("benchmark", _s_bench), ("period", "3y"), ("window", "60")), _pk_use)
+                if _ok_rk and (_drk or {}).get("summary"):
+                    st.subheader(f"🛡️ {_p_tk} vs {_s_bench} 리스크 요약")
+                    st.json(_drk["summary"])
+                elif not _ok_rk:
+                    st.warning(f"리스크 조회 실패: {_erk}")
 
-            _ok_rk, _drk, _erk = _perspicium_get("/quant/risk", (("ticker", _p_tk), ("benchmark", _s_bench), ("period", "3y"), ("window", "60")), _pk_use)
-            if _ok_rk and (_drk or {}).get("summary"):
-                st.subheader(f"🛡️ {_p_tk} vs {_s_bench} 리스크 요약")
-                st.json(_drk["summary"])
-            elif not _ok_rk:
-                st.warning(f"리스크 조회 실패: {_erk}")
-
-            _ok_sec, _dsec, _esec = _perspicium_get("/quant/sector-insights", (("period", "1M"),), _pk_use)
-            if _ok_sec and (_dsec or {}).get("summary"):
-                st.subheader("🧭 섹터 자금 순환 요약 (1M)")
-                st.dataframe(pd.DataFrame(_dsec["summary"]) if isinstance(_dsec["summary"], list) else pd.DataFrame([_dsec["summary"]]), use_container_width=True, hide_index=True)
+                _ok_sec, _dsec, _esec = _perspicium_get("/quant/sector-insights", (("period", "1M"),), _pk_use)
+                if _ok_sec and (_dsec or {}).get("summary"):
+                    st.subheader("🧭 섹터 자금 순환 요약 (1M)")
+                    st.dataframe(pd.DataFrame(_dsec["summary"]) if isinstance(_dsec["summary"], list) else pd.DataFrame([_dsec["summary"]]), use_container_width=True, hide_index=True)
+            else:
+                st.info("우측 `📊 퀀트 통계 조회` 버튼을 눌러주세요.")
