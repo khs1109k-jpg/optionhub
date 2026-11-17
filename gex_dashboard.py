@@ -572,7 +572,20 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
                     f"- 확률 판정: 상승 {res['p_up']}% / 횡보 {res['p_flat']}% / 하락 {res['p_down']}%"
                     + (f"\n- 무무 실시간 수급(60호가·틱CVD): {_mm_gex['summary']}" if _mm_gex["summary"] else "")
                 )
-                _, _ai_out = run_ai_fn(_prompt)
+                _ok_g, _ai_out = run_ai_fn(_prompt)
+                if not _ok_g or "API 키가 설정되지" in str(_ai_out):
+                    _reg_k = "포지티브 감마(+GEX · 박스권/반등 억제)" if net_gex >= 0 else "네거티브 감마(-GEX · 변동성 확대/추세 추종)"
+                    _bias_k = "상방(롱) 우위" if spot >= flip else "하방(숏·관망) 주의"
+                    _ai_out = (
+                        f"### 🎯 {tk_target} 정량 GEX · 무무 수급 매매 시나리오 (자체 엔진)\n"
+                        f"- **1. 구조 요약**: 현재가 `${spot:.2f}` | Net GEX `{_fmt_num_short(net_gex)}` (**{_reg_k}**) | GEX Flip `${flip:.1f}` (**{_bias_k}**) | Max Pain `${mp:g}`\n"
+                        f"- **2. 핵심 벽**: 🟢 1차 저항 Call Wall `${cw:g}` (돌파 시 `${up_next:g}`) / 🔴 1차 지지 Put Wall `${pw:g}`\n"
+                        f"- **3. 수급·실전 타점**:\n"
+                        f"  - **롱(매수) 타점**: Put Wall `${pw:g}` 지지 확인 또는 Flip `${flip:.1f}` 상향 돌파 안착 시 진입 → 목표 `${cw:g}` / 손절 `${pw*0.985:.2f}`\n"
+                        f"  - **숏(방어) 타점**: Flip `${flip:.1f}` 하향 이탈 또는 `${cw:g}` 저항 리젝션 시 → 목표 `${pw:g}` / 손절 `${cw*1.015:.2f}`\n"
+                        f"  - **최종 판정**: {res['verdict_emoji']} **{res['verdict_lbl']} {res['verdict_prob']}%** (상승 {res['p_up']}% · 횡보 {res['p_flat']}% · 하락 {res['p_down']}%)"
+                        + (f"\n- **4. 무무 실시간**: {_mm_gex['summary']}" if _mm_gex.get("summary") else "")
+                    )
                 st.session_state["ai_gex_gemini_out"] = _ai_out
         else:
             st.warning("AI 분석 함수가 연결되지 않았습니다.")
