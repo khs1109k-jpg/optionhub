@@ -1480,7 +1480,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_zg = c_l3.checkbox("감마플립", value=True, key="ed_zg")
             show_open_px = c_l4.checkbox("Open (시가)", value=True, key="ed_open_px")
             show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR · 파랑)", value=True, key="ed_vpvr_vol")
-            show_ichi_cloud = c_o6.checkbox("일목 구름대(Cloud)", value=False, key="ed_ichi_cloud")
+            show_vpvr_opt = c_o6.checkbox("좌측 콜/풋 막대(초록/빨강)", value=True, key="ed_vpvr_opt")
+            show_ichi_cloud = st.checkbox("일목 구름대(Cloud)", value=False, key="ed_ichi_cloud")
             st.markdown("**일목균형표 세부 요소 (개별 넣기 · 빼기)**")
             ic_1, ic_2, ic_3, ic_4, ic_5 = st.columns(5)
             show_tenkan = ic_1.checkbox("전환선(9)", value=False, key="ed_ichi_ten")
@@ -1518,10 +1519,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
             c_s1, c_s2 = st.columns(2)
             show_vol = c_s1.checkbox("거래량(Vol · 주 차트 하단)", value=True, key="ed_vol")
             show_icc = c_s2.checkbox("역시계곡선(아래 따로)", value=True, key="ed_icc")
-            c_s3, c_s4, c_s5 = st.columns(3)
-            show_vpvr_opt = c_s3.checkbox("좌측 콜/풋 막대(초록/빨강)", value=True, key="ed_vpvr_opt")
-            show_rail_gex = c_s4.checkbox("우측 GEX 레일", value=True, key="ed_rail_gex")
-            show_rail_nf = c_s5.checkbox("우측 Net Flow 레일", value=True, key="ed_rail_nf")
+            c_s4, c_s5 = st.columns(2)
+            show_rail_gex = c_s4.checkbox("우측 GEX 레일", value=False, key="ed_rail_gex")
+            show_rail_nf = c_s5.checkbox("우측 Net Flow 레일", value=False, key="ed_rail_nf")
             vpvr_scale = st.slider("좌측 매물대·콜풋 막대 길이 (%)", 20, 500, 220, step=20, key="ed_vpvr_scale")
             show_cvd = "CVD(누적델타)" in sub_order
             show_bii = "BII(체결강도)" in sub_order
@@ -2003,7 +2003,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     </div>
     <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
-      <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 끌기=이동 · 휠=확대/축소</span>
+      <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 상하좌우 드래그=이동 · 우측 축 드래그=세로확대 · 휠=확대/축소</span>
       <div style="display:flex; align-items:center; gap:5px;">
         <button class="tv-tf" data-tf="1분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1분봉</button>
         <button class="tv-tf" data-tf="5분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">5분봉</button>
@@ -2027,15 +2027,15 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <div style="display:flex; width:100%;">
       <div style="position:relative; flex:1; min-width:0;">
       <div id="tv_main" style="width:100%; height:460px;"></div>
-      <div id="tv_hud" style="position:absolute; top:6px; left:8px; z-index:4; background:rgba(8,12,20,0.78); border-radius:4px; padding:4px 8px; font-family:monospace; font-size:11px; line-height:1.35; color:#e2e8f0; pointer-events:none;"></div>
-      <div id="tv_hud_r" style="position:absolute; top:6px; right:98px; z-index:4; text-align:right; font-family:monospace; font-size:11px; line-height:1.35; color:#cbd5e1; pointer-events:none;"></div>
+      <div id="tv_hud" style="position:absolute; top:6px; left:8px; z-index:4; background:rgba(8,12,20,0.78); border-radius:4px; padding:4px 8px; font-family:monospace; font-size:13px; line-height:1.45; color:#e2e8f0; pointer-events:none;"></div>
+      <div id="tv_hud_r" style="position:absolute; top:6px; right:98px; z-index:4; text-align:right; font-family:monospace; font-size:13px; line-height:1.45; color:#cbd5e1; pointer-events:none;"></div>
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
       <canvas id="tv_vpvr" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:2;"></canvas>
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
       </div>
       <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
       </div>
-      <div id="tv_flow_box" style="background:#070b12; border-top:1px solid #1e293b; height:215px; overflow-y:auto; flex-shrink:0; font-family:monospace; font-size:11px;">
+      <div id="tv_flow_box" style="background:#070b12; border-top:1px solid #1e293b; height:225px; overflow-y:auto; flex-shrink:0; font-family:monospace; font-size:12px;">
         <table style="width:100%; border-collapse:collapse; text-align:center;">
           <thead>
             <tr style="background:#0c1322; color:#94a3b8; border-bottom:1px solid #1e293b; position:sticky; top:0;">
@@ -2092,11 +2092,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
         return new Intl.DateTimeFormat("ko-KR", {{ timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }}).format(new Date(t * 1000));
       }};
       const baseOpt = {{
-        layout: {{ background: {{ color: "#080c14" }}, textColor: "#d1d4dc", attributionLogo: false }},
+        layout: {{ background: {{ color: "#080c14" }}, textColor: "#e2e8f0", fontSize: 13, attributionLogo: false }},
         grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
         localization: {{ locale: "ko-KR", timeFormatter: fmtKstCross }},
-        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 92 }},
+        rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 96, autoScale: false }},
+        handleScroll: {{ mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true }},
+        handleScale: {{ axisPressedMouseMove: {{ time: true, price: true }}, mouseWheel: true, pinch: true }},
         timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, barSpacing: 4.5, minBarSpacing: 2, rightOffset: 8, tickMarkFormatter: fmtKstTick }},
       }};
       const elMain = document.getElementById("tv_main");
@@ -2191,7 +2193,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             ctx.fillStyle = b.pct > 0.75 ? "rgba(245,158,11,0.34)" : "rgba(56,189,248,0.20)";
             ctx.fillRect(0, y - 5, w, 10);
             if (b.pct >= 0.99) {{
-              ctx.font = "bold 9px monospace"; ctx.fillStyle = "#fbbf24";
+              ctx.font = "bold 11px monospace"; ctx.fillStyle = "#fbbf24";
               ctx.fillText("POC $" + b.p, w + 4, y + 3);
             }}
           }});
@@ -2223,17 +2225,21 @@ if nav_menu == "⚡ 무무 실시간 차트":
               ctx.strokeStyle = tCol; ctx.lineWidth = 1;
               ctx.fillStyle = "#080c14"; ctx.fillRect(xOff, y - 6, 12, 12);
               ctx.strokeRect(xOff, y - 6, 12, 12);
-              ctx.font = "bold 9px monospace"; ctx.fillStyle = tCol;
+              ctx.font = "bold 11px monospace"; ctx.fillStyle = tCol;
               ctx.fillText(tag, xOff + 3, y + 3);
               xOff += 16;
             }}
-            ctx.font = "bold 9px monospace";
-            ctx.fillStyle = "#22c55e";
+            ctx.font = "bold 11px monospace";
             const cTxt = "C " + fmtM(cVal);
-            ctx.fillText(cTxt, xOff, y + 3);
-            const cwPx = ctx.measureText(cTxt).width + 6;
-            ctx.fillStyle = "#f87171";
-            ctx.fillText("P " + fmtM(pVal), xOff + cwPx, y + 3);
+            const pTxt = "P " + fmtM(pVal);
+            const cwPx = ctx.measureText(cTxt).width + 8;
+            const pwPx = ctx.measureText(pTxt).width + 6;
+            ctx.fillStyle = "rgba(8,12,20,0.88)";
+            ctx.fillRect(xOff - 2, y - 8, cwPx + pwPx + 2, 16);
+            ctx.fillStyle = "#4ade80";
+            ctx.fillText(cTxt, xOff, y + 4);
+            ctx.fillStyle = "#fca5a5";
+            ctx.fillText(pTxt, xOff + cwPx, y + 4);
           }});
         }}
         // 중앙 라벨 수평 옵션 레벨선 (CALL / GAMMA / GEX CALL / SIG_L / OPEN / DELTA / SIG_H / GEX WALL PUT)
@@ -2261,7 +2267,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
           ctx.setLineDash(lv.dash);
           ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(chartRight, y); ctx.stroke();
           ctx.setLineDash([]);
-          ctx.font = "bold 10px monospace";
+          ctx.font = "bold 11px monospace";
           const tw = ctx.measureText(lv.txt).width + 12;
           const bx = Math.max(8, Math.min(chartRight - tw - 8, Math.round(chartRight * lv.xp - tw / 2)));
           ctx.fillStyle = lv.solidBg ? "#f8fafc" : "#080c14";
@@ -2299,7 +2305,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
               const barH = Math.min(Math.round(mh * 0.17), Math.max(10, Math.round((p.val / capV) * (mh * 0.15))));
               const boxY = Math.min(mh - 46, Math.max(24, plotBot - barH - 18));
               ctx.save();
-              ctx.font = "bold 9px monospace";
+              ctx.font = "bold 11px monospace";
               const bw = ctx.measureText(lbl).width + 8;
               const bx = Math.round(p.x - bw / 2);
               ctx.fillStyle = "rgba(8,12,20,0.92)";
@@ -2324,7 +2330,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if (rw === 0) return;
         const rctx = rl.getContext("2d");
         rctx.clearRect(0, 0, rw, mh);
-        rctx.fillStyle = "#94a3b8"; rctx.font = "bold 10px monospace";
+        rctx.fillStyle = "#94a3b8"; rctx.font = "bold 11px monospace";
         const gexOff = 0, nfOff = d.show_r_gex ? 68 : 0;
         if (d.show_r_gex) {{
           rctx.fillText("GEX", gexOff + 22, 14);
@@ -2498,6 +2504,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }}
       }}));
       setTimeout(drawVpvr, 250);
+      let _vpRaf = null;
+      const _trigVpvr = () => {{ if (!_vpRaf) _vpRaf = requestAnimationFrame(() => {{ _vpRaf = null; drawVpvr(); }}); }};
+      elMain.addEventListener("mousemove", (ev) => {{ if (ev.buttons === 1) _trigVpvr(); }});
+      elMain.addEventListener("mouseup", _trigVpvr);
+      elMain.addEventListener("wheel", _trigVpvr, {{ passive: true }});
+      elMain.addEventListener("dblclick", () => {{ chart.priceScale("right").applyOptions({{ autoScale: true }}); setTimeout(() => {{ chart.priceScale("right").applyOptions({{ autoScale: false }}); drawVpvr(); }}, 60); }});
       // 그리기 도구 (붓 / 추세선 / 수평선 / 메모) + localStorage 저장
       const drCv = document.getElementById("tv_draw");
       const drCtx = drCv.getContext("2d");
