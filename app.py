@@ -4497,7 +4497,11 @@ if nav_menu == "📊 OI(미결제약정) 수집":
     _hm_tks = [k for k, v in _hm_hist.items() if isinstance(v, list) and len(v) >= 1]
     if _hm_tks:
         _hm_tk = st.selectbox("히트맵 종목 선택", sorted(_hm_tks), index=sorted(_hm_tks).index("SOXL") if "SOXL" in _hm_tks else 0, key="oi_hm_tk")
-        _snaps_hm = _hm_hist.get(_hm_tk, [])[-5:]
+        _by_day_hm = {}
+        for _sn in _hm_hist.get(_hm_tk, []):
+            _dt_key = str(_sn.get("수집시각", _sn.get("날짜", "-")))[:10]
+            _by_day_hm[_dt_key] = _sn
+        _snaps_hm = [_by_day_hm[k] for k in sorted(_by_day_hm.keys())[-5:]]
         _wall_rows = []
         _oi_mat = {}
         _dates_hm = []
@@ -4506,10 +4510,20 @@ if nav_menu == "📊 OI(미결제약정) 수집":
             _dates_hm.append(_dt_h)
             _det_h = _sn.get("상세", [])
             _sp_h = float(_sn.get("Spot", 0) or 0)
-            _calls_h = [x for x in _det_h if x.get("구분") == "Call"]
-            _puts_h = [x for x in _det_h if x.get("구분") == "Put"]
-            _cw_h = max(_calls_h, key=lambda x: x.get("OI", 0)).get("행사가") if _calls_h else None
-            _pw_h = max(_puts_h, key=lambda x: x.get("OI", 0)).get("행사가") if _puts_h else None
+            _c_oi_map, _p_oi_map = {}, {}
+            for _x in _det_h:
+                _kh = float(_x.get("행사가", 0) or 0)
+                _oih = int(_x.get("OI", 0) or 0)
+                if _kh <= 0 or _oih <= 0:
+                    continue
+                if _x.get("구분") == "Call":
+                    _c_oi_map[_kh] = _c_oi_map.get(_kh, 0) + _oih
+                elif _x.get("구분") == "Put":
+                    _p_oi_map[_kh] = _p_oi_map.get(_kh, 0) + _oih
+            _c_near_h = {k: v for k, v in _c_oi_map.items() if (_sp_h <= 0 or _sp_h * 0.98 <= k <= _sp_h * 1.25)} or _c_oi_map
+            _p_near_h = {k: v for k, v in _p_oi_map.items() if (_sp_h <= 0 or _sp_h * 0.80 <= k <= _sp_h * 1.02)} or _p_oi_map
+            _cw_h = max(_c_near_h, key=_c_near_h.get) if _c_near_h else None
+            _pw_h = max(_p_near_h, key=_p_near_h.get) if _p_near_h else None
             _net_g_h = round(sum(float(x.get("GEX($M)", 0) or 0) for x in _det_h), 2)
             _wall_rows.append({"날짜": _dt_h, "Spot": f"${_sp_h:.2f}" if _sp_h else "-", "Call Wall": f"${_cw_h:g}" if _cw_h else "-", "Put Wall": f"${_pw_h:g}" if _pw_h else "-", "Net GEX($M)": f"{_net_g_h:+.2f}M"})
             for _x in _det_h:
