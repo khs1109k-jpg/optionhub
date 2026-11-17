@@ -332,6 +332,103 @@ def send_telegram_msg(token, chat_id, text):
             return False, str(e)
     return True, f'전송 완료 ({len(chunks)}건 메시지)'
 
+def send_telegram_photo_bytes(token, chat_id, img_bytes, caption=""):
+    if not token or not chat_id or not img_bytes:
+        return False, "토큰/채팅ID/이미지 누락"
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        import requests
+        r = requests.post(
+            url,
+            data={"chat_id": chat_id, "caption": (caption or "")[:1000]},
+            files={"photo": ("chart.png", img_bytes, "image/png")},
+            timeout=15,
+        )
+        return (r.status_code == 200), f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+def _render_flow_chart_png(tk_s, tf_s, bars, spot_v, cw_v=0.0, pw_v=0.0, flip_v=0.0, mp_v=0.0):
+    if not bars:
+        return None
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+
+        sub = bars[-100:]
+        n = len(sub)
+        xs = list(range(n))
+        closes = [float(b["close"]) for b in sub]
+        opens = [float(b["open"]) for b in sub]
+        highs = [float(b["high"]) for b in sub]
+        lows = [float(b["low"]) for b in sub]
+        vols = [float(b.get("vol", 0) or 0) for b in sub]
+
+        fig, (ax1, ax2) = plt.subplots(
+            2, 1, figsize=(11, 6.2), sharex=True,
+            gridspec_kw={"height_ratios": [3.8, 1.0], "hspace": 0.06},
+            facecolor="#07111e"
+        )
+        for ax in (ax1, ax2):
+            ax.set_facecolor("#0b1626")
+            ax.tick_params(colors="#94a3b8", labelsize=8.5)
+            for sp in ax.spines.values():
+                sp.set_color("#1e3a5f")
+            ax.grid(color="#112236", linestyle="-", linewidth=0.6)
+
+        for i in xs:
+            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            col = "#10b981" if c >= o else "#ef4444"
+            ax1.plot([i, i], [l, h], color=col, linewidth=1.0, zorder=2)
+            bh = max(abs(c - o), max(closes) * 0.0008)
+            by = min(o, c)
+            ax1.add_patch(Rectangle((i - 0.34, by), 0.68, bh, facecolor=col, edgecolor=col, zorder=3))
+            ax2.bar(i, vols[i], width=0.68, color=col, alpha=0.65)
+
+        if n >= 20:
+            ma20 = [sum(closes[i-19:i+1]) / 20.0 for i in range(19, n)]
+            ax1.plot(range(19, n), ma20, color="#22c55e", linewidth=1.3, label="MA20", zorder=4)
+        if n >= 60:
+            ma200 = [sum(closes[max(0, i-199):i+1]) / float(min(200, i+1)) for i in range(59, n)]
+            ax1.plot(range(59, n), ma200, color="#eab308", linewidth=1.3, label="MA200", zorder=4)
+
+        lv_cfg = [
+            (spot_v, "#38bdf8", "-", f"SPOT ${spot_v:,.2f}"),
+            (cw_v, "#10b981", "--", f"CALL WALL ${cw_v:g}"),
+            (pw_v, "#ef4444", "--", f"PUT WALL ${pw_v:g}"),
+            (flip_v, "#fbbf24", "-.", f"FLIP GAMMA ${flip_v:g}"),
+            (mp_v, "#a855f7", ":", f"MAX PAIN ${mp_v:g}"),
+        ]
+        for lv_p, lv_c, lv_ls, lv_lbl in lv_cfg:
+            if lv_p and float(lv_p) > 0:
+                ax1.axhline(float(lv_p), color=lv_c, linestyle=lv_ls, linewidth=1.5, zorder=5)
+                ax1.text(
+                    n - 0.3, float(lv_p), f" {lv_lbl} ", color="#07111e", fontsize=8, fontweight="bold",
+                    va="center", ha="left", bbox=dict(boxstyle="round,pad=0.2", facecolor=lv_c, edgecolor="none"), zorder=6
+                )
+
+        ax1.set_xlim(-1, n + 14)
+        ax1.yaxis.tick_right()
+        ax2.yaxis.tick_right()
+        ax1.set_title(
+            f"{tk_s} ({tf_s}) · Spot ${spot_v:,.2f} | CallWall ${cw_v:g} | PutWall ${pw_v:g} | Flip ${flip_v:g}",
+            color="#f8fafc", fontsize=11, fontweight="bold", loc="left", pad=8
+        )
+        import datetime as _dt_p
+        _xt_idx = [i for i in range(0, n, max(1, n // 6))]
+        _xt_lbl = [_dt_p.datetime.utcfromtimestamp(int(sub[i]["time"])).strftime("%H:%M") for i in _xt_idx]
+        ax2.set_xticks(_xt_idx)
+        ax2.set_xticklabels(_xt_lbl, color="#94a3b8", fontsize=8.5)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor="#07111e")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception:
+        return None
+
 
 st.set_page_config(page_title="OptionHub - InsiderFinance All-in-One", page_icon="📈", layout="wide")
 
@@ -6506,6 +6603,11 @@ if nav_menu == "🎯 행사가별·동반 체결":
         if _pc4.button("📩 프로토콜 텔레그램 전송", use_container_width=True, key=f"btn_proto_tg_{tk_f}"):
             _rep_txt = st.session_state.get(f"proto_report_{tk_f}", "")
             if _rep_txt:
+                _snap_p = st.session_state.get(f"_flow_tv_snap_{tk_f}")
+                if _snap_p:
+                    _png_p = _render_flow_chart_png(tk_f, _snap_p["tf"], _snap_p["bars"], _snap_p["spot"], _snap_p["cw"], _snap_p["pw"], _snap_p["flip"], _snap_p["mp"])
+                    if _png_p:
+                        send_telegram_photo_bytes(tg_token, tg_chat_id, _png_p, f"📈 {tk_f} ({_snap_p['tf']}) · Spot ${_snap_p['spot']:,.2f} | CallWall ${_snap_p['cw']:g} | PutWall ${_snap_p['pw']:g} | Flip ${_snap_p['flip']:g}")
                 if send_telegram_msg(tg_token, tg_chat_id, f"🧭 *[{tk_f} 기계적 3대 프로토콜]*\n\n{_rep_txt}")[0]:
                     st.toast("✅ 텔레그램 전송 완료!")
                 else:
@@ -6898,12 +7000,13 @@ if nav_menu == "🎯 행사가별·동반 체결":
         def _fetch_flow_tv_ohlcv(_sym_tv, _tf_tv):
             import concurrent.futures, yfinance as _yf_tv
             _tf_cfg = {
+                "1분봉": ("1d", "1m"),
                 "5분봉": ("5d", "5m"),
                 "15분봉": ("10d", "15m"),
                 "1시간봉": ("1mo", "1h"),
                 "1일봉": ("6mo", "1d"),
             }
-            _per, _itv = _tf_cfg.get(_tf_tv, ("5d", "5m"))
+            _per, _itv = _tf_cfg.get(_tf_tv, ("1d", "1m"))
             def _dl_tv():
                 _h = _yf_tv.Ticker(_sym_tv).history(period=_per, interval=_itv, prepost=(_itv != "1d"))
                 if _h is None or _h.empty:
@@ -6930,7 +7033,7 @@ if nav_menu == "🎯 행사가별·동반 체결":
 
         _tv_h1, _tv_h2 = st.columns([2.2, 1.0])
         _tv_h1.markdown(f"**📈 {tk_f} 트레이딩뷰 차트 · Flip Gamma / Call Wall / Put Wall**")
-        _tv_tf_sel = _tv_h2.radio("타임프레임", ["5분봉", "15분봉", "1시간봉", "1일봉"], horizontal=True, label_visibility="collapsed", key=f"flow_tv_tf_{tk_f}")
+        _tv_tf_sel = _tv_h2.radio("타임프레임", ["1분봉", "5분봉", "15분봉", "1시간봉", "1일봉"], horizontal=True, label_visibility="collapsed", key=f"flow_tv_tf_{tk_f}")
         _tv_bars = _fetch_flow_tv_ohlcv(tk_f, _tv_tf_sel)
         if _tv_bars:
             _tv_bars = [dict(b) for b in _tv_bars]
@@ -7059,6 +7162,10 @@ window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWi
 </body>
 </html>
 """
+            st.session_state[f"_flow_tv_snap_{tk_f}"] = {
+                "tf": _tv_tf_sel, "bars": _tv_bars, "spot": float(spot_live),
+                "cw": _cw_v_tv, "pw": _pw_v_tv, "flip": _zg_v_tv, "mp": _mp_v_tv,
+            }
             st.components.v1.html(_tv_html, height=465, scrolling=False)
 
     if not df_yf_f.empty and spot_live > 0:
@@ -7161,6 +7268,11 @@ window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWi
             _tg_lines.append(st.session_state["last_flow_ai_brief"])
         _tg_lines.append("\n🌐 OptionHub: http://132.226.3.145:8501")
         _full_tg = "\n".join(_tg_lines)
+        _snap_f = st.session_state.get(f"_flow_tv_snap_{tk_f}")
+        if _snap_f:
+            _png_f = _render_flow_chart_png(tk_f, _snap_f["tf"], _snap_f["bars"], _snap_f["spot"], _snap_f["cw"], _snap_f["pw"], _snap_f["flip"], _snap_f["mp"])
+            if _png_f:
+                send_telegram_photo_bytes(tg_token, tg_chat_id, _png_f, f"📈 {tk_f} ({_snap_f['tf']}) · Spot ${_snap_f['spot']:,.2f} | CallWall ${_snap_f['cw']:g} | PutWall ${_snap_f['pw']:g} | Flip ${_snap_f['flip']:g}")
         if send_telegram_msg(tg_token, tg_chat_id, _full_tg[:4000])[0]:
             st.success("✅ 전체 리포트 텔레그램 전송 완료!")
         else:
