@@ -256,8 +256,12 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6):
     total_put_prem = float(by_k["put_prem"].sum())
 
     # Call Wall & Put Wall
-    call_wall = float(by_k.loc[by_k["call_gex"].idxmax(), "strike"]) if by_k["call_gex"].max() > 0 else float(by_k.loc[by_k["call_oi"].idxmax(), "strike"])
-    put_wall = float(by_k.loc[by_k["put_gex"].idxmin(), "strike"]) if by_k["put_gex"].min() < 0 else float(by_k.loc[by_k["put_oi"].idxmax(), "strike"])
+    _bk_c = by_k[by_k["strike"] >= spot * 0.98]
+    if _bk_c.empty: _bk_c = by_k
+    _bk_p = by_k[by_k["strike"] <= spot * 1.02]
+    if _bk_p.empty: _bk_p = by_k
+    call_wall = float(_bk_c.loc[_bk_c["call_gex"].idxmax(), "strike"]) if _bk_c["call_gex"].max() > 0 else float(_bk_c.loc[_bk_c["call_oi"].idxmax(), "strike"])
+    put_wall = float(_bk_p.loc[_bk_p["put_gex"].idxmin(), "strike"]) if _bk_p["put_gex"].min() < 0 else float(_bk_p.loc[_bk_p["put_oi"].idxmax(), "strike"])
 
     # 2차 지지/저항
     top_calls = by_k.sort_values("call_gex", ascending=False)["strike"].head(3).tolist()
@@ -592,12 +596,28 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
 
     if ac2.button("📩 텔레그램으로 AI GEX 브리핑 전송", use_container_width=True, key="btn_gex_tg"):
         if send_tg_fn:
+            _top3_oi = res["by_k"].sort_values("total_oi", ascending=False).head(3)
+            _top3_lines = "\n".join(
+                f"  • `{r['strike']:g}` | 콜 {int(r['call_oi']):,} · 풋 {int(r['put_oi']):,} | Net GEX `{_fmt_num_short(r['net_gex'])}`"
+                for _, r in _top3_oi.iterrows()
+            )
+            _gem_txt = str(st.session_state.get("ai_gex_gemini_out") or "").strip()
+            _scen_extra = f"\n\n🤖 *상세 시나리오*\n{_gem_txt[:1500]}" if _gem_txt else (
+                f"\n\n🧭 *실전 매매 타점*\n"
+                f"• 롱(상방): Put Wall `${pw:g}` 지지 또는 Flip `${flip:.1f}` 돌파 안착 시 → 목표 `${cw:g}` (돌파 시 `${up_next:g}`) / 손절 `${pw*0.985:.2f}`\n"
+                f"• 숏(하방): Flip `${flip:.1f}` 하향 이탈 또는 `${cw:g}` 리젝션 시 → 목표 `${pw:g}` / 손절 `${cw*1.015:.2f}`"
+            )
+            _mm_line = f"\n📡 무무 실시간: `{_mm_gex['summary']}`" if _mm_gex.get("summary") else ""
             _tg_msg = (
-                f"🎯 *[AI GEX 분석] {tk_target}*\n"
-                f"현재가 `{spot:.2f}`\n"
-                f"{gex_dot} Net GEX `{_fmt_num_short(net_gex)}` | 🟢 Call Wall `{cw:g}` | 🔴 Put Wall `{pw:g}` | {flip_dot} GEX Flip `{flip:.1f}`\n"
-                f"🎯 Max Pain `{mp:g}` | Dealer: `{res['dealer_short']}`\n"
-                f"시나리오: `{cw:g}` 돌파 시 `{up_next:g}` / `{flip:.1f}` 이탈 시 `{pw:g}`\n"
+                f"🎯 *[AI GEX 심층 분석] {tk_target}*\n"
+                f"💵 현재가: `${spot:.2f}` | Dealer: `{res['dealer_pos']}`\n"
+                f"{gex_dot} Net GEX: `{_fmt_num_short(net_gex)}` | Gross GEX: `{_fmt_num_short(gross_gex)}`\n"
+                f"📐 Net DEX: `{_fmt_usd(net_dex)}` | P/C(OI): `{res['pc_oi']:.2f}` (콜 {int(res['call_oi']):,} · 풋 {int(res['put_oi']):,})\n"
+                f"💰 프리미엄: Call `{_fmt_usd(res['call_prem'])}` vs Put `{_fmt_usd(res['put_prem'])}`\n"
+                f"🧱 핵심 레벨: 🟢 Call Wall `${cw:g}` · 🔴 Put Wall `${pw:g}` · {flip_dot} Flip `${flip:.1f}` · 🎯 Max Pain `${mp:g}`"
+                f"{_mm_line}\n\n"
+                f"📊 *OI 밀집 상위 TOP3*\n{_top3_lines}"
+                f"{_scen_extra}\n\n"
                 f"{res['verdict_emoji']} *AI 최종판정: {res['verdict_lbl']} {res['verdict_prob']}%*\n"
                 f"(상승 {res['p_up']}% · 횡보 {res['p_flat']}% · 하락 {res['p_down']}%)"
             )
