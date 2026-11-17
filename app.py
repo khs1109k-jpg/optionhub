@@ -7013,6 +7013,8 @@ if nav_menu == "🎯 행사가별·동반 체결":
             _per, _itv = _tf_cfg.get(_tf_tv, ("1d", "1m"))
             def _dl_tv():
                 _h = _yf_tv.Ticker(_sym_tv).history(period=_per, interval=_itv, prepost=(_itv != "1d"))
+                if (_h is None or _h.empty) and _itv == "1m":
+                    _h = _yf_tv.Ticker(_sym_tv).history(period="5d", interval="5m", prepost=True)
                 if _h is None or _h.empty:
                     return []
                 _out = []
@@ -7182,7 +7184,7 @@ window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWi
                 _call_oi_k = _df_ch[_df_ch["구분"] == "Call"].groupby("행사가")["OI"].sum().reindex(_gex_by_k.index, fill_value=0)
                 _put_oi_k = _df_ch[_df_ch["구분"] == "Put"].groupby("행사가")["OI"].sum().reindex(_gex_by_k.index, fill_value=0)
                 _fig_fl = _mk_sub_fl(
-                    rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.10, row_heights=[0.55, 0.45],
+                    rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.18, row_heights=[0.54, 0.46],
                     subplot_titles=(f"{tk_f} 행사가별 Net GEX ($M) · 핵심 레벨 한눈에 보기", f"{tk_f} 행사가별 Call / Put 미결제약정 (OI) 벽")
                 )
                 _g_cols = ["#10b981" if v >= 0 else "#ef4444" for v in _gex_by_k.values]
@@ -7205,17 +7207,18 @@ window.addEventListener("resize", () => chart.applyOptions({{ width: el.clientWi
                     (_pw_f, "#ef4444", "dot", f"Put Wall ${float(_pw_f):g}" if _pw_f else "", "bottom left"),
                     (_mp_f, "#a855f7", "dashdot", f"MaxPain ${float(_mp_f):g}" if _mp_f else "", "bottom right"),
                 ]
-                for _lx, _lcol, _ldash, _ltxt, _lpos in _lv_lines:
+                for _li, (_lx, _lcol, _ldash, _ltxt, _lpos) in enumerate(_lv_lines):
                     if _lx and float(_lx) > 0:
                         _fig_fl.add_vline(
                             x=float(_lx), line_color=_lcol, line_dash=_ldash, line_width=1.8,
                             annotation_text=_ltxt, annotation_position=_lpos,
-                            annotation_font_color=_lcol, annotation_font_size=11
+                            annotation_font_color=_lcol, annotation_font_size=10,
+                            annotation_yshift=(-18 if "top" in _lpos else 12) - (_li % 2) * 12
                         )
                 _fig_fl.update_layout(
                     template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
-                    height=460, barmode="group", margin=dict(l=18, r=18, t=42, b=18),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="right", x=1.0),
+                    height=500, barmode="group", margin=dict(l=18, r=18, t=58, b=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1.0),
                     hovermode="x unified"
                 )
                 _fig_fl.update_xaxes(tickprefix="$", gridcolor="#13283d")
