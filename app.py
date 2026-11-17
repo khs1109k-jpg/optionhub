@@ -4553,7 +4553,63 @@ if nav_menu == "📊 OI(미결제약정) 수집":
                     hovertemplate="행사가: %{y}<br>날짜: %{x}<br>OI: %{z:,}<extra></extra>"
                 ))
                 fig_hm.update_layout(title=f"{_hm_tk} 행사가별 5일 OI 누적 히트맵 (상위 15개)", template="plotly_dark", height=420, margin=dict(l=70, r=20, t=45, b=30))
+                fig_hm.update_xaxes(type="category")
                 st.plotly_chart(fig_hm, use_container_width=True)
+
+        # 🔍 행사가별 신규(OPEN) / 청산(CLOSE) / 롤오버(ROLL) 자동 판별 표
+        _last_sn = _snaps_hm[-1]
+        _prev_sn = _snaps_hm[-2] if len(_snaps_hm) >= 2 else None
+        _prev_k_oi = {}
+        if _prev_sn:
+            for _px_r in _prev_sn.get("상세", []):
+                _pk_key = (str(_px_r.get("구분", "")).upper()[:1], float(_px_r.get("행사가", 0) or 0))
+                _prev_k_oi[_pk_key] = _prev_k_oi.get(_pk_key, 0) + int(_px_r.get("OI", 0) or 0)
+        _cur_k_agg = {}
+        for _cx_r in _last_sn.get("상세", []):
+            _cp_ch = str(_cx_r.get("구분", "")).upper()[:1]
+            _k_v = float(_cx_r.get("행사가", 0) or 0)
+            if not _cp_ch or _k_v <= 0:
+                continue
+            _ck = (_cp_ch, _k_v)
+            if _ck not in _cur_k_agg:
+                _cur_k_agg[_ck] = {"oi": 0, "vol": 0, "exps": set()}
+            _cur_k_agg[_ck]["oi"] += int(_cx_r.get("OI", 0) or 0)
+            _cur_k_agg[_ck]["vol"] += int(_cx_r.get("거래량", _cx_r.get("vol", 0)) or 0)
+            if int(_cx_r.get("거래량", _cx_r.get("vol", 0)) or 0) >= 50:
+                _cur_k_agg[_ck]["exps"].add(str(_cx_r.get("만기", _cx_r.get("만기일", "")))[:10])
+        _cls_rows = []
+        for (_cp_ch, _k_v), _agg in sorted(_cur_k_agg.items(), key=lambda x: x[1]["oi"], reverse=True)[:20]:
+            _coi = _agg["oi"]
+            _cvol = _agg["vol"]
+            _poi = _prev_k_oi.get((_cp_ch, _k_v)) if _prev_sn else None
+            _doi = (_coi - _poi) if _poi is not None else None
+            _is_roll = len(_agg["exps"]) >= 2 and _cvol >= 200
+            if _is_roll and (_doi is not None and abs(_doi) >= 100):
+                _st_lbl = f"🔄 롤오버 ({_doi:+,})"
+            elif _doi is not None and _doi > 0:
+                _st_lbl = f"🆕 신규 유입 (+{_doi:,})"
+            elif _doi is not None and _doi < 0:
+                _st_lbl = f"✂️ 청산 우세 ({_doi:,})"
+            elif _cvol > _coi and _coi > 0:
+                _st_lbl = "🆕 신규 확정 (Vol>OI)"
+            elif _coi > 0 and _cvol >= _coi * 0.5:
+                _st_lbl = "⚡ 대량 회전·신규후보"
+            elif _is_roll:
+                _st_lbl = "🔄 복수만기 롤오버후보"
+            else:
+                _st_lbl = "⏳ 전일 비교 대기" if _poi is None else "➖ 변동 미미"
+            _cls_rows.append({
+                "구분": "Call" if _cp_ch == "C" else "Put",
+                "행사가": f"${_k_v:g}",
+                "이전 OI": f"{_poi:,}" if _poi is not None else "-",
+                "최신 OI": f"{_coi:,}",
+                "ΔOI": f"{_doi:+,}" if _doi is not None else "-",
+                "당일 거래량": f"{_cvol:,}",
+                "신규 / 청산 / 롤오버 판정": _st_lbl,
+            })
+        if _cls_rows:
+            st.subheader(f"🔍 {_hm_tk} 행사가별 신규(OPEN) · 청산(CLOSE) · 롤오버(ROLL) 판별")
+            st.dataframe(pd.DataFrame(_cls_rows), use_container_width=True, hide_index=True)
     else:
         st.info("아직 저장된 OI 스냅샷이 없습니다. 위에서 OI 수집을 1회 이상 실행하면 5일 변화 히트맵이 표시됩니다.")
 
