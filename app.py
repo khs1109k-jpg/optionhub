@@ -2197,7 +2197,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <div style="flex:1; min-width:0; background:#080c14;">
       <div style="display:flex; width:100%;">
       <div style="position:relative; flex:1; min-width:0;">
-      <div id="tv_main" style="width:100%; height:460px;"></div>
+      <div id="tv_main" style="width:100%; height:420px;"></div>
       <div id="tv_hud" style="position:absolute; top:6px; left:8px; z-index:4; background:rgba(8,12,20,0.78); border-radius:4px; padding:4px 8px; font-family:monospace; font-size:13px; line-height:1.45; color:#e2e8f0; pointer-events:none;"></div>
       <div id="tv_hud_r" style="position:absolute; top:6px; right:98px; z-index:4; text-align:right; font-family:monospace; font-size:13px; line-height:1.45; color:#cbd5e1; pointer-events:none;"></div>
       <canvas id="tv_cloud" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:1;"></canvas>
@@ -2205,6 +2205,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <canvas id="tv_draw" style="position:absolute; top:0; left:0; width:100%; height:460px; pointer-events:none; z-index:5;"></canvas>
       </div>
       <canvas id="tv_rail" style="width:{(68 if show_rail_gex else 0) + (68 if show_rail_nf else 0)}px; height:460px; flex-shrink:0; background:#090d16; border-left:1px solid #1e293b;"></canvas>
+      </div>
+      <div style="position:relative; width:100%; height:95px; border-top:1px solid #1e293b; background:#080c14;">
+        <div id="tv_vol_pane" style="width:100%; height:95px;"></div>
+        <div id="tv_vol_lbl" style="position:absolute; top:4px; left:10px; z-index:4; font-family:monospace; font-size:11px; font-weight:700; color:#fbbf24; pointer-events:none;">VOL</div>
+        <canvas id="tv_vol_ov" style="position:absolute; top:0; left:0; width:100%; height:95px; pointer-events:none; z-index:3;"></canvas>
       </div>
       <div id="tv_flow_box" style="background:#070b12; border-top:1px solid #1e293b; height:225px; overflow-y:auto; flex-shrink:0; font-family:monospace; font-size:12px;">
         <table style="width:100%; border-collapse:collapse; text-align:center;">
@@ -2279,10 +2284,16 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }});
       cs.setData(d.candles);
       let vs = null;
-      if (d.volumes.length) {{
-        vs = chart.addHistogramSeries({{ priceFormat:{{type:"volume"}}, priceScaleId:"" }});
-        vs.priceScale().applyOptions({{ scaleMargins:{{ top:0.78, bottom:0.02 }} }});
+      let cVol = null;
+      if (d.volumes.length && document.getElementById("tv_vol_pane")) {{
+        cVol = LightweightCharts.createChart(document.getElementById("tv_vol_pane"), Object.assign({{}}, baseOpt, {{
+          rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 96, autoScale: true }},
+          timeScale: Object.assign({{}}, baseOpt.timeScale, {{ visible: false }}),
+        }}));
+        vs = cVol.addHistogramSeries({{ priceFormat:{{type:"volume"}}, lastValueVisible:false, priceLineVisible:false }});
         vs.setData(d.volumes);
+        const vLbl = document.getElementById("tv_vol_lbl");
+        if (vLbl) vLbl.textContent = "VOL " + fmtCompact(d.volumes.reduce((a,x)=>a+Number(x.value||0),0));
       }}
       function styleTfBtns(act) {{
         document.querySelectorAll(".tv-tf").forEach(b => {{
@@ -2467,50 +2478,47 @@ if nav_menu == "⚡ 무무 실시간 차트":
           ctx.fillText(lv.txt, bx + 6, y + 3.5);
           ctx.restore();
         }});
-        // 바닥 거래량 막대 + 금색 테두리 거래량 스파이크 박스 (화면 내 로컬 스케일로 항상 선명하게 표시)
-        if (d.volumes && d.volumes.length) {{
+        // 분리된 하단 VOL 패널(tv_vol_ov)에 금색 스파이크 박스 표시
+        const vOv = document.getElementById("tv_vol_ov");
+        if (vOv && d.volumes && d.volumes.length) {{
+          const vh = vOv.clientHeight || 95;
+          vOv.width = mw; vOv.height = vh;
+          const vctx = vOv.getContext("2d");
+          vctx.clearRect(0, 0, mw, vh);
           const visVols = [];
           for (let i = 0; i < d.volumes.length; i++) {{
             const v = d.volumes[i];
-            const vx = chart.timeScale().timeToCoordinate(v.time);
-            if (vx !== null && vx >= 12 && vx <= chartRight - 10 && Number(v.value) > 0) {{
-              visVols.push({{ x: vx, val: Number(v.value), col: v.color || "#26a69a" }});
+            const vx = (cVol ? cVol.timeScale() : chart.timeScale()).timeToCoordinate(v.time);
+            if (vx !== null && vx >= 40 && vx <= chartRight - 30 && Number(v.value) > 0) {{
+              visVols.push({{ x: vx, val: Number(v.value) }});
             }}
           }}
           if (visVols.length) {{
-            const sortedV = [...visVols].sort((a, b) => b.val - a.val);
-            const capV = sortedV.length >= 3 ? Math.max(sortedV[2].val * 1.35, sortedV[0].val * 0.35, 1) : Math.max(sortedV[0].val, 1);
-            const plotBot = mh - 28;
-            const maxBarH = Math.round(mh * 0.17);
-            const barW = Math.max(2, Math.min(6, Math.round((chartRight / Math.max(visVols.length, 30)) * 0.62)));
-            visVols.forEach(vv => {{
-              const bh = Math.min(maxBarH, Math.max(3, Math.round((vv.val / capV) * maxBarH)));
-              ctx.fillStyle = (vv.col.includes("239") || vv.col.includes("ef") || vv.col.includes("f2") || vv.col.includes("5350")) ? "rgba(239,68,68,0.72)" : "rgba(34,197,94,0.72)";
-              ctx.fillRect(Math.round(vv.x - barW / 2), plotBot - bh, barW, bh);
-            }});
+            visVols.sort((a, b) => b.val - a.val);
+            const capV = Math.max(visVols[0].val, 1);
             const picked = [];
-            for (const cand of sortedV) {{
-              if (cand.x >= 45 && cand.x <= chartRight - 35 && picked.every(p => Math.abs(p.x - cand.x) > 64)) {{
+            for (const cand of visVols) {{
+              if (picked.every(p => Math.abs(p.x - cand.x) > 64)) {{
                 picked.push(cand);
                 if (picked.length >= 5) break;
               }}
             }}
             picked.forEach(p => {{
               const lbl = p.val >= 1e6 ? (p.val / 1e6).toFixed(1) + "M" : (p.val >= 1e3 ? (p.val / 1e3).toFixed(1) + "K" : String(Math.round(p.val)));
-              const barH = Math.min(maxBarH, Math.max(10, Math.round((p.val / capV) * maxBarH)));
-              const boxY = Math.min(mh - 48, Math.max(24, plotBot - barH - 18));
-              ctx.save();
-              ctx.font = "bold 11px monospace";
-              const bw = ctx.measureText(lbl).width + 8;
+              const barH = Math.min(vh - 22, Math.max(10, Math.round((p.val / capV) * (vh - 24))));
+              const boxY = Math.max(4, vh - barH - 16);
+              vctx.save();
+              vctx.font = "bold 10px monospace";
+              const bw = vctx.measureText(lbl).width + 8;
               const bx = Math.round(p.x - bw / 2);
-              ctx.fillStyle = "rgba(8,12,20,0.92)";
-              ctx.fillRect(bx, boxY, bw, 14);
-              ctx.strokeStyle = "#eab308";
-              ctx.lineWidth = 1;
-              ctx.strokeRect(bx, boxY, bw, 14);
-              ctx.fillStyle = "#fef08a";
-              ctx.fillText(lbl, bx + 4, boxY + 10);
-              ctx.restore();
+              vctx.fillStyle = "rgba(8,12,20,0.92)";
+              vctx.fillRect(bx, boxY, bw, 14);
+              vctx.strokeStyle = "#eab308";
+              vctx.lineWidth = 1;
+              vctx.strokeRect(bx, boxY, bw, 14);
+              vctx.fillStyle = "#fef08a";
+              vctx.fillText(lbl, bx + 4, boxY + 10);
+              vctx.restore();
             }});
           }}
         }}
@@ -2562,8 +2570,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
       }}
 
       // 보조지표 차트 동기화
-      const subCharts = [];
-      const subLinks = [];
+      const subCharts = cVol ? [cVol] : [];
+      const subLinks = (cVol && vs) ? [{{c: cVol, s: vs}}] : [];
       let cCvd = null, sCvd = null, cBii = null, sBii = null;
       let cMacd = null, sMacdH = null, sMacd = null, sMacdS = null;
       let cRsi = null, sRsi = null;
