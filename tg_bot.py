@@ -509,6 +509,10 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연) 스캔 중...")
         send_msg(token, chat_id, build_intraday_option_changes())
 
+    elif low in ("/대형체결", "/bigflows", "/체결요약") or cmd == "cmd:bigflows":
+        send_msg(token, chat_id, "🧾 대형 옵션 체결 · 신규/증가 스캔 중...")
+        send_msg(token, chat_id, build_big_option_flows_summary())
+
     elif low in ("/종합평", "/summary") or cmd == "cmd:summary":
         send_msg(token, chat_id, get_app_review())
 
@@ -1742,6 +1746,149 @@ def auto_scan_intraday_option_changes(token, chat_id):
     except Exception:
         pass
 
+
+def build_big_option_flows_summary():
+    import re as _re_bf
+    watch = ["NVDA", "TSLA", "AMD", "SOXL", "SOXS", "META", "TSM", "MU", "PLTR", "ORCL", "INTC", "AAPL", "AVGO", "SMH", "SPY", "QQQ"]
+    items = []
+    for tk in watch:
+        try:
+            url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{tk}.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            raw = json.loads(urllib.request.urlopen(req, timeout=6).read().decode("utf-8"))
+            data_d = raw.get("data") or {}
+            opts = data_d.get("options") or []
+            spot = float(data_d.get("current_price") or data_d.get("close") or 0.0)
+            if not opts or spot <= 0:
+                continue
+            for o in opts:
+                occ = str(o.get("option") or "")
+                m = _re_bf.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", occ)
+                if not m:
+                    continue
+                yymmdd, cp_ch, k_raw = m.groups()
+                mm_dd = f"{yymmdd[2:4]}-{yymmdd[4:6]}"
+                strike = int(k_raw) / 1000.0
+                oi = int(o.get("open_interest") or 0)
+                vol = int(o.get("volume") or 0)
+                if vol < 200:
+                    continue
+                last_px = float(o.get("last_trade_price") or 0)
+                bid = float(o.get("bid") or 0)
+                ask = float(o.get("ask") or 0)
+                mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last_px
+                prem = vol * mid * 100.0
+                if prem < 1_500_000:
+                    continue
+                # 깊은 ITM(델타~1/-1) 노이즈 제외
+                is_deep_itm = (cp_ch == "P" and strike > spot * 1.25) or (cp_ch == "C" and strike < spot * 0.75)
+                if ask > 0 and last_px >= ask * 0.99:
+                    side = "BUY" if last_px >= ask else "BUY?"
+                elif bid > 0 and last_px <= bid * 1.01:
+                    side = "SELL" if last_px <= bid else "SELL?"
+                else:
+                    side = "혼합"
+                kind_tag = "단일 대량" if (oi > 0 and vol <= oi * 0.8) else "일간 분할"
+                bull_p, bear_p = 0.0, 0.0
+                if not is_deep_itm:
+                    if cp_ch == "C" and "BUY" in side:
+                        bull_p = prem
+                    elif cp_ch == "P" and "SELL" in side:
+                        bull_p = prem
+                    elif cp_ch == "C" and "SELL" in side:
+                        bear_p = prem
+                    elif cp_ch == "P" and "BUY" in side:
+                        bear_p = prem
+                items.append({
+                    "tk": tk, "cp": cp_ch, "strike": strike, "exp": mm_dd,
+                    "prem": prem, "side": side, "kind": kind_tag,
+                    "bull_p": bull_p, "bear_p": bear_p, "deep": is_deep_itm,
+                })
+        except Exception:
+            continue
+
+    if not items:
+        return "🧾 대형 옵션 체결 · 신규/증가\n\n현재 기준($1.5M+) 대형 체결이 없습니다."
+
+    dir_items = [x for x in items if not x["deep"]]
+    top_items = sorted(dir_items or items, key=lambda x: x["prem"], reverse=True)[:5]
+    top_lines = [
+        f"- {x['tk']} {x['strike']:g}{x['cp']} {x['exp']} ${x['prem']/1e6:.2f}M {x['side']} ({x['kind']})"
+        for x in top_items
+    ]
+
+    tot_bull = sum(x["bull_p"] for x in dir_items)
+    tot_bear = sum(x["bear_p"] for x in dir_items)
+    if tot_bull > tot_bear * 1.35:
+        tot_bias = "강세 쪽으로 쏠렸어요"
+    elif tot_bear > tot_bull * 1.35:
+        tot_bias = "약세 쪽으로 쏠렸어요"
+    else:
+        tot_bias = "한쪽으로 쏠리지 않았어요"
+
+    by_tk = {}
+    for x in dir_items:
+        t = x["tk"]
+        if t not in by_tk:
+            by_tk[t] = {"bull": 0.0, "bear": 0.0, "sup": [], "res": [], "up": [], "dn": []}
+        by_tk[t]["bull"] += x["bull_p"]
+        by_tk[t]["bear"] += x["bear_p"]
+        if x["cp"] == "C" and "BUY" in x["side"]:
+            by_tk[t]["up"].append(x["strike"])
+        elif x["cp"] == "C" and "SELL" in x["side"]:
+            by_tk[t]["res"].append(x["strike"])
+        elif x["cp"] == "P" and "SELL" in x["side"]:
+            by_tk[t]["sup"].append(x["strike"])
+        elif x["cp"] == "P" and "BUY" in x["side"]:
+            by_tk[t]["dn"].append(x["strike"])
+
+    tk_lines = []
+    for t, d in sorted(by_tk.items(), key=lambda kv: kv[1]["bull"] + kv[1]["bear"], reverse=True)[:6]:
+        if d["bull"] + d["bear"] < 1_000_000:
+            continue
+        bias_s = "강세 우위" if d["bull"] > d["bear"] * 1.15 else ("약세 우위" if d["bear"] > d["bull"] * 1.15 else "혼조")
+        lv_parts = []
+        if d["sup"]:
+            lv_parts.append(f"지지 {sorted(set(d['sup']))[0]:g}")
+        if d["res"]:
+            lv_parts.append(f"저항 {sorted(set(d['res']))[0]:g}")
+        if d["up"]:
+            lv_parts.append(f"상방 목표 {sorted(set(d['up']))[-1]:g}")
+        if d["dn"]:
+            lv_parts.append(f"하방 대비 {sorted(set(d['dn']))[0]:g}")
+        lv_str = f" → {' / '.join(lv_parts)}" if lv_parts else ""
+        tk_lines.append(f"- {t} {bias_s} (강세 ${d['bull']/1e6:.1f}M · 약세 ${d['bear']/1e6:.1f}M){lv_str}")
+
+    return (
+        f"🧾 대형 옵션 체결 · 신규/증가 {len(top_items)}건\n"
+        + "\n".join(top_lines)
+        + f"\n\n전체: 강세 ${tot_bull/1e6:.1f}M vs 약세 ${tot_bear/1e6:.1f}M → {tot_bias}\n"
+        + "\n".join(tk_lines)
+        + "\n\n(방향은 추정 · 확인 후 판단)"
+    )
+
+_LAST_BIGFLOW_SCAN_TS = 0.0
+
+def auto_scan_big_flows_summary(token, chat_id):
+    global _LAST_BIGFLOW_SCAN_TS
+    try:
+        from datetime import datetime, timezone, timedelta
+        kst = datetime.now(timezone(timedelta(hours=9)))
+        hm = kst.hour * 100 + kst.minute
+        wd = kst.weekday()
+        in_session = ((wd in (0, 1, 2, 3, 4) and hm >= 2330) or (wd in (1, 2, 3, 4, 5) and hm <= 600))
+        if not in_session:
+            return
+        now_ts = time.time()
+        if now_ts - _LAST_BIGFLOW_SCAN_TS < 1800:
+            return
+        _LAST_BIGFLOW_SCAN_TS = now_ts
+        msg = build_big_option_flows_summary()
+        if "전체: 강세" in msg:
+            send_msg(token, chat_id, msg)
+    except Exception:
+        pass
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -1758,6 +1905,7 @@ def main():
                 auto_collect_daily_oi(token, my_chat_id)
                 auto_send_morning_briefing(token, my_chat_id)
                 auto_scan_intraday_option_changes(token, my_chat_id)
+                auto_scan_big_flows_summary(token, my_chat_id)
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
