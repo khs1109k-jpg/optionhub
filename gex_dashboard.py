@@ -51,96 +51,166 @@ def _fmt_num_short(val: float) -> str:
 
 
 @st.cache_data(ttl=180, show_spinner=False)
+def _fetch_cboe_chain_rows(tk: str, max_exps: int = 6):
+    import urllib.request, json, re
+    try:
+        cboe_sym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(tk, tk)
+        url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{cboe_sym}.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8"))
+        data_d = raw.get("data") or {}
+        opts = data_d.get("options") or []
+        spot = float(data_d.get("current_price") or data_d.get("close") or 0.0)
+        if not opts or spot <= 0:
+            return 0.0, []
+        today = dt.date.today()
+        today_s = today.isoformat()
+        parsed, exp_set = [], set()
+        for o in opts:
+            occ = str(o.get("option") or "")
+            m = re.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", occ)
+            if not m:
+                continue
+            yymmdd, cp_code, k_raw = m.groups()
+            exp_str = f"20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+            if exp_str < today_s:
+                continue
+            strike = int(k_raw) / 1000.0
+            oi = int(o.get("open_interest") or 0)
+            vol = int(o.get("volume") or 0)
+            if oi == 0 and vol == 0:
+                continue
+            exp_set.add(exp_str)
+            parsed.append((exp_str, cp_code, strike, oi, vol, o))
+        sel_exps = set(sorted(exp_set)[:max_exps])
+        rows = []
+        for exp_str, cp_code, strike, oi, vol, o in parsed:
+            if exp_str not in sel_exps:
+                continue
+            dte = max((dt.date.fromisoformat(exp_str) - today).days, 0)
+            t_years = max(dte, 0.5) / 365.0
+            iv = float(o.get("iv") or 0.30)
+            if iv <= 0.01:
+                iv = 0.30
+            delta = o.get("delta")
+            gamma = o.get("gamma")
+            if delta is None or gamma is None or float(gamma or 0) == 0:
+                delta, gamma = bs_delta_gamma(spot, strike, t_years, iv, is_call=(cp_code == "C"))
+            else:
+                delta, gamma = float(delta), float(gamma)
+            last_px = float(o.get("last_trade_price") or 0.0)
+            bid = float(o.get("bid") or 0.0)
+            ask = float(o.get("ask") or 0.0)
+            mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last_px
+            prem = vol * mid * 100.0
+            gex = (1.0 if cp_code == "C" else -1.0) * gamma * oi * 100.0 * (spot ** 2) * 0.01
+            dex = delta * oi * 100.0 * spot
+            rows.append({
+                "exp": exp_str, "dte": dte, "cp": cp_code, "strike": strike,
+                "oi": oi, "vol": vol, "iv": iv, "delta": delta, "gamma": gamma,
+                "gex": gex, "dex": dex, "prem": prem, "mid": mid,
+            })
+        if rows and sum(r["oi"] for r in rows) >= 100:
+            return spot, rows
+    except Exception:
+        pass
+    return 0.0, []
+
+
 def fetch_gex_chain_data(ticker: str, max_exps: int = 6):
     import yfinance as yf
 
     tk = (ticker or "SPY").strip().upper()
-    t = yf.Ticker(tk)
+    _cb_spot, _cb_rows = _fetch_cboe_chain_rows(tk, max_exps=max_exps)
+    if _cb_rows:
+        spot, rows = _cb_spot, _cb_rows
+    else:
+        t = yf.Ticker(tk)
 
-    spot = 0.0
-    try:
-        fi = getattr(t, "fast_info", None)
-        if fi:
-            spot = float(fi.get("lastPrice") or fi.get("regularMarketPrice") or fi.get("previousClose") or 0.0)
-    except Exception:
         spot = 0.0
-
-    if spot <= 0:
         try:
-            hist = t.history(period="5d")
-            if not hist.empty:
-                spot = float(hist["Close"].dropna().iloc[-1])
+            fi = getattr(t, "fast_info", None)
+            if fi:
+                spot = float(fi.get("lastPrice") or fi.get("regularMarketPrice") or fi.get("previousClose") or 0.0)
         except Exception:
-            pass
+            spot = 0.0
 
-    exps = list(getattr(t, "options", []) or [])
-    if spot <= 0 or not exps:
-        return {"ok": False, "error": f"'{tk}'의 현재가 또는 옵션 체인을 불러오지 못했습니다.", "ticker": tk}
+        if spot <= 0:
+            try:
+                hist = t.history(period="5d")
+                if not hist.empty:
+                    spot = float(hist["Close"].dropna().iloc[-1])
+            except Exception:
+                pass
 
-    today = dt.date.today()
-    sel_exps = exps[:max_exps]
-    rows = []
+        exps = list(getattr(t, "options", []) or [])
+        if spot <= 0 or not exps:
+            return {"ok": False, "error": f"'{tk}'의 현재가 또는 옵션 체인을 불러오지 못했습니다.", "ticker": tk}
 
-    for exp_str in sel_exps:
-        try:
-            exp_dt = dt.date.fromisoformat(exp_str)
-            dte = max((exp_dt - today).days, 0)
-            t_years = max(dte, 0.5) / 365.0
-            ch = t.option_chain(exp_str)
-        except Exception:
-            continue
+        today = dt.date.today()
+        sel_exps = exps[:max_exps]
+        rows = []
 
-        for cp_code, df_side in [("C", ch.calls), ("P", ch.puts)]:
-            if df_side is None or df_side.empty:
+        for exp_str in sel_exps:
+            try:
+                exp_dt = dt.date.fromisoformat(exp_str)
+                dte = max((exp_dt - today).days, 0)
+                t_years = max(dte, 0.5) / 365.0
+                ch = t.option_chain(exp_str)
+            except Exception:
                 continue
-            for _, r in df_side.iterrows():
-                strike = float(r.get("strike") or 0.0)
-                if strike <= 0:
+
+            for cp_code, df_side in [("C", ch.calls), ("P", ch.puts)]:
+                if df_side is None or df_side.empty:
                     continue
-                # 노이즈 극단 행사가 필터 (현물 +-50% 이내)
-                if strike < spot * 0.5 or strike > spot * 1.5:
-                    continue
-                oi = float(r.get("openInterest") or 0.0)
-                vol = float(r.get("volume") or 0.0)
-                iv = float(r.get("impliedVolatility") or 0.0)
-                if math.isnan(oi):
-                    oi = 0.0
-                if math.isnan(vol):
-                    vol = 0.0
-                if math.isnan(iv) or iv <= 0:
-                    iv = 0.35
+                for _, r in df_side.iterrows():
+                    strike = float(r.get("strike") or 0.0)
+                    if strike <= 0:
+                        continue
+                    # 노이즈 극단 행사가 필터 (현물 +-50% 이내)
+                    if strike < spot * 0.5 or strike > spot * 1.5:
+                        continue
+                    oi = float(r.get("openInterest") or 0.0)
+                    vol = float(r.get("volume") or 0.0)
+                    iv = float(r.get("impliedVolatility") or 0.0)
+                    if math.isnan(oi):
+                        oi = 0.0
+                    if math.isnan(vol):
+                        vol = 0.0
+                    if math.isnan(iv) or iv <= 0:
+                        iv = 0.35
 
-                last_p = float(r.get("lastPrice") or 0.0)
-                bid_p = float(r.get("bid") or 0.0)
-                ask_p = float(r.get("ask") or 0.0)
-                if math.isnan(last_p):
-                    last_p = 0.0
-                mid_p = ((bid_p + ask_p) / 2.0) if (bid_p > 0 and ask_p > 0) else last_p
-                prem = vol * mid_p * 100.0
+                    last_p = float(r.get("lastPrice") or 0.0)
+                    bid_p = float(r.get("bid") or 0.0)
+                    ask_p = float(r.get("ask") or 0.0)
+                    if math.isnan(last_p):
+                        last_p = 0.0
+                    mid_p = ((bid_p + ask_p) / 2.0) if (bid_p > 0 and ask_p > 0) else last_p
+                    prem = vol * mid_p * 100.0
 
-                delta, gamma = _bs_delta_gamma(spot, strike, t_years, iv, cp_code)
-                # Dealer GEX (Spot 1% 변동당 델타 헷지 금액): Spot^2 * 0.01 * Gamma * OI * 100
-                gex_abs = (spot * spot * 0.01) * gamma * oi * 100.0
-                net_gex = gex_abs if cp_code == "C" else -gex_abs
-                # Dealer DEX (Delta Exposure): Delta * OI * 100 * Spot
-                dex_val = delta * oi * 100.0 * spot
+                    delta, gamma = _bs_delta_gamma(spot, strike, t_years, iv, cp_code)
+                    # Dealer GEX (Spot 1% 변동당 델타 헷지 금액): Spot^2 * 0.01 * Gamma * OI * 100
+                    gex_abs = (spot * spot * 0.01) * gamma * oi * 100.0
+                    net_gex = gex_abs if cp_code == "C" else -gex_abs
+                    # Dealer DEX (Delta Exposure): Delta * OI * 100 * Spot
+                    dex_val = delta * oi * 100.0 * spot
 
-                rows.append({
-                    "exp": exp_str,
-                    "dte": int(dte),
-                    "cp": cp_code,
-                    "strike": strike,
-                    "oi": oi,
-                    "vol": vol,
-                    "iv": iv,
-                    "mid": mid_p,
-                    "prem": prem,
-                    "delta": delta,
-                    "gamma": gamma,
-                    "gex_abs": gex_abs,
-                    "net_gex": net_gex,
-                    "dex": dex_val,
-                })
+                    rows.append({
+                        "exp": exp_str,
+                        "dte": int(dte),
+                        "cp": cp_code,
+                        "strike": strike,
+                        "oi": oi,
+                        "vol": vol,
+                        "iv": iv,
+                        "mid": mid_p,
+                        "prem": prem,
+                        "delta": delta,
+                        "gamma": gamma,
+                        "gex_abs": gex_abs,
+                        "net_gex": net_gex,
+                        "dex": dex_val,
+                    })
 
     if not rows:
         return {"ok": False, "error": f"'{tk}' 옵션 체인 유효 데이터가 없습니다.", "ticker": tk}
@@ -327,6 +397,59 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6):
     }
 
 
+
+def _get_mm_live_for_gex(tk):
+    import os, json, sqlite3
+    clean = str(tk or "").strip().upper().replace("US.", "")
+    sym = f"US.{clean}"
+    res = {"px": 0.0, "summary": ""}
+    db_p = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+    try:
+        if os.path.exists(db_p):
+            con = sqlite3.connect(f"file:{db_p}?mode=ro", uri=True, timeout=2)
+            row = con.execute("SELECT data FROM quotes WHERE sym=?", (sym,)).fetchone()
+            con.close()
+            if row and row[0]:
+                qd = json.loads(row[0])
+                for ek in ("overnight_price", "after_price", "pre_price", "ext_price", "last_price", "px", "price"):
+                    v = float(qd.get(ek) or 0)
+                    if v > 0:
+                        res["px"] = round(v, 2); break
+    except Exception:
+        pass
+    parts = []
+    if res["px"] > 0:
+        parts.append(f"무무실시간 ${res['px']:,.2f}")
+    qctx = None
+    try:
+        from moomoo import OpenQuoteContext, SubType, RET_OK
+        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        qctx.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
+        r_ob, df_ob = qctx.get_order_book(sym, num=10)
+        if r_ob == RET_OK and isinstance(df_ob, dict):
+            bids = df_ob.get("Bid") or []
+            asks = df_ob.get("Ask") or []
+            if bids:
+                tb = max(bids, key=lambda x: x[1])
+                parts.append(f"매수벽 ${float(tb[0]):.2f}({int(tb[1]):,})")
+            if asks:
+                ta = max(asks, key=lambda x: x[1])
+                parts.append(f"매도벽 ${float(ta[0]):.2f}({int(ta[1]):,})")
+        r_tk, df_tk = qctx.get_rt_ticker(sym, num=200)
+        if r_tk == RET_OK and df_tk is not None and not df_tk.empty:
+            bv = sum(float(tr.get("turnover", 0) or 0) for _, tr in df_tk.iterrows() if "BUY" in str(tr.get("ticker_direction", "")).upper())
+            sv = sum(float(tr.get("turnover", 0) or 0) for _, tr in df_tk.iterrows() if "SELL" in str(tr.get("ticker_direction", "")).upper())
+            parts.append(f"틱CVD {(bv-sv):+,.0f}$")
+    except Exception:
+        pass
+    finally:
+        if qctx is not None:
+            try: qctx.close()
+            except Exception: pass
+    res["summary"] = " | ".join(parts)
+    return res
+
+
 def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_chat_id=""):
     st.title("🎯 AI GEX 분석")
     st.caption("종목 입력 → GEX → DEX → OI → Volume/OI → Premium → Delta/Gamma → DTE 순서로 분석하고 AI 최종판정을 자동 출력합니다.")
@@ -359,7 +482,10 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
         st.error(res.get("error", "데이터 조회 실패"))
         return
 
-    spot = res["spot"]
+    _mm_gex = _get_mm_live_for_gex(tk_target)
+    spot = _mm_gex["px"] if _mm_gex["px"] > 0 else res["spot"]
+    if _mm_gex["summary"]:
+        st.caption(f"📡 무무 실시간 연동: {_mm_gex['summary']}")
     cw = res["call_wall"]
     pw = res["put_wall"]
     flip = res["gex_flip"]
@@ -434,6 +560,7 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
                     f"- Call OI: {int(res['call_oi']):,}, Put OI: {int(res['put_oi']):,} (P/C={res['pc_oi']:.2f})\n"
                     f"- Call Prem: {_fmt_usd(res['call_prem'])}, Put Prem: {_fmt_usd(res['put_prem'])}\n"
                     f"- 확률 판정: 상승 {res['p_up']}% / 횡보 {res['p_flat']}% / 하락 {res['p_down']}%"
+                    + (f"\n- 무무 실시간 수급(60호가·틱CVD): {_mm_gex['summary']}" if _mm_gex["summary"] else "")
                 )
                 _, _ai_out = run_ai_fn(_prompt)
                 st.session_state["ai_gex_gemini_out"] = _ai_out
