@@ -1000,10 +1000,19 @@ if nav_menu == "⚡ 무무 실시간 차트":
         zg_lv = calc_zero_gamma(det_m, spot_m)
         if det_m:
             df_dm = pd.DataFrame(det_m)
-            if "DEX($M)" in df_dm.columns and not df_dm.empty:
-                dex_s = df_dm.groupby("행사가")["DEX($M)"].sum().abs()
+            _df_put_d = df_dm[df_dm["구분"] == "Put"] if "구분" in df_dm.columns else df_dm
+            if spot_m > 0 and not _df_put_d.empty:
+                _df_put_near = _df_put_d[(_df_put_d["행사가"] >= 0.75 * spot_m) & (_df_put_d["행사가"] <= 1.25 * spot_m)]
+                if not _df_put_near.empty:
+                    _df_put_d = _df_put_near
+            if "DEX($M)" in _df_put_d.columns and not _df_put_d.empty:
+                dex_s = _df_put_d.groupby("행사가")["DEX($M)"].sum().abs()
                 if not dex_s.empty:
                     delta_lv = float(dex_s.idxmax())
+            elif "GEX($M)" in _df_put_d.columns and not _df_put_d.empty:
+                gex_ps = _df_put_d.groupby("행사가")["GEX($M)"].sum().abs()
+                if not gex_ps.empty:
+                    delta_lv = float(gex_ps.idxmax())
             ref_px_sig = float(cur["px"] or spot_m or 0)
             if "IV(%)" in df_dm.columns and ref_px_sig > 0:
                 atm_iv_m = float(df_dm.iloc[(df_dm["행사가"] - ref_px_sig).abs().argsort()[:4]]["IV(%)"].mean() or 0)
@@ -1030,7 +1039,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     p_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Put")]["OI"].sum()) if "OI" in df_dm.columns else 0
                     net_g_k = float(df_dm[df_dm["행사가"] == k]["GEX($M)"].sum()) if "GEX($M)" in df_dm.columns else 0.0
                     opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 4), "p_m": round(pv, 4), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
-    if (not opt_bars) or (cw_lv is not None and pw_lv is not None and cw_lv == pw_lv):
+    _snap_dt_str = str(oi_hist_m.get(clean_tk, [{}])[-1].get("수집시각", ""))[:10] if (clean_tk in oi_hist_m and oi_hist_m[clean_tk]) else ""
+    _today_k_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    if (not opt_bars) or (_snap_dt_str != _today_k_str) or (cw_lv is not None and pw_lv is not None and cw_lv == pw_lv):
         try:
             y_rows, y_sp = _cached_opt_snapshot(clean_tk)
             if y_rows:
@@ -1043,8 +1054,19 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         cw_lv = float(df_yd[df_yd["구분"] == "Call"].sort_values("OI", ascending=False).iloc[0]["행사가"])
                     if (pw_lv is None or cw_lv == pw_lv) and not df_yd[df_yd["구분"] == "Put"].empty:
                         pw_lv = float(df_yd[df_yd["구분"] == "Put"].sort_values("OI", ascending=False).iloc[0]["행사가"])
-                    if zg_lv is None:
-                        zg_lv = calc_zero_gamma(df_yd, sp_ref)
+                    if zg_lv is None or _snap_dt_str != _today_k_str:
+                        _zg_y = calc_zero_gamma(df_yd, sp_ref)
+                        if _zg_y: zg_lv = _zg_y
+                    _df_yp = df_yd[df_yd["구분"] == "Put"]
+                    if sp_ref > 0 and not _df_yp.empty:
+                        _df_ypn = _df_yp[(_df_yp["행사가"] >= 0.75 * sp_ref) & (_df_yp["행사가"] <= 1.25 * sp_ref)]
+                        if not _df_ypn.empty: _df_yp = _df_ypn
+                    if "DEX($M)" in _df_yp.columns and not _df_yp.empty:
+                        _ydex = _df_yp.groupby("행사가")["DEX($M)"].sum().abs()
+                        if not _ydex.empty: delta_lv = float(_ydex.idxmax())
+                    elif "GEX($M)" in _df_yp.columns and not _df_yp.empty:
+                        _ygex = _df_yp.groupby("행사가")["GEX($M)"].sum().abs()
+                        if not _ygex.empty: delta_lv = float(_ygex.idxmax())
                     if sig_h_lv is None and "IV(%)" in df_yd.columns and sp_ref > 0:
                         atm_iv_y = float(df_yd.iloc[(df_yd["행사가"] - sp_ref).abs().argsort()[:4]]["IV(%)"].mean() or 0)
                         if atm_iv_y > 0:
@@ -1092,14 +1114,16 @@ if nav_menu == "⚡ 무무 실시간 차트":
             return out_k
         def _worker():
             res_k = []
-            from moomoo import OpenQuoteContext, KLType, RET_OK
-            _kl_map = {"1분봉": KLType.K_1M, "5분봉": KLType.K_5M, "15분봉": KLType.K_15M, "1일봉": KLType.K_DAY}
-            _kl_t = _kl_map.get(tf_lbl)
-            if _kl_t is None:
+            from moomoo import OpenQuoteContext, KLType, SubType, RET_OK
+            _kl_map = {"1분봉": (KLType.K_1M, SubType.K_1M), "5분봉": (KLType.K_5M, SubType.K_5M), "15분봉": (KLType.K_15M, SubType.K_15M), "1일봉": (KLType.K_DAY, SubType.K_DAY)}
+            _kl_pair = _kl_map.get(tf_lbl)
+            if _kl_pair is None:
                 return res_k
+            _kl_t, _sub_t = _kl_pair
             qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
             try:
-                ret, df_k = qctx.get_cur_kline(sym_s, 180, _kl_t)
+                qctx.subscribe([sym_s], [_sub_t], subscribe_push=False)
+                ret, df_k = qctx.get_cur_kline(sym_s, 240, _kl_t)
                 if ret == RET_OK and df_k is not None and not df_k.empty:
                     for _, kr in df_k.iterrows():
                         _tk_ts = int(pd.Timestamp(str(kr["time_key"])).tz_localize("America/New_York").timestamp())
@@ -1117,7 +1141,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
             fut = _ex.submit(_worker)
-            out_k = fut.result(timeout=1.0)
+            out_k = fut.result(timeout=3.0)
         except Exception:
             out_k = []
         finally:
@@ -1557,11 +1581,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
         df_c["span_b"] = ((h52 + l52) / 2.0).shift(i_kij)
         df_c["chikou"] = df_c["close"].shift(-i_kij)
 
-        rng_hl = (df_c["high"] - df_c["low"]).replace(0, 1e-6)
-        bar_delta = df_c["volume"] * ((2.0 * df_c["close"] - df_c["high"] - df_c["low"]) / rng_hl)
+        rng_hl = (df_c["high"] - df_c["low"]).replace(0, np.nan)
+        _eff_vol = df_c["volume"].where(df_c["volume"] > 0, (df_c["close"] - df_c["open"]).abs() * 50000.0)
+        _dir_ratio = ((2.0 * df_c["close"] - df_c["high"] - df_c["low"]) / rng_hl).fillna(np.sign(df_c["close"] - df_c["open"]))
+        bar_delta = (_eff_vol * _dir_ratio).fillna(0.0)
         df_c["cvd"] = bar_delta.cumsum()
         # BII(Intraday Intensity %): 이동합(20봉) 기반 정규화 체결강도 (-100 ~ +100%)
-        roll_v = df_c["volume"].rolling(20, min_periods=1).sum().replace(0, 1)
+        roll_v = _eff_vol.rolling(20, min_periods=1).sum().replace(0, 1)
         df_c["bii"] = (bar_delta.rolling(20, min_periods=1).sum() / roll_v) * 100.0
 
         ema12 = df_c["close"].ewm(span=m_fast, adjust=False).mean()
@@ -1803,6 +1829,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 _codes = _dfc["code"].tolist()[:80]
                 _rs, _dfs = _q_opt.get_market_snapshot(_codes)
                 if _rs == RET_OK and _dfs is not None and not _dfs.empty:
+                    _sp_lim = float(cur["px"] or 0)
+                    if _sp_lim > 0 and "option_strike_price" in _dfs.columns:
+                        _sk_s = pd.to_numeric(_dfs["option_strike_price"], errors="coerce").fillna(0)
+                        _dfs = _dfs[(_sk_s >= _sp_lim * 0.65) & (_sk_s <= _sp_lim * 1.35)]
                     _dfs["_prem"] = pd.to_numeric(_dfs.get("volume", 0), errors="coerce").fillna(0) * pd.to_numeric(_dfs.get("last_price", 0), errors="coerce").fillna(0) * 100.0
                     _dfs = _dfs[_dfs["_prem"] > 0].sort_values("_prem", ascending=False)
                     for _, _mr in _dfs.head(12 - len(_stream_items)).iterrows():
@@ -1834,6 +1864,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 _df_yst = pd.DataFrame(_y_rows_st)
                 if "프리미엄($)" not in _df_yst.columns and "거래량" in _df_yst.columns and "현재가" in _df_yst.columns:
                     _df_yst["프리미엄($)"] = pd.to_numeric(_df_yst["거래량"], errors="coerce").fillna(0) * pd.to_numeric(_df_yst["현재가"], errors="coerce").fillna(0) * 100
+                _sp_y_lim = float(cur["px"] or 0)
+                if _sp_y_lim > 0 and "행사가" in _df_yst.columns:
+                    _sk_y = pd.to_numeric(_df_yst["행사가"], errors="coerce").fillna(0)
+                    _df_yst = _df_yst[(_sk_y >= _sp_y_lim * 0.65) & (_sk_y <= _sp_y_lim * 1.35)]
                 _df_yst = _df_yst.sort_values("프리미엄($)" if "프리미엄($)" in _df_yst.columns else "거래량", ascending=False)
                 for _, _yr in _df_yst.head(12 - len(_stream_items)).iterrows():
                     _prm_v = float(_yr.get("프리미엄($)", 0) or 0)
