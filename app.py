@@ -3171,6 +3171,61 @@ if nav_menu == "⚡ 무무 실시간 차트":
             surge_list.append(s_msg)
             push_n8n_and_tg(f"SRG|{s_tk_q}|{int(time.time()//3600)}", "🌅 OptionHub 프리마켓·야간 급변동", s_msg, {"chg_pct": float(chg_p)})
 
+    # 무무 OpenD 직접 폴백 (aux_map에 book 또는 flow가 비어있거나 0일 때 즉시 실시간 조회)
+    _bk_tmp = aux_map.get("book") or {}
+    _fl_tmp = aux_map.get("flow") or {}
+    _need_bk = not (_bk_tmp.get("Bid") or _bk_tmp.get("bids") or _bk_tmp.get("Ask") or _bk_tmp.get("asks"))
+    _need_fl = not (isinstance(_fl_tmp, dict) and any(float(_fl_tmp.get(k, 0) or 0) != 0 for k in ("inB", "outB", "inM", "outM", "inS", "outS")))
+    if (_need_bk or _need_fl) and clean_tk:
+        try:
+            import socket as _sk_bf, concurrent.futures as _cf_bf
+            with _sk_bf.create_connection(("127.0.0.1", 11111), timeout=0.2):
+                pass
+            def _fetch_mm_bk_fl_w():
+                _out_bk, _out_fl = {}, {}
+                from moomoo import OpenQuoteContext, SubType, RET_OK
+                _qc_b = OpenQuoteContext(host="127.0.0.1", port=11111)
+                try:
+                    _sym_b = f"US.{clean_tk}"
+                    if _need_bk:
+                        try:
+                            _qc_b.subscribe([_sym_b], [SubType.ORDER_BOOK], subscribe_push=False)
+                            _rb, _dfb = _qc_b.get_order_book(_sym_b, num=15)
+                            if _rb == RET_OK and isinstance(_dfb, dict):
+                                _out_bk = {"Bid": _dfb.get("Bid") or [], "Ask": _dfb.get("Ask") or []}
+                        except Exception:
+                            pass
+                    if _need_fl:
+                        try:
+                            _rf, _dff = _qc_b.get_capital_distribution(_sym_b)
+                            if _rf == RET_OK and _dff is not None and not _dff.empty:
+                                _fr = _dff.iloc[0]
+                                _out_fl = {
+                                    "inB": float(_fr.get("capital_in_big", 0) or 0),
+                                    "outB": float(_fr.get("capital_out_big", 0) or 0),
+                                    "inM": float(_fr.get("capital_in_mid", 0) or 0),
+                                    "outM": float(_fr.get("capital_out_mid", 0) or 0),
+                                    "inS": float(_fr.get("capital_in_small", 0) or 0),
+                                    "outS": float(_fr.get("capital_out_small", 0) or 0),
+                                }
+                        except Exception:
+                            pass
+                finally:
+                    try: _qc_b.close()
+                    except Exception: pass
+                return _out_bk, _out_fl
+            _ex_bf = _cf_bf.ThreadPoolExecutor(max_workers=1)
+            try:
+                _fb_bk, _fb_fl = _ex_bf.submit(_fetch_mm_bk_fl_w).result(timeout=1.2)
+                if _fb_bk:
+                    aux_map["book"] = _fb_bk
+                if _fb_fl and any(v != 0 for v in _fb_fl.values()):
+                    aux_map["flow"] = _fb_fl
+            finally:
+                _ex_bf.shutdown(wait=False)
+        except Exception:
+            pass
+
     col_b1, col_b2 = st.columns(2)
     with col_b1:
         st.subheader("🧱 실시간 60호가 매수·매도 벽 & LV3 불균형")
