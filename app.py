@@ -4663,6 +4663,217 @@ if nav_menu == "📊 OI(미결제약정) 수집":
     else:
         st.info("아직 저장된 OI 스냅샷이 없습니다. 위에서 OI 수집을 1회 이상 실행하면 5일 변화 히트맵이 표시됩니다.")
 
+    st.markdown("---")
+    st.subheader("🌅 장전 확정 OI 집계 · ⏱ 장중 옵션 변화 · 🧾 대형 체결")
+    _oi_t1, _oi_t2, _oi_t3 = st.tabs(["🌅 장전 확정 OI 집계", "⏱ 장중 옵션 변화 (CBOE)", "🧾 대형 옵션 체결 ($1.5M+)"])
+
+    with _oi_t1:
+        _pre_hist = load_json_file(OI_PATH, {})
+        _pre_rows = []
+        for _ptk, _psnaps in sorted(_pre_hist.items()):
+            if not isinstance(_psnaps, list) or not _psnaps:
+                continue
+            _by_d = {}
+            for _ps in _psnaps:
+                _by_d[str(_ps.get("수집시각", "-"))[:10]] = _ps
+            _ds = sorted(_by_d.keys())
+            _cur_s = _by_d[_ds[-1]]
+            _prv_s = _by_d[_ds[-2]] if len(_ds) >= 2 else None
+            _sp_p = float(_cur_s.get("Spot", 0) or 0)
+            _c_oi_p = int(_cur_s.get("Call_OI", 0) or 0)
+            _p_oi_p = int(_cur_s.get("Put_OI", 0) or 0)
+            _dc = (_c_oi_p - int(_prv_s.get("Call_OI", 0) or 0)) if _prv_s else None
+            _dp = (_p_oi_p - int(_prv_s.get("Put_OI", 0) or 0)) if _prv_s else None
+            _c_m, _p_m = {}, {}
+            for _dx in _cur_s.get("상세", []):
+                _dk = float(_dx.get("행사가", 0) or 0)
+                _doi = int(_dx.get("OI", 0) or 0)
+                if _dk > 0 and _doi > 0:
+                    if _dx.get("구분") == "Call" and (_sp_p <= 0 or _sp_p * 0.98 <= _dk <= _sp_p * 1.25):
+                        _c_m[_dk] = _c_m.get(_dk, 0) + _doi
+                    elif _dx.get("구분") == "Put" and (_sp_p <= 0 or _sp_p * 0.80 <= _dk <= _sp_p * 1.02):
+                        _p_m[_dk] = _p_m.get(_dk, 0) + _doi
+            _cw_p = max(_c_m, key=_c_m.get) if _c_m else 0
+            _pw_p = max(_p_m, key=_p_m.get) if _p_m else 0
+            _pre_rows.append({
+                "티커": _ptk,
+                "기준일": _ds[-1],
+                "Spot": f"${_sp_p:,.2f}" if _sp_p else "-",
+                "Call Wall": f"${_cw_p:g}" if _cw_p else "-",
+                "Put Wall": f"${_pw_p:g}" if _pw_p else "-",
+                "Call OI": f"{_c_oi_p:,}" + (f" ({_dc:+,})" if _dc is not None else ""),
+                "Put OI": f"{_p_oi_p:,}" + (f" ({_dp:+,})" if _dp is not None else ""),
+                "P/C 비율": _cur_s.get("Put_Call_OI_Ratio", "-"),
+            })
+        if _pre_rows:
+            st.dataframe(pd.DataFrame(_pre_rows), use_container_width=True, hide_index=True)
+            if st.button("📩 장전 확정 OI 집계 텔레그램 전송", key="btn_pre_oi_tg"):
+                _t_tok, _t_cid = load_tg_config()
+                _pre_txt = "🌅 *[OptionHub 장전 확정 OI 집계]*\n\n" + "\n".join(
+                    f"• *{r['티커']}* ({r['Spot']}) | CW {r['Call Wall']} · PW {r['Put Wall']} | C {r['Call OI']} · P {r['Put OI']}"
+                    for r in _pre_rows
+                )
+                if send_telegram_msg(_t_tok, _t_cid, _pre_txt[:3900])[0]:
+                    st.toast("✅ 장전 OI 집계 텔레그램 전송 완료!")
+        else:
+            st.info("저장된 장전 OI 스냅샷이 없습니다.")
+
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _scan_intraday_cboe_app():
+        import re as _re_ia
+        _hist_i = load_json_file(OI_PATH, {})
+        _tks_i = list(dict.fromkeys(list(_hist_i.keys()) + ["SOXL", "TSLA", "SOXS", "PLTR", "AAPL", "NVDA", "AVGO", "SMH", "SPY", "MU", "QQQ", "AMD", "ORCL"]))[:16]
+        _blks = []
+        for _tk in _tks_i:
+            try:
+                _csym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(_tk, _tk)
+                _req = urllib.request.Request(f"https://cdn.cboe.com/api/global/delayed_quotes/options/{_csym}.json", headers={"User-Agent": "Mozilla/5.0"})
+                _raw = json.loads(urllib.request.urlopen(_req, timeout=6).read().decode("utf-8"))
+                _dd = _raw.get("data") or {}
+                _opts = _dd.get("options") or []
+                _sp = float(_dd.get("current_price") or _dd.get("close") or 0.0)
+                if not _opts or _sp <= 0:
+                    continue
+                _snaps = _hist_i.get(_tk) or []
+                _ps = _snaps[-1] if _snaps else {}
+                _p_cw = float(_ps.get("CallWall", 0) or 0)
+                _p_pw = float(_ps.get("PutWall", 0) or 0)
+                _p_po = float(_ps.get("Put_OI", 0) or 0)
+                _p_co = float(_ps.get("Call_OI", 0) or 0)
+                _p_ppct = round(_p_po / max(_p_po + _p_co, 1) * 100) if (_p_po + _p_co) > 0 else None
+                _c_map, _p_map, _cv, _pv = {}, {}, 0, 0
+                _new_l, _rot_l = [], []
+                for _o in _opts:
+                    _m = _re_ia.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", str(_o.get("option") or ""))
+                    if not _m: continue
+                    _ym, _cp, _kr = _m.groups()
+                    _md = f"{_ym[2:4]}-{_ym[4:6]}"
+                    _k = int(_kr) / 1000.0
+                    _oi = int(_o.get("open_interest") or 0)
+                    _vl = int(_o.get("volume") or 0)
+                    _lp = float(_o.get("last_trade_price") or 0)
+                    _bd = float(_o.get("bid") or 0); _ak = float(_o.get("ask") or 0)
+                    _mid = (_bd + _ak) / 2.0 if (_bd > 0 and _ak > 0) else _lp
+                    _prm = _vl * _mid * 100.0
+                    if _cp == "C":
+                        _cv += _vl
+                        if _sp * 0.98 <= _k <= _sp * 1.25: _c_map[_k] = _c_map.get(_k, 0) + _oi
+                    else:
+                        _pv += _vl
+                        if _sp * 0.80 <= _k <= _sp * 1.02: _p_map[_k] = _p_map.get(_k, 0) + _oi
+                    if _vl >= 1000 and _oi >= 20 and _vl > _oi:
+                        _new_l.append((_vl / float(_oi), f"🆕 {_k:g}{_cp} {_md} 거래 {_vl:,} > OI {_oi:,} ({_vl/_oi:.1f}배) → 새 포지션 가능성 · 내일 OI로 확인"))
+                    if _oi >= 100 and _vl / float(_oi) >= 0.30 and _prm >= 500_000:
+                        _sd = "매수 체결 쪽(신규·되사기 가능)" if (_ak > 0 and _lp >= _ak * 0.99) else ("매도 체결 쪽(정리 가능)" if (_bd > 0 and _lp <= _bd * 1.01) else "호가 중간")
+                        _ps_s = f"${_prm/1e6:.1f}M" if _prm >= 1e6 else f"${_prm/1e3:.0f}K"
+                        _rot_l.append((_prm, f"🔄 큰 회전 {_k:g}{_cp} {_md} · 거래 {_vl:,} / OI {_oi:,} ({round(_vl/_oi*100)}%) · 규모 {_ps_s} · {_sd} — 신규/청산은 거래량만으로 구분 못 해요"))
+                _c_cw = max(_c_map, key=_c_map.get) if _c_map else 0.0
+                _c_pw = max(_p_map, key=_p_map.get) if _p_map else 0.0
+                _lt = [x[1] for x in sorted(_new_l, reverse=True)[:2]] + [x[1] for x in sorted(_rot_l, reverse=True)[:4]]
+                if _c_cw > 0 and _sp > _c_cw: _lt.append(f"🚀 현재가 ${_sp:,.2f} Call Wall {_c_cw:g} 위로 돌파 → 과열·추격 주의")
+                if _c_pw > 0 and _sp < _c_pw: _lt.append(f"⚠️ 현재가 ${_sp:,.2f} Put Wall {_c_pw:g} 아래로 이탈 → 변동성 확대 구간")
+                if _p_cw > 0 and _c_cw > 0 and abs(_c_cw - _p_cw) >= max(1.0, _p_cw * 0.02):
+                    _lt.append(f"🧱 Call Wall 이동 {_p_cw:g} → {_c_cw:g} (어제 대비 {'위로 ↑ · 상단 열림' if _c_cw > _p_cw else '아래로 ↓ · 상단 눌림'})")
+                if _p_pw > 0 and _c_pw > 0 and abs(_c_pw - _p_pw) >= max(1.0, _p_pw * 0.02):
+                    _lt.append(f"🧱 Put Wall 이동 {_p_pw:g} → {_c_pw:g} (어제 대비 {'아래로 ↓ · 바닥 약해짐' if _c_pw < _p_pw else '위로 ↑ · 바닥 단단해짐'})")
+                if _p_ppct is not None and (_cv + _pv) >= 1000:
+                    _cpp = round(_pv / float(_cv + _pv) * 100)
+                    if _cpp - _p_ppct >= 15: _lt.append(f"🔻 풋 쪽으로 급쏠림: 풋 비중 {_p_ppct}% → {_cpp}%")
+                    elif _p_ppct - _cpp >= 15: _lt.append(f"🔺 콜 쪽으로 급쏠림: 콜 비중 {100-_p_ppct}% → {100-_cpp}%")
+                if _lt:
+                    _blks.append(f"🔎 {_tk} ${_sp:,.2f}\n" + "\n".join(_lt))
+            except Exception:
+                continue
+        if not _blks:
+            return "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연)\n\n현재 특이 변화가 감지된 종목이 없습니다."
+        return "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연)\n\n" + "\n\n".join(_blks) + "\n\n(방향·신규는 추정 · 확인 후 판단)"
+
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _scan_big_flows_app():
+        import re as _re_ba
+        _watch = ["NVDA", "TSLA", "AMD", "SOXL", "SOXS", "META", "TSM", "MU", "PLTR", "ORCL", "INTC", "AAPL", "AVGO", "SMH", "SPY", "QQQ"]
+        _items = []
+        for _tk in _watch:
+            try:
+                _req = urllib.request.Request(f"https://cdn.cboe.com/api/global/delayed_quotes/options/{_tk}.json", headers={"User-Agent": "Mozilla/5.0"})
+                _raw = json.loads(urllib.request.urlopen(_req, timeout=6).read().decode("utf-8"))
+                _dd = _raw.get("data") or {}
+                _opts = _dd.get("options") or []
+                _sp = float(_dd.get("current_price") or _dd.get("close") or 0.0)
+                if not _opts or _sp <= 0: continue
+                for _o in _opts:
+                    _m = _re_ba.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", str(_o.get("option") or ""))
+                    if not _m: continue
+                    _ym, _cp, _kr = _m.groups()
+                    _k = int(_kr) / 1000.0; _oi = int(_o.get("open_interest") or 0); _vl = int(_o.get("volume") or 0)
+                    if _vl < 200: continue
+                    _lp = float(_o.get("last_trade_price") or 0); _bd = float(_o.get("bid") or 0); _ak = float(_o.get("ask") or 0)
+                    _mid = (_bd + _ak) / 2.0 if (_bd > 0 and _ak > 0) else _lp
+                    _prm = _vl * _mid * 100.0
+                    if _prm < 1_500_000: continue
+                    _deep = (_cp == "P" and _k > _sp * 1.25) or (_cp == "C" and _k < _sp * 0.75)
+                    _side = ("BUY" if _lp >= _ak else "BUY?") if (_ak > 0 and _lp >= _ak * 0.99) else (("SELL" if _lp <= _bd else "SELL?") if (_bd > 0 and _lp <= _bd * 1.01) else "혼합")
+                    _kind = "단일 대량" if (_oi > 0 and _vl <= _oi * 0.8) else "일간 분할"
+                    _bp = _prm if (not _deep and ((_cp == "C" and "BUY" in _side) or (_cp == "P" and "SELL" in _side))) else 0.0
+                    _brp = _prm if (not _deep and ((_cp == "C" and "SELL" in _side) or (_cp == "P" and "BUY" in _side))) else 0.0
+                    _items.append({"tk": _tk, "cp": _cp, "k": _k, "exp": f"{_ym[2:4]}-{_ym[4:6]}", "prm": _prm, "side": _side, "kind": _kind, "bp": _bp, "brp": _brp, "deep": _deep})
+            except Exception:
+                continue
+        if not _items:
+            return "🧾 대형 옵션 체결 · 신규/증가\n\n현재 기준($1.5M+) 대형 체결이 없습니다."
+        _dir = [x for x in _items if not x["deep"]]
+        _top5 = sorted(_dir or _items, key=lambda x: x["prm"], reverse=True)[:5]
+        _tl = [f"- {x['tk']} {x['k']:g}{x['cp']} {x['exp']} ${x['prm']/1e6:.2f}M {x['side']} ({x['kind']})" for x in _top5]
+        _tb = sum(x["bp"] for x in _dir); _tbr = sum(x["brp"] for x in _dir)
+        _bias = "강세 쪽으로 쏠렸어요" if _tb > _tbr * 1.35 else ("약세 쪽으로 쏠렸어요" if _tbr > _tb * 1.35 else "한쪽으로 쏠리지 않았어요")
+        _by = {}
+        for x in _dir:
+            _d = _by.setdefault(x["tk"], {"b": 0.0, "br": 0.0, "s": [], "r": [], "u": [], "dn": []})
+            _d["b"] += x["bp"]; _d["br"] += x["brp"]
+            if x["cp"] == "C" and "BUY" in x["side"]: _d["u"].append(x["k"])
+            elif x["cp"] == "C" and "SELL" in x["side"]: _d["r"].append(x["k"])
+            elif x["cp"] == "P" and "SELL" in x["side"]: _d["s"].append(x["k"])
+            elif x["cp"] == "P" and "BUY" in x["side"]: _d["dn"].append(x["k"])
+        _kl = []
+        for _t, _d in sorted(_by.items(), key=lambda kv: kv[1]["b"] + kv[1]["br"], reverse=True)[:6]:
+            if _d["b"] + _d["br"] < 1_000_000: continue
+            _bs = "강세 우위" if _d["b"] > _d["br"] * 1.15 else ("약세 우위" if _d["br"] > _d["b"] * 1.15 else "혼조")
+            _lp = []
+            if _d["s"]: _lp.append(f"지지 {sorted(set(_d['s']))[0]:g}")
+            if _d["r"]: _lp.append(f"저항 {sorted(set(_d['r']))[0]:g}")
+            if _d["u"]: _lp.append(f"상방 목표 {sorted(set(_d['u']))[-1]:g}")
+            if _d["dn"]: _lp.append(f"하방 대비 {sorted(set(_d['dn']))[0]:g}")
+            _kl.append(f"- {_t} {_bs} (강세 ${_d['b']/1e6:.1f}M · 약세 ${_d['br']/1e6:.1f}M)" + (f" → {' / '.join(_lp)}" if _lp else ""))
+        return f"🧾 대형 옵션 체결 · 신규/증가 {len(_top5)}건\n" + "\n".join(_tl) + f"\n\n전체: 강세 ${_tb/1e6:.1f}M vs 약세 ${_tbr/1e6:.1f}M → {_bias}\n" + "\n".join(_kl) + "\n\n(방향은 추정 · 확인 후 판단)"
+
+    with _oi_t2:
+        _ic1, _ic2 = st.columns([1.5, 1.5])
+        if _ic1.button("🔍 장중 옵션 변화 지금 스캔", type="primary", use_container_width=True, key="btn_app_intraday_scan"):
+            _scan_intraday_cboe_app.clear()
+            st.session_state["app_intraday_txt"] = _scan_intraday_cboe_app()
+        if st.session_state.get("app_intraday_txt"):
+            if _ic2.button("📩 장중 변화 텔레그램 전송", use_container_width=True, key="btn_app_intraday_tg"):
+                _t_tok, _t_cid = load_tg_config()
+                if send_telegram_msg(_t_tok, _t_cid, st.session_state["app_intraday_txt"])[0]:
+                    st.toast("✅ 장중 옵션 변화 텔레그램 전송 완료!")
+            st.text(st.session_state["app_intraday_txt"])
+        else:
+            st.info("위 `🔍 장중 옵션 변화 지금 스캔` 버튼을 누르면 Cboe 지연 시세 대비 장중 변화를 즉시 분석합니다.")
+
+    with _oi_t3:
+        _bc1, _bc2 = st.columns([1.5, 1.5])
+        if _bc1.button("🔍 대형 옵션 체결($1.5M+) 스캔", type="primary", use_container_width=True, key="btn_app_bigflow_scan"):
+            _scan_big_flows_app.clear()
+            st.session_state["app_bigflow_txt"] = _scan_big_flows_app()
+        if st.session_state.get("app_bigflow_txt"):
+            if _bc2.button("📩 대형 체결 텔레그램 전송", use_container_width=True, key="btn_app_bigflow_tg"):
+                _t_tok, _t_cid = load_tg_config()
+                if send_telegram_msg(_t_tok, _t_cid, st.session_state["app_bigflow_txt"])[0]:
+                    st.toast("✅ 대형 옵션 체결 텔레그램 전송 완료!")
+            st.text(st.session_state["app_bigflow_txt"])
+        else:
+            st.info("위 `🔍 대형 옵션 체결($1.5M+) 스캔` 버튼을 누르면 16개 주력 종목의 강세/약세 쏠림과 타점을 즉시 요약합니다.")
+
 if nav_menu == "⭐ 내 관심종목":
     st.title("⭐ 내 관심종목 (Watchlist) 전용 모아보기")
     st.caption("보유 중이거나 주시하는 종목만 골라 수급과 뉴스를 한눈에 확인하고 텔레그램으로 바로 받아보세요.")
