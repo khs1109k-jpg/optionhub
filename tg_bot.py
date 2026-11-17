@@ -1025,7 +1025,7 @@ def auto_collect_daily_oi(token, chat_id):
     import math as _m_oi
     now_dt = _dt_oi.now()
     today_s = now_dt.strftime("%Y-%m-%d")
-    if now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
+    if now_dt.hour < 21 or (now_dt.hour == 21 and now_dt.minute < 30):
         return
     if os.path.exists(AUTO_OI_DATE_PATH):
         try:
@@ -1078,7 +1078,7 @@ def auto_collect_daily_oi(token, chat_id):
             if rows:
                 coi = sum(x["OI"] for x in rows if x["구분"] == "Call")
                 poi = sum(x["OI"] for x in rows if x["구분"] == "Put")
-                if coi + poi < 500:
+                if coi < 500 or poi < 500:
                     continue
                 hist.setdefault(tk, []).append({
                     "수집시각": now_dt.strftime("%Y-%m-%d %H:%M"),

@@ -66,7 +66,11 @@ def _snap_total_oi(sn):
 def _pick_valid_snaps(snaps):
     if not isinstance(snaps, list):
         return []
-    valid = [s for s in snaps if _snap_total_oi(s) >= 500]
+    def _ok_s(s):
+        coi = int(s.get("Call_OI", 0) or sum(int(x.get("OI", 0) or 0) for x in (s.get("상세") or []) if x.get("구분") == "Call"))
+        poi = int(s.get("Put_OI", 0) or sum(int(x.get("OI", 0) or 0) for x in (s.get("상세") or []) if x.get("구분") == "Put"))
+        return coi >= 500 and poi >= 500
+    valid = [s for s in snaps if _ok_s(s)]
     return valid if valid else snaps
 
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
@@ -5918,6 +5922,9 @@ if nav_menu == "🎯 행사가별·동반 체결":
             _now_f = _dt_f.now().strftime("%Y-%m-%d %H:%M")
             _c_oi_f = sum(x["OI"] for x in _s_rows if x["구분"] == "Call")
             _p_oi_f = sum(x["OI"] for x in _s_rows if x["구분"] == "Put")
+            if _c_oi_f < 500 or _p_oi_f < 500:
+                st.warning(f"⚠️ 현재 야후 프리마켓 시간대라 OI가 초기화({_c_oi_f+_p_oi_f}건)되어 기존 정상 OI 보호를 위해 저장을 건너뛰었습니다.")
+                st.stop()
             _ng_f = round(sum(x["GEX($M)"] for x in _s_rows), 2)
             _nd_f = round(sum(x["DEX($M)"] for x in _s_rows), 2)
             oi_hist_all.setdefault(tk_f, []).append({
@@ -6093,6 +6100,29 @@ if nav_menu == "🎯 행사가별·동반 체결":
     # =========================================================
     st.subheader(f"0️⃣ {tk_f} 전체 상황 & ΔOI (신규/청산/롤오버) 한눈에 보기")
     if not df_yf_f.empty:
+        _valid_snaps_f = _pick_valid_snaps(oi_hist_all.get(tk_f, []))
+        if int(df_yf_f["OI"].sum()) < 2000 and _valid_snaps_f:
+            _ref_det = _valid_snaps_f[-1].get("상세", [])
+            _ref_map = {(str(x.get("만기일", x.get("만기", "")))[:10], str(x.get("구분", "")), float(x.get("행사가", 0) or 0)): x for x in _ref_det}
+            for _i_r, _rw_f in df_yf_f.iterrows():
+                if int(_rw_f["OI"] or 0) == 0:
+                    _rk_f = (str(_rw_f["만기일"])[:10], str(_rw_f["구분"]), float(_rw_f["행사가"]))
+                    _hit_r = _ref_map.get(_rk_f)
+                    if _hit_r:
+                        df_yf_f.at[_i_r, "OI"] = int(_hit_r.get("OI", 0) or 0)
+                        if float(_rw_f.get("GEX($M)", 0) or 0) == 0:
+                            df_yf_f.at[_i_r, "GEX($M)"] = float(_hit_r.get("GEX($M)", 0) or 0)
+            if int(df_yf_f["OI"].sum()) < 2000 and _ref_det:
+                # 만기일 매칭이 적으면 스냅샷 상세에서 동일 행사가·구분으로 추가 보강
+                _ref_k_map = {}
+                for _x in _ref_det:
+                    _kk = (str(_x.get("구분", "")), float(_x.get("행사가", 0) or 0))
+                    _ref_k_map[_kk] = _ref_k_map.get(_kk, 0) + int(_x.get("OI", 0) or 0)
+                for _i_r, _rw_f in df_yf_f.iterrows():
+                    if int(_rw_f["OI"] or 0) == 0:
+                        _kk = (str(_rw_f["구분"]), float(_rw_f["행사가"]))
+                        if _kk in _ref_k_map:
+                            df_yf_f.at[_i_r, "OI"] = _ref_k_map[_kk]
         _c_all = df_yf_f[df_yf_f["구분"] == "Call"]
         _p_all = df_yf_f[df_yf_f["구분"] == "Put"]
         _c_vol = int(_c_all["거래량"].sum())
