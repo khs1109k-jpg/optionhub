@@ -4556,6 +4556,42 @@ if nav_menu == "📊 OI(미결제약정) 수집":
                 fig_hm.update_xaxes(type="category")
                 st.plotly_chart(fig_hm, use_container_width=True)
 
+                # 📈 행사가별 날짜별 OI 증감 추이 꺾은선 차트
+                _all_hm_strikes = list(_df_hm.index)
+                _sel_line_k = st.multiselect(
+                    "📈 추이 비교할 행사가 선택 (기본 상위 6개)",
+                    _all_hm_strikes,
+                    default=_all_hm_strikes[:6],
+                    key=f"oi_line_k_{_hm_tk}",
+                )
+                if _sel_line_k:
+                    _fig_ol = go.Figure()
+                    _pal = ["#10b981", "#ef4444", "#38bdf8", "#fbbf24", "#a855f7", "#f97316", "#22d3ee", "#f43f5e"]
+                    for _li, _lk_s in enumerate(_sel_line_k):
+                        _y_vals = [int(_df_hm.loc[_lk_s, _c]) for _c in _df_hm.columns]
+                        _fig_ol.add_trace(go.Scatter(
+                            x=list(_df_hm.columns),
+                            y=_y_vals,
+                            mode="lines+markers",
+                            name=str(_lk_s),
+                            line=dict(width=2.6, color=_pal[_li % len(_pal)]),
+                            marker=dict(size=8),
+                            hovertemplate=f"{_lk_s}<br>%{{x}}: %{{y:,}}계약<extra></extra>",
+                        ))
+                    _fig_ol.update_layout(
+                        title=f"{_hm_tk} 행사가별 날짜별 OI 증감 추이 (오르면 신규 · 내리면 청산)",
+                        template="plotly_dark",
+                        paper_bgcolor="#07111e",
+                        plot_bgcolor="#0b1626",
+                        height=360,
+                        margin=dict(l=50, r=20, t=48, b=30),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+                        hovermode="x unified",
+                    )
+                    _fig_ol.update_xaxes(type="category", gridcolor="#13283d")
+                    _fig_ol.update_yaxes(title="미결제약정 (OI)", gridcolor="#13283d")
+                    st.plotly_chart(_fig_ol, use_container_width=True, key=f"oi_line_chart_{_hm_tk}")
+
         # 🔍 행사가별 신규(OPEN) / 청산(CLOSE) / 롤오버(ROLL) 자동 판별 표
         _last_sn = _snaps_hm[-1]
         _prev_sn = _snaps_hm[-2] if len(_snaps_hm) >= 2 else None
