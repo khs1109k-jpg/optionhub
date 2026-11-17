@@ -1661,6 +1661,40 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if cur_bundle is None or not cur_bundle["candles"]:
         cur_bundle, icc_df = _build_tf_bundle(candles)
 
+    # 무무 OpenD 실제 체결 틱(get_rt_ticker) 기반 CVD 보정
+    _mm_tick_cvd_series = []
+    if show_cvd:
+        try:
+            from moomoo import OpenQuoteContext, SubType, RET_OK
+            _q_cvd = OpenQuoteContext(host="127.0.0.1", port=11111)
+            _q_cvd.subscribe([sel_syn], [SubType.TICKER], subscribe_push=False)
+            _rt_r, _df_tkr = _q_cvd.get_rt_ticker(sel_syn, num=500)
+            _q_cvd.close()
+            if _rt_r == RET_OK and _df_tkr is not None and not _df_tkr.empty and cur_bundle.get("cvd"):
+                _cum_t = 0.0
+                _t_map = {}
+                for _, _tr in _df_tkr.iterrows():
+                    _ts_s = str(_tr.get("time", ""))[:19]
+                    _ds_s = str(_tr.get("ticker_direction", "")).upper()
+                    _amt = float(_tr.get("turnover", 0) or (float(_tr.get("price", 0) or 0) * float(_tr.get("volume", 0) or 0)))
+                    _cum_t += (_amt if "BUY" in _ds_s else (-_amt if "SELL" in _ds_s else 0.0))
+                    try:
+                        _ut = int(pd.Timestamp(_ts_s, tz="America/New_York").tz_convert("UTC").timestamp())
+                        _bt = (_ut // tf_sec) * tf_sec
+                        _t_map[_bt] = round(_cum_t, 2)
+                    except Exception:
+                        pass
+                if _t_map:
+                    _base_cvd = list(cur_bundle["cvd"])
+                    _last_v = _base_cvd[-1]["value"] if _base_cvd else 0.0
+                    for _ci in range(len(_base_cvd)):
+                        _ct = int(_base_cvd[_ci]["time"])
+                        if _ct in _t_map:
+                            _base_cvd[_ci] = {"time": _ct, "value": _t_map[_ct]}
+                    _mm_tick_cvd_series = _base_cvd
+        except Exception:
+            pass
+
     # 1일봉 기반 20일 실현변동성(HV20)으로 1시그마 검증 및 보정 (주말 IV=0.30 폴백/분봉 오차 방지)
     daily_c = merged_tf_sets.get("1일봉") or []
     hv20_1d_std = 0.0
@@ -1757,6 +1791,42 @@ if nav_menu == "⚡ 무무 실시간 차트":
             f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['note']}</td>"
             f"</tr>"
         )
+    # 무무 OpenD 실시간 옵션 체인 스냅샷 우선 조회 (숫자 무무 기준 일치)
+    if len(_stream_items) < 10:
+        _mm_opt_filled = False
+        try:
+            from moomoo import OpenQuoteContext, RET_OK
+            _q_opt = OpenQuoteContext(host="127.0.0.1", port=11111)
+            _now_d = pd.Timestamp.now(tz="America/New_York")
+            _rc, _dfc = _q_opt.get_option_chain(code=sel_syn, start=_now_d.strftime("%Y-%m-%d"), end=(_now_d + pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
+            if _rc == RET_OK and _dfc is not None and not _dfc.empty:
+                _codes = _dfc["code"].tolist()[:80]
+                _rs, _dfs = _q_opt.get_market_snapshot(_codes)
+                if _rs == RET_OK and _dfs is not None and not _dfs.empty:
+                    _dfs["_prem"] = pd.to_numeric(_dfs.get("volume", 0), errors="coerce").fillna(0) * pd.to_numeric(_dfs.get("last_price", 0), errors="coerce").fillna(0) * 100.0
+                    _dfs = _dfs[_dfs["_prem"] > 0].sort_values("_prem", ascending=False)
+                    for _, _mr in _dfs.head(12 - len(_stream_items)).iterrows():
+                        _pv = float(_mr["_prem"])
+                        _ps = f"${_pv/1e6:.2f}M" if _pv >= 1e6 else (f"${_pv/1e3:.1f}K" if _pv >= 1e3 else f"${int(_pv)}")
+                        _vv = int(_mr.get("volume", 0) or 0)
+                        _oiv = int(_mr.get("option_open_interest", 0) or 0)
+                        _pxm = float(_mr.get("last_price", 0) or 0)
+                        _askm = float(_mr.get("ask_price", 0) or 0)
+                        _bidm = float(_mr.get("bid_price", 0) or 0)
+                        _bsm = "BUY" if (_askm > 0 and _pxm >= _askm * 0.99) else ("SELL" if (_bidm > 0 and _pxm <= _bidm * 1.01) else "FLOW")
+                        _cpm = "C" if "CALL" in str(_mr.get("option_type", "")).upper() else "P"
+                        _skm = float(_mr.get("option_strike_price", 0) or 0)
+                        _exm = str(_mr.get("strike_time", "-"))[5:10]
+                        _stream_items.append({
+                            "tm": "MOOMOO", "exp": _exm, "stk": f"{_skm:g}", "cp": _cpm,
+                            "bs": _bsm, "prem": _ps, "vol": f"{_vv:,}", "cnt": "-",
+                            "oi": f"{_oiv/1e3:.1f}K" if _oiv >= 1000 else str(_oiv),
+                            "note": "MOOMOO LIVE",
+                        })
+                        _mm_opt_filled = True
+            _q_opt.close()
+        except Exception:
+            pass
     if len(_stream_items) < 10:
         try:
             _y_rows_st, _ = _cached_opt_snapshot(clean_tk)
@@ -1838,7 +1908,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "span_b": cur_bundle["span_b"],
         "chikou": cur_bundle["chikou"],
         "vpvr": cur_bundle["vpvr"],
-        "cvd": cur_bundle["cvd"],
+        "cvd": _mm_tick_cvd_series if _mm_tick_cvd_series else cur_bundle["cvd"],
         "bii": cur_bundle["bii"],
         "cloud": cur_bundle["cloud"],
         "macd": cur_bundle["macd"],
@@ -1954,7 +2024,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
         rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 92 }},
-        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, barSpacing: 7, minBarSpacing: 3, rightOffset: 8 }},
+        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, barSpacing: 4.5, minBarSpacing: 2, rightOffset: 8 }},
       }};
       const elMain = document.getElementById("tv_main");
       const chart = LightweightCharts.createChart(elMain, baseOpt);
@@ -2330,8 +2400,8 @@ if nav_menu == "⚡ 무무 실시간 차트":
         }}
         syncingX = false;
       }}));
-      if (d.candles && d.candles.length > 80) {{
-        chart.timeScale().setVisibleLogicalRange({{ from: d.candles.length - 80, to: d.candles.length + 4 }});
+      if (d.candles && d.candles.length > 180) {{
+        chart.timeScale().setVisibleLogicalRange({{ from: d.candles.length - 180, to: d.candles.length + 6 }});
       }} else {{
         chart.timeScale().fitContent();
       }}
