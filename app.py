@@ -1365,29 +1365,31 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if cur["px"] <= 0 and merged_tf_sets.get("1분봉"):
         _c1m = merged_tf_sets["1분봉"]
         cur["px"] = float(_c1m[-1]["close"])
-        if opt_tk != clean_tk and cur["px"] > 0:
-            try:
-                _ref_etf_px = float((oi_hist_m.get(opt_tk, [{}])[-1].get("Spot") if oi_hist_m.get(opt_tk) else 0) or 0)
-                if _ref_etf_px <= 0:
-                    _, _ref_etf_px = _cached_opt_snapshot(opt_tk)
-                    _ref_etf_px = float(_ref_etf_px or 0)
-                if _ref_etf_px > 0 and (cur["px"] / _ref_etf_px > 2.0 or _ref_etf_px / cur["px"] > 2.0):
-                    _pr_scale = cur["px"] / _ref_etf_px
-                    if cw_lv: cw_lv = round(float(cw_lv) * _pr_scale, 2)
-                    if pw_lv: pw_lv = round(float(pw_lv) * _pr_scale, 2)
-                    if zg_lv: zg_lv = round(float(zg_lv) * _pr_scale, 2)
-                    if delta_lv: delta_lv = round(float(delta_lv) * _pr_scale, 2)
-                    if gex_c_lv: gex_c_lv = round(float(gex_c_lv) * _pr_scale, 2)
-                    if gex_p_lv: gex_p_lv = round(float(gex_p_lv) * _pr_scale, 2)
-                    for _ob in opt_bars:
-                        _ob["p"] = round(float(_ob["p"]) * _pr_scale, 2)
-            except Exception:
-                pass
         if merged_tf_sets.get("1일봉") and len(merged_tf_sets["1일봉"]) >= 2:
             _pc1 = float(merged_tf_sets["1일봉"][-2]["close"])
             if _pc1 > 0:
                 cur["diff"] = round(cur["px"] - _pc1, 2)
                 cur["chg"] = round((cur["px"] - _pc1) / _pc1 * 100.0, 2)
+    if opt_tk != clean_tk and cur["px"] > 0:
+        try:
+            _ref_etf_px = float((oi_hist_m.get(opt_tk, [{}])[-1].get("Spot") if oi_hist_m.get(opt_tk) else 0) or 0)
+            if _ref_etf_px <= 0:
+                _, _ref_etf_px = _cached_opt_snapshot(opt_tk)
+                _ref_etf_px = float(_ref_etf_px or 0)
+            if _ref_etf_px <= 0 and opt_bars:
+                _ref_etf_px = float(opt_bars[len(opt_bars) // 2]["p"])
+            if _ref_etf_px > 0 and (cur["px"] / _ref_etf_px > 2.0 or _ref_etf_px / cur["px"] > 2.0):
+                _pr_scale = cur["px"] / _ref_etf_px
+                if cw_lv: cw_lv = round(float(cw_lv) * _pr_scale, 2)
+                if pw_lv: pw_lv = round(float(pw_lv) * _pr_scale, 2)
+                if zg_lv: zg_lv = round(float(zg_lv) * _pr_scale, 2)
+                if delta_lv: delta_lv = round(float(delta_lv) * _pr_scale, 2)
+                if gex_c_lv: gex_c_lv = round(float(gex_c_lv) * _pr_scale, 2)
+                if gex_p_lv: gex_p_lv = round(float(gex_p_lv) * _pr_scale, 2)
+                for _ob in opt_bars:
+                    _ob["p"] = round(float(_ob["p"]) * _pr_scale, 2)
+        except Exception:
+            pass
     if cur["px"] > 0:
         _px_sync = round(float(cur["px"]), 2)
         _now_sec = int(time.time())
