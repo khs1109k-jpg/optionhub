@@ -1573,9 +1573,17 @@ if nav_menu == "⚡ 무무 실시간 차트":
 
     _prev_c = 0.0
     try:
-        _prev_c = float(raw_d.get("prev_close_price") or raw_d.get("prev_close") or 0)
+        import yfinance as _yf_pc
+        _fi_pc = getattr(_yf_pc.Ticker(clean_tk), "fast_info", None)
+        if _fi_pc:
+            _prev_c = float(_fi_pc.get("regularMarketPreviousClose") or _fi_pc.get("previousClose") or 0)
     except Exception:
         _prev_c = 0.0
+    if _prev_c <= 0:
+        try:
+            _prev_c = float(raw_d.get("prev_close_price") or raw_d.get("prev_close") or 0)
+        except Exception:
+            _prev_c = 0.0
     if _prev_c <= 0 and merged_tf_sets.get("1일봉"):
         _d_bars = merged_tf_sets["1일봉"]
         _prev_c = float(_d_bars[-2]["close"] if len(_d_bars) >= 2 else _d_bars[-1]["open"])
@@ -3176,12 +3184,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
     _fl_tmp = aux_map.get("flow") or {}
     _need_bk = not (_bk_tmp.get("Bid") or _bk_tmp.get("bids") or _bk_tmp.get("Ask") or _bk_tmp.get("asks"))
     _need_fl = not (isinstance(_fl_tmp, dict) and any(float(_fl_tmp.get(k, 0) or 0) != 0 for k in ("inB", "outB", "inM", "outM", "inS", "outS")))
+    _mm_diag_msgs = []
     if (_need_bk or _need_fl) and clean_tk:
         try:
             import socket as _sk_bf, concurrent.futures as _cf_bf
             with _sk_bf.create_connection(("127.0.0.1", 11111), timeout=0.2):
                 pass
-            _mm_diag_msgs = []
             def _fetch_mm_bk_fl_w():
                 _out_bk, _out_fl, _errs = {}, {}, []
                 from moomoo import OpenQuoteContext, SubType, RET_OK
