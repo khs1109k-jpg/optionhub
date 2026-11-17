@@ -6782,22 +6782,43 @@ if nav_menu == "🎯 행사가별·동반 체결":
 
     # 📊 SOXL ↔ SMH ↔ NVDA 반도체 3대장 실시간 커플링·괴리율 모니터
     with st.expander("📊 SOXL ↔ SMH(벤치마크) ↔ NVDA 반도체 커플링 · 3배 레버리지 괴리율 모니터", expanded=(tk_f in ("SOXL", "SMH", "NVDA", "AMD", "MU"))):
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _fetch_semi_chg_fallback(_need_tks):
+            _res_c = {}
+            if not _need_tks:
+                return _res_c
+            try:
+                import concurrent.futures, yfinance as _yf_s
+                def _dl_w():
+                    _out = {}
+                    _df_dl = _yf_s.download(list(_need_tks), period="2d", progress=False, threads=True, group_by="ticker")
+                    for _st_n in _need_tks:
+                        try:
+                            _sub = _df_dl[_st_n] if len(_need_tks) > 1 else _df_dl
+                            _cl = _sub["Close"].dropna()
+                            if len(_cl) >= 2 and float(_cl.iloc[-2]) > 0:
+                                _out[_st_n] = round((float(_cl.iloc[-1]) - float(_cl.iloc[-2])) / float(_cl.iloc[-2]) * 100.0, 2)
+                        except Exception:
+                            pass
+                    return _out
+                _ex_s = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                try:
+                    _res_c = _ex_s.submit(_dl_w).result(timeout=2.5)
+                finally:
+                    _ex_s.shutdown(wait=False)
+            except Exception:
+                pass
+            return _res_c
+
         _soxl_c = mm_q.get("SOXL", {}).get("chg")
         _smh_c = mm_q.get("SMH", {}).get("chg")
         _nvda_c = mm_q.get("NVDA", {}).get("chg")
-        if _soxl_c is None or _smh_c is None or _nvda_c is None:
-            try:
-                import yfinance as _yf_s
-                for _stk, _cur_v in [("SOXL", _soxl_c), ("SMH", _smh_c), ("NVDA", _nvda_c)]:
-                    if _cur_v is None:
-                        _h2 = _yf_s.Ticker(_stk).history(period="2d")
-                        if len(_h2) >= 2:
-                            _ch_v = round((float(_h2["Close"].iloc[-1]) - float(_h2["Close"].iloc[-2])) / float(_h2["Close"].iloc[-2]) * 100.0, 2)
-                            if _stk == "SOXL": _soxl_c = _ch_v
-                            elif _stk == "SMH": _smh_c = _ch_v
-                            elif _stk == "NVDA": _nvda_c = _ch_v
-            except Exception:
-                pass
+        _need_semi = tuple(k for k, v in [("SOXL", _soxl_c), ("SMH", _smh_c), ("NVDA", _nvda_c)] if v is None)
+        if _need_semi:
+            _fb_semi = _fetch_semi_chg_fallback(_need_semi)
+            if _soxl_c is None: _soxl_c = _fb_semi.get("SOXL")
+            if _smh_c is None: _smh_c = _fb_semi.get("SMH")
+            if _nvda_c is None: _nvda_c = _fb_semi.get("NVDA")
         _soxl_c = float(_soxl_c or 0.0)
         _smh_c = float(_smh_c or 0.0)
         _nvda_c = float(_nvda_c or 0.0)
