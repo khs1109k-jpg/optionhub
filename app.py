@@ -110,8 +110,90 @@ def bs_greeks(S, K, T, r, sigma, is_call=True):
     except Exception:
         return 0.0, 0.0
 
+def fetch_cboe_oi(ticker):
+    """Cboe 공개 지연시세 JSON API에서 전일 OCC 확정 OI + Greeks + Spot 일괄 수집 (프리마켓 0-OI 방지)"""
+    import urllib.request, re as _re_cb
+    from datetime import datetime as _dt_cb
+    try:
+        tk_u = str(ticker or "").strip().upper()
+        cboe_sym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT", "^GSPC": "_SPX", "^SPX": "_SPX", "^NDX": "_NDX", "^VIX": "_VIX", "^RUT": "_RUT"}.get(tk_u, tk_u)
+        url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{cboe_sym}.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8"))
+        data_d = raw.get("data") or {}
+        opts = data_d.get("options") or []
+        if not opts:
+            return [], 0.0, "Cboe 옵션 데이터 없음"
+        spot = float(data_d.get("current_price") or data_d.get("close") or 0.0)
+        now_dt = _dt_cb.now()
+        parsed = []
+        exp_set = set()
+        for o in opts:
+            occ = str(o.get("option") or "")
+            m = _re_cb.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", occ)
+            if not m:
+                continue
+            yymmdd, cp_ch, k_raw = m.groups()
+            exp_s = f"20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+            K = int(k_raw) / 1000.0
+            oi = int(o.get("open_interest") or 0)
+            vol = int(o.get("volume") or 0)
+            if oi <= 0 and vol <= 0:
+                continue
+            exp_set.add(exp_s)
+            parsed.append((exp_s, cp_ch == "C", K, oi, vol, o))
+        if not exp_set:
+            return [], spot, "Cboe 유효 OI 없음"
+        exps_sorted = sorted(e for e in exp_set if e >= now_dt.strftime("%Y-%m-%d")) or sorted(exp_set)
+        week_exps = [e for e in exps_sorted if (_dt_cb.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 7]
+        target_exps = set((week_exps if len(week_exps) >= 3 else exps_sorted[:3])[:7])
+        rows = []
+        for exp_s, is_c, K, oi, vol, o in parsed:
+            if exp_s not in target_exps:
+                continue
+            try:
+                T = max((_dt_cb.strptime(exp_s, "%Y-%m-%d") - now_dt).days / 365.0, 1.0 / 365.0)
+            except Exception:
+                T = 7.0 / 365.0
+            s_ref = spot if spot > 0 else K
+            iv = float(o.get("iv") or 0.30)
+            if iv <= 0.01:
+                iv = 0.30
+            delta = o.get("delta")
+            gamma = o.get("gamma")
+            if delta is None or gamma is None or float(gamma or 0) == 0:
+                delta, gamma = bs_greeks(s_ref, K, T, 0.045, iv, is_call=is_c)
+            else:
+                delta, gamma = float(delta), float(gamma)
+            sign = 1.0 if is_c else -1.0
+            gex_m = (sign * gamma * oi * 100.0 * (s_ref ** 2) * 0.01) / 1_000_000.0
+            dex_m = (delta * oi * 100.0 * s_ref) / 1_000_000.0
+            _lp = float(o.get("last_trade_price") or 0)
+            _bp = float(o.get("bid") or 0)
+            _ap = float(o.get("ask") or 0)
+            _mp = ((_bp + _ap) / 2.0) if (_bp > 0 and _ap > 0) else _lp
+            _prem_usd = round(vol * _mp * 100.0, 1)
+            _dte_days = max(int(round(T * 365)), 0)
+            _vol_oi_r = round(vol / oi, 2) if oi > 0 else float(vol > 0)
+            _mny = "ATM" if abs(K - s_ref) / max(s_ref, 1.0) <= 0.02 else ("OTM" if ((is_c and K > s_ref) or ((not is_c) and K < s_ref)) else "ITM")
+            rows.append({
+                "만기": exp_s, "DTE": _dte_days, "구분": "Call" if is_c else "Put", "행사가": K,
+                "Moneyness": _mny, "OI": oi, "거래량": vol, "Vol/OI": _vol_oi_r, "프리미엄($)": _prem_usd,
+                "IV(%)": round(iv * 100, 1), "Delta": round(delta, 3), "Gamma": round(gamma, 4),
+                "GEX($M)": round(gex_m, 3), "DEX($M)": round(dex_m, 3),
+            })
+        if rows and sum(r["OI"] for r in rows) >= 100:
+            return rows, spot, "OK"
+        return [], spot, "Cboe OI 부족"
+    except Exception as _e:
+        return [], 0.0, str(_e)
+
+
 def fetch_yahoo_oi(ticker):
-    """yfinance로 실시간 옵션 체인(OI) + Spot + Black-Scholes Delta/Gamma/GEX/DEX 수집"""
+    """1순위 Cboe 공개 API(24시간 OCC OI) -> 실패 시 yfinance 폴백"""
+    _cb_rows, _cb_sp, _cb_st = fetch_cboe_oi(ticker)
+    if _cb_st == "OK" and _cb_rows:
+        return _cb_rows, _cb_sp, "OK"
     try:
         import yfinance as yf
         from datetime import datetime
