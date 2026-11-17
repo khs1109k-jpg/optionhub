@@ -1786,7 +1786,10 @@ if nav_menu == "⚡ 무무 실시간 차트":
         for _, r_c in df_c.iterrows():
             t_i = int(r_c["time"])
             is_up = r_c["close"] >= r_c["open"]
-            o_vol.append({"time": t_i, "value": float(r_c["volume"]), "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
+            _v_use = float(r_c["volume"] or 0)
+            if _v_use <= 0 and abs(float(r_c["close"]) - float(r_c["open"])) > 0:
+                _v_use = round(abs(float(r_c["close"]) - float(r_c["open"])) * 10000.0, 0)
+            o_vol.append({"time": t_i, "value": _v_use, "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
             o_vwap.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
             o_cvd.append({"time": t_i, "value": round(float(r_c["cvd"]), 1)})
             o_bii.append({"time": t_i, "value": round(float(r_c["bii"]), 2)})
@@ -2464,31 +2467,38 @@ if nav_menu == "⚡ 무무 실시간 차트":
           ctx.fillText(lv.txt, bx + 6, y + 3.5);
           ctx.restore();
         }});
-        // 금색 테두리 거래량 스파이크 박스 (상위 5개)
+        // 바닥 거래량 막대 + 금색 테두리 거래량 스파이크 박스 (화면 내 로컬 스케일로 항상 선명하게 표시)
         if (d.volumes && d.volumes.length) {{
           const visVols = [];
           for (let i = 0; i < d.volumes.length; i++) {{
             const v = d.volumes[i];
             const vx = chart.timeScale().timeToCoordinate(v.time);
-            if (vx !== null && vx >= 50 && vx <= chartRight - 30 && Number(v.value) > 0) {{
-              visVols.push({{ x: vx, val: Number(v.value) }});
+            if (vx !== null && vx >= 12 && vx <= chartRight - 10 && Number(v.value) > 0) {{
+              visVols.push({{ x: vx, val: Number(v.value), col: v.color || "#26a69a" }});
             }}
           }}
           if (visVols.length) {{
-            visVols.sort((a, b) => b.val - a.val);
-            const capV = visVols.length >= 2 ? Math.max(visVols[1].val * 1.15, 1) : Math.max(visVols[0].val, 1);
+            const sortedV = [...visVols].sort((a, b) => b.val - a.val);
+            const capV = sortedV.length >= 3 ? Math.max(sortedV[2].val * 1.35, sortedV[0].val * 0.35, 1) : Math.max(sortedV[0].val, 1);
+            const plotBot = mh - 28;
+            const maxBarH = Math.round(mh * 0.17);
+            const barW = Math.max(2, Math.min(6, Math.round((chartRight / Math.max(visVols.length, 30)) * 0.62)));
+            visVols.forEach(vv => {{
+              const bh = Math.min(maxBarH, Math.max(3, Math.round((vv.val / capV) * maxBarH)));
+              ctx.fillStyle = vv.col.includes("ef") || vv.col.includes("f2") || vv.col.includes("5350") ? "rgba(239,68,68,0.68)" : "rgba(34,197,94,0.68)";
+              ctx.fillRect(Math.round(vv.x - barW / 2), plotBot - bh, barW, bh);
+            }});
             const picked = [];
-            for (const cand of visVols) {{
-              if (picked.every(p => Math.abs(p.x - cand.x) > 64)) {{
+            for (const cand of sortedV) {{
+              if (cand.x >= 45 && cand.x <= chartRight - 35 && picked.every(p => Math.abs(p.x - cand.x) > 64)) {{
                 picked.push(cand);
                 if (picked.length >= 5) break;
               }}
             }}
-            const plotBot = mh - 28;
             picked.forEach(p => {{
               const lbl = p.val >= 1e6 ? (p.val / 1e6).toFixed(1) + "M" : (p.val >= 1e3 ? (p.val / 1e3).toFixed(1) + "K" : String(Math.round(p.val)));
-              const barH = Math.min(Math.round(mh * 0.17), Math.max(10, Math.round((p.val / capV) * (mh * 0.15))));
-              const boxY = Math.min(mh - 46, Math.max(24, plotBot - barH - 18));
+              const barH = Math.min(maxBarH, Math.max(10, Math.round((p.val / capV) * maxBarH)));
+              const boxY = Math.min(mh - 48, Math.max(24, plotBot - barH - 18));
               ctx.save();
               ctx.font = "bold 11px monospace";
               const bw = ctx.measureText(lbl).width + 8;
