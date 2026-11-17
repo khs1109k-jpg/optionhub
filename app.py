@@ -967,11 +967,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
         sel_syn = f"US.{clean_tk}"
         cur = {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"}
     with sel_c2:
-        search_tk = st.text_input("🔍 종목 검색", "", placeholder="예: SMH, PLTR, MU").strip().upper()
+        search_tk = st.text_input("🔍 종목 검색", "", placeholder="예: SMH, PLTR, NQ, ES, VIX").strip().upper()
+    _YF_ALIAS_MAP = {
+        "NQ": "NQ=F", "NQ1!": "NQ=F", "MNQ": "NQ=F",
+        "ES": "ES=F", "ES1!": "ES=F", "MES": "ES=F",
+        "YM": "YM=F", "RTY": "RTY=F", "GC": "GC=F", "GOLD": "GC=F",
+        "CL": "CL=F", "WTI": "CL=F", "SI": "SI=F",
+        "SPX": "^GSPC", "NDX": "^NDX", "VIX": "^VIX", "RUT": "^RUT", "KOSPI": "^KS11",
+        "BTC": "BTC-USD", "ETH": "ETH-USD",
+        "SK하이닉스": "000660.KS", "하이닉스": "000660.KS", "000660": "000660.KS",
+        "삼성전자": "005930.KS", "005930": "005930.KS",
+    }
     if search_tk:
-        clean_tk = search_tk
-        sel_syn = f"US.{clean_tk}"
-        cur = q_map.get(sel_syn, {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"})
+        _disp_tk = search_tk
+        clean_tk = _YF_ALIAS_MAP.get(search_tk, search_tk)
+        sel_syn = f"US.{_disp_tk}"
+        cur = dict(q_map.get(sel_syn, {"px": 0.0, "chg": None, "vol": 0.0, "t": "-"}))
     with sel_c3:
         tf_opt = st.radio("⏱️ 봉 주기", ["1분봉", "5분봉", "10분봉", "15분봉", "1일봉"], index=0, horizontal=True, key="mm_tf")
 
@@ -1343,6 +1354,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
         cur["diff"] = round(cur["px"] - _prev_c, 2)
         cur["chg"] = round((cur["px"] - _prev_c) / _prev_c * 100.0, 2)
 
+    if cur["px"] <= 0 and merged_tf_sets.get("1분봉"):
+        _c1m = merged_tf_sets["1분봉"]
+        cur["px"] = float(_c1m[-1]["close"])
+        if merged_tf_sets.get("1일봉") and len(merged_tf_sets["1일봉"]) >= 2:
+            _pc1 = float(merged_tf_sets["1일봉"][-2]["close"])
+            if _pc1 > 0:
+                cur["diff"] = round(cur["px"] - _pc1, 2)
+                cur["chg"] = round((cur["px"] - _pc1) / _pc1 * 100.0, 2)
     if cur["px"] > 0:
         _px_sync = round(float(cur["px"]), 2)
         _now_sec = int(time.time())
