@@ -23,6 +23,10 @@ SHEET_ID = "1_FWy_B9a6t1txau06PbeEMy9S9B1GsMgWZLGfMmMG7w"
 INLINE_MENU = {
     "inline_keyboard": [
         [
+            {"text": "☀️ 아침·최종 브리핑", "callback_data": "cmd:morning"},
+            {"text": "📌 레벨알림", "callback_data": "cmd:levels"},
+        ],
+        [
             {"text": "📝 오늘의 종합평", "callback_data": "cmd:summary"},
             {"text": "📊 주요 GEX 요약", "callback_data": "cmd:gex"},
         ],
@@ -479,6 +483,28 @@ def handle_command(token, chat_id, text):
     elif low.startswith("/em") or cmd == "cmd:em":
         send_msg(token, chat_id, format_earnings_em())
 
+    elif low.startswith("/fg"):
+        parts = cmd.split()
+        if len(parts) >= 2 and parts[1].replace(".", "", 1).isdigit():
+            val = int(round(float(parts[1])))
+            val = max(0, min(100, val))
+            d_s = datetime.now().strftime("%m-%d")
+            try:
+                json.dump({"val": val, "date": d_s, "mode": "수동"}, open(FG_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+            except Exception:
+                pass
+            send_msg(token, chat_id, f"✅ CNN F&G 수동 갱신 완료: {val} ({fg_label_kr(val)}, {d_s})")
+        else:
+            v, lbl, dt_s, md_s = get_cnn_fg()
+            send_msg(token, chat_id, f"현재 CNN F&G: {v} ({lbl}) ({md_s} {dt_s})\n갱신하려면: /fg 31")
+
+    elif low in ("/아침", "/브리핑", "/morning") or cmd == "cmd:morning":
+        send_msg(token, chat_id, "☀️ 대장 아침 브리핑 & 최종분석을 생성 중입니다...")
+        send_msg(token, chat_id, build_morning_briefing())
+
+    elif low in ("/레벨알림", "/levels") or cmd == "cmd:levels":
+        send_msg(token, chat_id, build_level_alert())
+
     elif low in ("/종합평", "/summary") or cmd == "cmd:summary":
         send_msg(token, chat_id, get_app_review())
 
@@ -729,6 +755,25 @@ def handle_command(token, chat_id, text):
 
 SENT_REVIEWS_PATH = os.path.expanduser("~/.optionhub_sent_reviews.json")
 
+
+def format_emoji_review_tg(raw_txt):
+    s = str(raw_txt or "").strip()
+    if not s:
+        return s
+    s = re.sub(r"\s*(\[[^\]]+\])\s*", r"📣 \1\n\n", s, count=1)
+    reps = [
+        (r"\s*1\)\s*시장\s*총평\s*:?", "\n\n📌 1️⃣ 시장 총평\n• "),
+        (r"\s*2\)\s*기관\s*수급\s*핵심\s*:?", "\n\n🏦 2️⃣ 기관 수급 핵심\n• "),
+        (r"\s*3\)\s*섹터별\s*전략\s*:?", "\n\n🎯 3️⃣ 섹터별 전략\n• "),
+        (r"\s*4\)\s*주목\s*종목\s*:?", "\n\n👀 4️⃣ 주목 종목\n• "),
+        (r"\s*5\)\s*리스크\s*요인\s*:?", "\n\n⚠️ 5️⃣ 리스크 요인\n• "),
+    ]
+    for pat, rep in reps:
+        s = re.sub(pat, rep, s)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s
+
+
 def check_sheet_review(token, chat_id):
     try:
         sent_list = []
@@ -746,7 +791,7 @@ def check_sheet_review(token, chat_id):
             if key and key != last_seen and key not in sent_list:
                 msg = (
                     f"📝 [OptionHub 자동 종합평] {latest.get('날짜', '')}\n\n"
-                    f"{latest.get('한글 번역/해석', '')}\n\n"
+                    f"{format_emoji_review_tg(latest.get('한글 번역/해석', ''))}\n\n"
                     f"🌐 http://132.226.3.145:8501"
                 )
                 send_msg(token, chat_id, msg)
@@ -755,6 +800,36 @@ def check_sheet_review(token, chat_id):
                 sent_list.append(key)
                 with open(SENT_REVIEWS_PATH, "w", encoding="utf-8") as fs:
                     json.dump(sent_list[-100:], fs, ensure_ascii=False, indent=2)
+        try:
+            ins_p = os.path.expanduser("~/.optionhub_insider_mails.json")
+            ins_arr = json.load(open(ins_p, "r", encoding="utf-8")) if os.path.exists(ins_p) else []
+            seen_t = {m.get("제목", "") for m in ins_arr}
+            added_i = 0
+            for r in reversed(rows[-20:]):
+                bu = str(r).upper()
+                stag = None
+                if any(k in bu for k in ("INSIDER", "EVENING EDGE", "인사이더")): stag = "InsiderFinance"
+                elif any(k in bu for k in ("GEEK", "GREEKS", "긱스", "그릭스")): stag = "Geeks of Finance"
+                elif any(k in bu for k in ("MENTHOR", "멘토", "멘도")): stag = "Menthor Q"
+                elif any(k in bu for k in ("SPOTGAMMA", "스팟감마")): stag = "SpotGamma"
+                if not stag:
+                    continue
+                ttl = str(r.get("제목", r.get("섹션", f"{stag} 리포트"))).strip()
+                if not ttl or ttl in seen_t:
+                    continue
+                body = str(r.get("한글 번역/해석", r.get("원문", r.get("내용", "")))).strip()
+                dt_s = str(r.get("날짜", ""))[:16]
+                ins_arr.insert(0, {
+                    "id": f"bg_{stag[:4]}_{abs(hash(ttl + dt_s))}",
+                    "날짜": dt_s, "출처": stag, "제목": ttl,
+                    "원문": body, "요약": body, "종목": "공통",
+                })
+                seen_t.add(ttl)
+                added_i += 1
+            if added_i > 0:
+                json.dump(ins_arr[:100], open(ins_p, "w", encoding="utf-8"), ensure_ascii=False)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -800,15 +875,645 @@ def save_forwarded_photo(token, chat_id, msg):
         send_msg(token, chat_id, f"이미지 저장 오류: {e}")
         return False
 
+
+BIG_SEEN_PATH = os.path.expanduser("~/.optionhub_big_seen.json")
+AUTO_OI_DATE_PATH = os.path.expanduser("~/.optionhub_auto_oi_date.txt")
+
+
+def auto_collect_big_flows(token, chat_id):
+    """구글 시트(전체/ES)에서 $1M+ 신규 대형 체결 자동 수집 → BIG_FLOWS_PATH 저장 + 텔레그램 푸시"""
+    try:
+        sh_all = fetch_sheet_rows("전체") + fetch_sheet_rows("ES")
+    except Exception:
+        return
+    if not sh_all:
+        return
+
+    first_run = not os.path.exists(BIG_SEEN_PATH)
+    seen = set()
+    if not first_run:
+        try:
+            seen = set(json.load(open(BIG_SEEN_PATH, "r", encoding="utf-8")))
+        except Exception:
+            seen = set()
+
+    new_lines = []
+    new_recs_by_tk = {}
+    for sr in sh_all:
+        tk = str(sr.get("Ticker (티커)", "")).strip().upper()
+        if not tk:
+            continue
+        p_raw = str(sr.get("Premium (프리미엄)", "")).strip()
+        p_usd = parse_prem_usd(p_raw)
+        if p_usd < 1_000_000:
+            continue
+        k_s = str(sr.get("Strike Price (행사가)", "")).replace("$", "").replace(",", "").strip().rstrip(".")
+        cp_s = str(sr.get("Option Type (구분)", "Call")).strip()
+        cp_ch = "C" if "C" in cp_s.upper() else "P"
+        exp_s = str(sr.get("Expiration Date (만기일)", "")).strip()
+        exp_short = exp_s[5:10] if len(exp_s) >= 10 else exp_s
+        tm_s = str(sr.get("Time (시각)", "")).strip()
+        ch_s = str(sr.get("Characteristics (주문유형/특징)", "")).strip()
+        uid = f"{tk}|{k_s}{cp_ch}|{exp_s}|{tm_s}|{p_raw}"
+        if uid in seen:
+            continue
+        seen.add(uid)
+        if first_run:
+            continue
+        side_s = "BUY" if ("BUY" in ch_s.upper() or "ASK" in ch_s.upper()) else ("SELL" if ("SELL" in ch_s.upper() or "BID" in ch_s.upper()) else "MID")
+        is_bull = (cp_ch == "C" and side_s == "BUY") or (cp_ch == "P" and side_s == "SELL")
+        is_bear = (cp_ch == "C" and side_s == "SELL") or (cp_ch == "P" and side_s == "BUY")
+        emo = "🟢" if is_bull else ("🔴" if is_bear else "⚪")
+        prem_lbl = f"${p_usd/1e6:.2f}M"
+        tag_lbl = "SWEEP" if "SWEEP" in ch_s.upper() else ("BLOCK" if "BLOCK" in ch_s.upper() else (ch_s[:24] or "LARGE FLOW"))
+        new_lines.append(f"{emo} {tk} {k_s}{cp_ch} {exp_short} {side_s} {prem_lbl} · {tag_lbl}")
+        try:
+            k_num = float(k_s)
+        except Exception:
+            k_num = 0.0
+        new_recs_by_tk.setdefault(tk, []).append({
+            "emoji": emo, "tk": tk, "strike": k_num,
+            "cp": "Call" if cp_ch == "C" else "Put",
+            "exp": exp_short, "side": side_s,
+            "prem_m": round(p_usd / 1e6, 2), "prem_str": prem_lbl,
+            "qty": 0, "tag": tag_lbl, "notes": [],
+        })
+
+    try:
+        json.dump(list(seen)[-1500:], open(BIG_SEEN_PATH, "w", encoding="utf-8"))
+    except Exception:
+        pass
+
+    if new_lines:
+        try:
+            arr_b = json.load(open(BIG_FLOWS_PATH, "r", encoding="utf-8")) if os.path.exists(BIG_FLOWS_PATH) else []
+        except Exception:
+            arr_b = []
+        now_s = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for btk, brecs in new_recs_by_tk.items():
+            arr_b.insert(0, {"tk": btk, "ts": now_s, "flip": None, "records": brecs})
+        try:
+            json.dump(arr_b[:50], open(BIG_FLOWS_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+        except Exception:
+            pass
+        msg = f"🚨 큰 옵션 체결 {len(new_lines)}건 (자동 포착)\n" + "\n".join(new_lines[:12]) + "\n(🟢 = 강세 · 🔴 = 약세 · ⚪ = 중립)"
+        send_msg(token, chat_id, msg)
+
+
+def auto_collect_daily_oi(token, chat_id):
+    """매일 오전 07:30 KST 이후 주요 종목 OI·GEX 스냅샷 자동 수집 및 저장"""
+    from datetime import datetime as _dt_oi
+    import math as _m_oi
+    now_dt = _dt_oi.now()
+    today_s = now_dt.strftime("%Y-%m-%d")
+    if now_dt.hour < 7 or (now_dt.hour == 7 and now_dt.minute < 30):
+        return
+    if os.path.exists(AUTO_OI_DATE_PATH):
+        try:
+            if open(AUTO_OI_DATE_PATH, "r").read().strip() == today_s:
+                return
+        except Exception:
+            pass
+    try:
+        import yfinance as yf
+    except Exception:
+        return
+    tks = ["SPY", "QQQ", "NVDA", "TSLA", "PLTR", "SMH", "SOXL", "MU", "AMD", "AAPL"]
+    try:
+        hist = json.load(open(OI_PATH, "r", encoding="utf-8")) if os.path.exists(OI_PATH) else {}
+    except Exception:
+        hist = {}
+
+    def _bs_dg(S, K, T, r, iv, is_c):
+        d1 = (_m_oi.log(S / K) + (r + 0.5 * iv * iv) * T) / (iv * _m_oi.sqrt(T))
+        nd1 = _m_oi.exp(-0.5 * d1 * d1) / _m_oi.sqrt(2 * _m_oi.pi)
+        cdf = 0.5 * (1 + _m_oi.erf(d1 / _m_oi.sqrt(2)))
+        return (cdf if is_c else cdf - 1), nd1 / (S * iv * _m_oi.sqrt(T))
+
+    done_tks = []
+    for tk in tks:
+        try:
+            t = yf.Ticker(tk)
+            exps = list(t.options or [])
+            week_exps = [e for e in exps if (_dt_oi.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 7]
+            target_exps = (week_exps if len(week_exps) >= 3 else exps[:3])[:7]
+            spot = float(t.fast_info.get("lastPrice", 0) or t.history(period="1d")["Close"].iloc[-1])
+            rows = []
+            for exp in target_exps:
+                T = max((_dt_oi.strptime(exp, "%Y-%m-%d") - now_dt).days / 365.0, 1.0 / 365.0)
+                ch = t.option_chain(exp)
+                for is_c, df in [(True, ch.calls), (False, ch.puts)]:
+                    for _, r in df.iterrows():
+                        oi = 0 if str(r.get("openInterest")) == "nan" else int(r.get("openInterest") or 0)
+                        vol = 0 if str(r.get("volume")) == "nan" else int(r.get("volume") or 0)
+                        if oi > 0 or vol > 0:
+                            K = float(r["strike"]); iv = max(float(r.get("impliedVolatility") or 0.3), 0.05)
+                            d, g = _bs_dg(spot, K, T, 0.045, iv, is_c)
+                            rows.append({
+                                "만기": exp, "구분": "Call" if is_c else "Put", "행사가": K,
+                                "OI": oi, "거래량": vol, "IV(%)": round(iv * 100, 1),
+                                "Delta": round(d, 3), "Gamma": round(g, 4),
+                                "GEX($M)": round((1 if is_c else -1) * g * oi * 100 * (spot ** 2) * 0.01 / 1e6, 3),
+                                "DEX($M)": round(d * oi * 100 * spot / 1e6, 3),
+                            })
+            if rows:
+                coi = sum(x["OI"] for x in rows if x["구분"] == "Call")
+                poi = sum(x["OI"] for x in rows if x["구분"] == "Put")
+                hist.setdefault(tk, []).append({
+                    "수집시각": now_dt.strftime("%Y-%m-%d %H:%M"),
+                    "Spot": round(spot, 2), "Call_OI": coi, "Put_OI": poi,
+                    "Put_Call_OI_Ratio": round(poi / coi, 2) if coi else 0,
+                    "Net_GEX_M": round(sum(x["GEX($M)"] for x in rows), 2),
+                    "Net_DEX_M": round(sum(x["DEX($M)"] for x in rows), 2),
+                    "상세": rows,
+                })
+                done_tks.append(tk)
+        except Exception:
+            pass
+    if done_tks:
+        try:
+            json.dump(hist, open(OI_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+            open(AUTO_OI_DATE_PATH, "w").write(today_s)
+            send_msg(token, chat_id, f"✅ [아침 자동 OI·GEX 수집 완료] ({len(done_tks)}종목)\n{', '.join(done_tks)}")
+        except Exception:
+            pass
+
+
+
+WHALE_VOL_PATH = os.path.expanduser("~/.optionhub_whale_vol.json")
+
+
+def auto_scan_option_whales(token, chat_id):
+    """무무 OpenD(1순위) + Yahoo Finance(폴백) 기반 실시간 $1M+ / $4M+ 옵션 고래 체결 스캐너"""
+    tks = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "SOXL", "SMH", "MU", "AMD", "PLTR"]
+    first_run = not os.path.exists(WHALE_VOL_PATH)
+    prev_vols = {}
+    if not first_run:
+        try:
+            prev_vols = json.load(open(WHALE_VOL_PATH, "r", encoding="utf-8"))
+        except Exception:
+            prev_vols = {}
+
+    alerts = []
+    new_recs_by_tk = {}
+    mm_ok = False
+
+    # 1순위: 무무 OpenD 실시간 옵션 체인 + 스냅샷 (Ask/Bid 체결 방향 판별 포함)
+    qctx = None
+    try:
+        from moomoo import OpenQuoteContext, RET_OK
+        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        now_d = datetime.now()
+        end_d = (now_d + timedelta(days=10)).strftime("%Y-%m-%d")
+        start_d = now_d.strftime("%Y-%m-%d")
+        opt_codes = []
+        for tk in tks:
+            ret_c, df_c = qctx.get_option_chain(code=f"US.{tk}", start=start_d, end=end_d)
+            if ret_c == RET_OK and df_c is not None and not df_c.empty:
+                opt_codes.extend(df_c["code"].tolist()[:40])
+        for i in range(0, len(opt_codes), 100):
+            batch = opt_codes[i:i+100]
+            ret_s, df_s = qctx.get_market_snapshot(batch)
+            if ret_s != RET_OK or df_s is None or df_s.empty:
+                continue
+            mm_ok = True
+            for _, r in df_s.iterrows():
+                code = str(r.get("code", ""))
+                vol = int(r.get("volume", 0) or 0)
+                px = float(r.get("last_price", 0) or 0)
+                ask_p = float(r.get("ask_price", 0) or 0)
+                bid_p = float(r.get("bid_price", 0) or 0)
+                stk = float(r.get("option_strike_price", 0) or 0)
+                cp_s = "C" if "CALL" in str(r.get("option_type", "")).upper() else "P"
+                exp_s = str(r.get("strike_time", ""))[5:10]
+                if vol <= 0 or px <= 0:
+                    continue
+                old_v = int(prev_vols.get(code, vol if first_run else 0))
+                prev_vols[code] = vol
+                if first_run:
+                    continue
+                d_vol = vol - old_v
+                if d_vol <= 0:
+                    continue
+                d_usd = d_vol * px * 100.0
+                if d_usd < 1_000_000:
+                    continue
+                side_s = "BUY" if (ask_p > 0 and px >= ask_p * 0.99) else ("SELL" if (bid_p > 0 and px <= bid_p * 1.01) else "FLOW")
+                is_bull = (cp_s == "C" and side_s == "BUY") or (cp_s == "P" and side_s == "SELL")
+                is_bear = (cp_s == "C" and side_s == "SELL") or (cp_s == "P" and side_s == "BUY")
+                emo = "🐋🟢" if (is_bull and d_usd >= 4_000_000) else ("🐋🔴" if (is_bear and d_usd >= 4_000_000) else ("🟢" if is_bull else ("🔴" if is_bear else "⚪")))
+                tk_name = code.split(".")[1][:4] if "." in code else code
+                for cand in tks:
+                    if code.startswith(f"US.{cand}"):
+                        tk_name = cand; break
+                prem_lbl = f"${d_usd/1e6:.2f}M"
+                tag_lbl = "MEGA WHALE 4M+" if d_usd >= 4_000_000 else "MOOMOO LIVE"
+                alerts.append(f"{emo} {tk_name} {stk:g}{cp_s} {exp_s} {side_s} {prem_lbl} ({d_vol:,}계약) · {tag_lbl}")
+                new_recs_by_tk.setdefault(tk_name, []).append({
+                    "emoji": "🟢" if is_bull else ("🔴" if is_bear else "⚪"),
+                    "tk": tk_name, "strike": stk, "cp": "Call" if cp_s == "C" else "Put",
+                    "exp": exp_s, "side": side_s, "prem_m": round(d_usd / 1e6, 2),
+                    "prem_str": prem_lbl, "qty": d_vol, "tag": tag_lbl, "notes": [],
+                })
+    except Exception:
+        pass
+    finally:
+        if qctx is not None:
+            try:
+                qctx.close()
+            except Exception:
+                pass
+
+    # 2순위 폴백: 무무 옵션 권한 미지원 시 Yahoo Finance 실시간 거래량 급증 스캔
+    if not mm_ok:
+        try:
+            import yfinance as yf
+            for tk in tks[:6]:
+                t_obj = yf.Ticker(tk)
+                exps = list(t_obj.options or [])[:2]
+                for ex in exps:
+                    ch = t_obj.option_chain(ex)
+                    for cp_s, df_opt in [("C", ch.calls), ("P", ch.puts)]:
+                        if df_opt is None or df_opt.empty:
+                            continue
+                        for _, r in df_opt.iterrows():
+                            vol = int(r.get("volume", 0) or 0) if str(r.get("volume", "")) != "nan" else 0
+                            px = float(r.get("lastPrice", 0) or 0)
+                            stk = float(r.get("strike", 0) or 0)
+                            c_sym = str(r.get("contractSymbol", f"{tk}_{ex}_{stk}{cp_s}"))
+                            if vol <= 0 or px <= 0:
+                                continue
+                            old_v = int(prev_vols.get(c_sym, vol if first_run else 0))
+                            prev_vols[c_sym] = vol
+                            if first_run:
+                                continue
+                            d_vol = vol - old_v
+                            if d_vol <= 0:
+                                continue
+                            d_usd = d_vol * px * 100.0
+                            if d_usd < 1_000_000:
+                                continue
+                            prem_lbl = f"${d_usd/1e6:.2f}M"
+                            tag_lbl = "MEGA WHALE 4M+" if d_usd >= 4_000_000 else "LIVE FLOW"
+                            emo = "🐋🚨" if d_usd >= 4_000_000 else ("🟢" if cp_s == "C" else "🔴")
+                            alerts.append(f"{emo} {tk} {stk:g}{cp_s} {ex[5:10]} {prem_lbl} ({d_vol:,}계약) · {tag_lbl}")
+                            new_recs_by_tk.setdefault(tk, []).append({
+                                "emoji": "🟢" if cp_s == "C" else "🔴",
+                                "tk": tk, "strike": stk, "cp": "Call" if cp_s == "C" else "Put",
+                                "exp": ex[5:10], "side": "FLOW", "prem_m": round(d_usd / 1e6, 2),
+                                "prem_str": prem_lbl, "qty": d_vol, "tag": tag_lbl, "notes": [],
+                            })
+        except Exception:
+            pass
+
+    try:
+        if len(prev_vols) > 6000:
+            prev_vols = dict(list(prev_vols.items())[-5000:])
+        json.dump(prev_vols, open(WHALE_VOL_PATH, "w", encoding="utf-8"))
+    except Exception:
+        pass
+
+    if alerts:
+        try:
+            arr_b = json.load(open(BIG_FLOWS_PATH, "r", encoding="utf-8")) if os.path.exists(BIG_FLOWS_PATH) else []
+        except Exception:
+            arr_b = []
+        now_s = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for btk, brecs in new_recs_by_tk.items():
+            arr_b.insert(0, {"tk": btk, "ts": now_s, "flip": None, "records": brecs})
+        try:
+            json.dump(arr_b[:50], open(BIG_FLOWS_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+        except Exception:
+            pass
+        msg = f"🐋 실시간 고래 옵션 체결 {len(alerts)}건 ($1M+)\n" + "\n".join(alerts[:12])
+        send_msg(token, chat_id, msg)
+
+
+
+FG_PATH = os.path.expanduser("~/.optionhub_fg.json")
+AUTO_MORNING_DATE_PATH = os.path.expanduser("~/.optionhub_auto_morning_date.txt")
+
+
+def fg_label_kr(v):
+    if v <= 24: return "극단적 공포"
+    if v <= 44: return "공포"
+    if v <= 55: return "중립"
+    if v <= 74: return "탐욕"
+    return "극단적 탐욕"
+
+
+def get_cnn_fg():
+    today_s = datetime.now().strftime("%m-%d")
+    try:
+        if os.path.exists(FG_PATH):
+            d = json.load(open(FG_PATH, "r", encoding="utf-8"))
+            if d.get("date") == today_s and d.get("val") is not None:
+                v = int(d["val"])
+                return v, fg_label_kr(v), today_s, "수동"
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        raw = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8"))
+        fg = raw.get("fear_and_greed", {})
+        sc = int(round(float(fg.get("score", 35))))
+        ts_raw = str(fg.get("timestamp", ""))[:10]
+        dt_s = ts_raw[5:10] if len(ts_raw) >= 10 else today_s
+        return sc, fg_label_kr(sc), dt_s, "자동"
+    except Exception:
+        pass
+    try:
+        if os.path.exists(FG_PATH):
+            d = json.load(open(FG_PATH, "r", encoding="utf-8"))
+            v = int(d.get("val", 35))
+            return v, fg_label_kr(v), str(d.get("date", today_s)), str(d.get("mode", "수동"))
+    except Exception:
+        pass
+    return 35, "공포", today_s, "기본"
+
+
+def get_seoul_weather():
+    try:
+        url = "https://api.open-meteo.com/v1/forecast?latitude=37.638&longitude=127.025&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FSeoul&forecast_days=1"
+        data = json.loads(urllib.request.urlopen(url, timeout=6).read().decode("utf-8"))
+        cur = data.get("current", {})
+        dly = data.get("daily", {})
+        t_cur = round(float(cur.get("temperature_2m", 10)))
+        t_app = round(float(cur.get("apparent_temperature", t_cur)))
+        wcode = int(cur.get("weather_code", 3))
+        t_min = round(float((dly.get("temperature_2m_min") or [t_cur])[0]))
+        t_max = round(float((dly.get("temperature_2m_max") or [t_cur])[0]))
+        pop = int((dly.get("precipitation_probability_max") or [0])[0])
+        if wcode == 0: w_ico, w_txt = "☀️", "맑음"
+        elif wcode in (1, 2): w_ico, w_txt = "⛅", "구름조금"
+        elif wcode == 3: w_ico, w_txt = "☁️", "흐림"
+        elif wcode in (45, 48): w_ico, w_txt = "🌫", "안개"
+        elif 71 <= wcode <= 77: w_ico, w_txt = "❄️", "눈"
+        elif wcode >= 51: w_ico, w_txt = "🌧", "비"
+        else: w_ico, w_txt = "☁️", "흐림"
+        return f"🌡 서울 {w_ico} {w_txt}  {t_cur}°C (체감 {t_app}°C) · {t_min}~{t_max}° · 강수 {pop}%"
+    except Exception:
+        return "🌡 서울 날씨 조회 대기중"
+
+
+def _yf_last_chg(sym):
+    try:
+        import yfinance as yf
+        h = yf.Ticker(sym).history(period="5d")
+        if h is None or h.empty:
+            return None, None
+        c1 = float(h["Close"].iloc[-1])
+        c0 = float(h["Close"].iloc[-2]) if len(h) >= 2 else c1
+        chg = (c1 - c0) / c0 * 100.0 if c0 else 0.0
+        return c1, chg
+    except Exception:
+        return None, None
+
+
+def _yf_ma200(sym):
+    try:
+        import yfinance as yf
+        h = yf.Ticker(sym).history(period="1y")
+        if h is None or len(h) < 50:
+            return None, None
+        c = float(h["Close"].iloc[-1])
+        ma200 = float(h["Close"].tail(200).mean())
+        return c, ma200
+    except Exception:
+        return None, None
+
+
+def _get_gex_line(tk, disp_name=None):
+    lbl = disp_name or tk
+    spot_yf, ma200 = _yf_ma200(tk)
+    ma_txt = ("200MA위" if spot_yf >= ma200 else "200MA아래") if (spot_yf and ma200) else ""
+    try:
+        hist = json.load(open(OI_PATH, "r", encoding="utf-8")) if os.path.exists(OI_PATH) else {}
+    except Exception:
+        hist = {}
+    snaps = hist.get(tk) or []
+    if snaps:
+        sn = snaps[-1]
+        det = sn.get("상세", [])
+        sp = spot_yf or float(sn.get("Spot", 0) or 0)
+        net_g = sum(float(x.get("GEX($M)", 0) or 0) for x in det)
+        reg = "롱감마" if net_g >= 0 else "숏감마"
+        calls = [x for x in det if x.get("구분") == "Call"]
+        puts = [x for x in det if x.get("구분") == "Put"]
+        cw = max(calls, key=lambda x: x.get("OI", 0)).get("행사가") if calls else None
+        pw = max(puts, key=lambda x: x.get("OI", 0)).get("행사가") if puts else None
+        by_k = {}
+        for x in det:
+            k = float(x.get("행사가", 0) or 0)
+            by_k[k] = by_k.get(k, 0.0) + float(x.get("GEX($M)", 0) or 0)
+        zg = None
+        ks = sorted(by_k.keys())
+        cum = 0.0
+        for idx_k, k in enumerate(ks):
+            prev_c = cum
+            cum += by_k[k]
+            if idx_k > 0 and ((prev_c < 0 and cum >= 0) or (prev_c > 0 and cum <= 0)):
+                zg = k
+                break
+        parts = [f"{sp:.2f}" if sp else "-", reg]
+        if zg: parts.append(f"플립 {zg:g}")
+        if cw: parts.append(f"콜월 {cw:g}")
+        if pw: parts.append(f"풋월 {pw:g}")
+        if ma_txt: parts.append(ma_txt)
+        return f"- {lbl} : " + " · ".join(parts)
+    return f"- {lbl} : {spot_yf:.2f}" + (f" · {ma_txt}" if ma_txt else "") if spot_yf else f"- {lbl} : 데이터 대기중"
+
+
+def build_level_alert():
+    tks = ["SOXL", "SMH", "SPY", "QQQ", "NVDA", "TSLA"]
+    lines = ["📌 주요 종목 GEX · 핵심 레벨"]
+    for t in tks:
+        lines.append(_get_gex_line(t))
+    sk_p, sk_c = _yf_last_chg("000660.KS")
+    if sk_p:
+        lines.append(f"- 000660(SK하이닉스) : {int(round(sk_p)):,}원 ({sk_c:+.2f}%)")
+    return "\n".join(lines)
+
+
+
+def get_oi_delta_and_unwind_lines():
+    """저장된 OI 히스토리에서 전일 대비 확정 ΔOI 급증 TOP3 및 -25% 이상 대량 청산(Unwind) 경보 추출"""
+    surges, unwinds = [], []
+    try:
+        hist = json.load(open(OI_PATH, "r", encoding="utf-8")) if os.path.exists(OI_PATH) else {}
+        for tk, snaps in hist.items():
+            if not isinstance(snaps, list) or len(snaps) < 2:
+                continue
+            s0, s1 = snaps[-2], snaps[-1]
+            m0 = {(float(x.get("행사가", 0) or 0), str(x.get("구분", ""))): int(x.get("OI", 0) or 0) for x in s0.get("상세", [])}
+            m1 = {(float(x.get("행사가", 0) or 0), str(x.get("구분", ""))): int(x.get("OI", 0) or 0) for x in s1.get("상세", [])}
+            for key, v1 in m1.items():
+                v0 = m0.get(key, 0)
+                dv = v1 - v0
+                cp_c = "C" if "C" in key[1].upper() else "P"
+                if dv >= 1000:
+                    surges.append((dv, f"• {tk} {key[0]:g}{cp_c} (+{dv:,} → 총 {v1:,})"))
+                elif v0 >= 1500 and dv <= -max(800, int(v0 * 0.25)):
+                    unwinds.append((abs(dv), f"• {tk} {key[0]:g}{cp_c} ({dv:+,}, {dv/v0*100:.0f}%)"))
+    except Exception:
+        pass
+    surges.sort(reverse=True)
+    unwinds.sort(reverse=True)
+    return [x[1] for x in surges[:3]], [x[1] for x in unwinds[:2]]
+
+
+def build_morning_briefing():
+    now_dt = datetime.utcnow() + timedelta(hours=9)
+    wdays = ["월", "화", "수", "목", "금", "토", "일"]
+    wday = wdays[now_dt.weekday()]
+    date_title = f"{now_dt.month}월 {now_dt.day}일 {wday}요일"
+    short_dt = f"{now_dt.month:02d}-{now_dt.day:02d} {wday}"
+
+    weather_line = get_seoul_weather()
+    vix_p, vix_c = _yf_last_chg("^VIX")
+    fg_v, fg_lbl, fg_dt, fg_mode = get_cnn_fg()
+    spx_p, spx_c = _yf_last_chg("^GSPC")
+    ndx_p, ndx_c = _yf_last_chg("^IXIC")
+    y10_p, _ = _yf_last_chg("^TNX")
+    y3m_p, _ = _yf_last_chg("^IRX")
+    kos_p, kos_c = _yf_last_chg("^KS11")
+    krw_p, _ = _yf_last_chg("KRW=X")
+    ewy_p, ewy_c = _yf_last_chg("EWY")
+    wti_p, wti_c = _yf_last_chg("CL=F")
+
+    vix_tag = "경계" if (vix_p or 0) >= 25 else ("주의" if (vix_p or 0) >= 20 else "정상")
+    krw_tag = "주의" if (krw_p or 0) >= 1430 else "정상"
+    macro_judge = "경계" if ((vix_p or 0) >= 25 or fg_v <= 24) else ("주의" if ((vix_p or 0) >= 20 or fg_v <= 44) else "정상")
+    spr_s = f"{(y10_p - y3m_p):.2f}%p" if (y10_p is not None and y3m_p is not None) else "-"
+
+    lines = [
+        f"☀️ 대장 아침 브리핑 · {date_title}",
+        "",
+        weather_line,
+        "",
+        f"📊 매크로 : 종합판단 {macro_judge}",
+        f"- VIX {vix_p:.2f} ({vix_c:+.2f}%) [{vix_tag}]" if vix_p is not None else "- VIX -",
+        f"- CNN F&G {fg_v} ({fg_lbl}) ({fg_mode} {fg_dt})",
+        f"- S&P500 {spx_p:.1f} ({spx_c:+.2f}%)  나스닥 {ndx_p:.1f} ({ndx_c:+.2f}%)" if (spx_p and ndx_p) else "- S&P500 / 나스닥 -",
+        f"- 미국채 10Y {y10_p:.2f}%  3M {y3m_p:.2f}%  스프레드 {spr_s}" if (y10_p and y3m_p) else "- 미국채 10Y / 3M -",
+        f"- KOSPI {kos_p:.1f} ({kos_c:+.2f}%)  USD/KRW {krw_p:.1f} [{krw_tag}]" if (kos_p and krw_p) else "- KOSPI / USD/KRW -",
+        f"- EWY {ewy_p:.2f} ({ewy_c:+.2f}%)  유가(WTI) ${wti_p:.2f} ({wti_c:+.2f}%)" if (ewy_p and wti_p) else "- EWY / 유가 -",
+        "",
+        "📌 관심종목 GEX",
+        _get_gex_line("SOXL"),
+        _get_gex_line("SMH"),
+    ]
+    sk_p, sk_c = _yf_last_chg("000660.KS")
+    lines.append(f"- 000660(SK하이닉스) : {int(round(sk_p)):,}원 ({sk_c:+.2f}%)" if sk_p else "- 000660(SK하이닉스) : -")
+    _oi_surges, _oi_unwinds = get_oi_delta_and_unwind_lines()
+    if _oi_surges:
+        lines += ["", "🔥 전일 대비 확정 ΔOI 급증 TOP3"] + _oi_surges
+    if _oi_unwinds:
+        lines += ["", "⚠️ OPEX · 대형 OI 청산(Unwind) 경보"] + _oi_unwinds
+    lines += [
+        "",
+        "최종 종목 판정은 /브리핑, 레벨은 /레벨알림 으로 볼 수 있어.",
+        "",
+        "━━━━━━━━━━",
+        f"🌅 최종분석 브리핑 ({short_dt})",
+        f"시장 환경: {'방어' if macro_judge == '경계' else ('선별' if macro_judge == '주의' else '공격')} — F&G {fg_v} {fg_lbl}",
+    ]
+
+    geeks_s, mq_s, sg_s = None, None, None
+    try:
+        nrows = fetch_sheet_rows("AI노트_뉴스시황")
+        for r in reversed(nrows):
+            src_n = str(r.get("출처", r.get("Source", ""))).upper()
+            ttl_n = str(r.get("제목", r.get("Title", r.get("내용", "")))).strip().splitlines()[0][:70]
+            dt_n = str(r.get("날짜", r.get("Date", "")))[5:10]
+            if not ttl_n:
+                continue
+            if not geeks_s and ("GEEK" in src_n or "긱스" in src_n):
+                geeks_s = f"🧬 긱스({dt_n}): {ttl_n}"
+            elif not mq_s and ("MENTHOR" in src_n or "멘토" in src_n or "멘도" in src_n):
+                mq_s = f"🧭 멘도큐({dt_n}): {ttl_n}"
+            elif not sg_s and ("SPOT" in src_n or "스팟" in src_n):
+                sg_s = f"🧲 스팟감마({dt_n}): {ttl_n}"
+            if geeks_s and mq_s and sg_s:
+                break
+    except Exception:
+        pass
+    if geeks_s: lines.append(geeks_s)
+    if mq_s: lines.append(mq_s)
+    if sg_s: lines.append(sg_s)
+
+    tk_scores = {}
+    try:
+        for r in get_app_flows()[-120:]:
+            tk = str(r[1]).upper()
+            cp = str(r[3]).upper()
+            side = str(r[4]).upper()
+            sc = 1 if (("C" in cp and "A" in side) or ("P" in cp and "B" in side)) else -1
+            tk_scores[tk] = tk_scores.get(tk, [0, 0])
+            tk_scores[tk][0] += 1
+            tk_scores[tk][1] += sc
+    except Exception:
+        pass
+    top_tks = sorted(tk_scores.items(), key=lambda x: x[1][0], reverse=True)[:8]
+    buys = [k for k, v in top_tks if v[1] >= 2][:3]
+    sells = [k for k, v in top_tks if v[1] <= -1][:3]
+    holds = [k for k, v in top_tks if k not in buys and k not in sells][:3]
+
+    lines.append("🎯 종목 (최근 5일 반복 등장 상위)")
+    if buys: lines.append("🟢 매수: " + ", ".join(buys))
+    if sells: lines.append("🔴 매도: " + ", ".join(sells))
+    if holds: lines.append("⚪ 관망: " + ", ".join(holds))
+    if not (buys or sells or holds): lines.append("⚪ 관망: SOXL, NVDA, MU")
+
+    concl = "관망" if macro_judge != "정상" else "선별 매수"
+    if sells:
+        concl += f" (보유분 매도 점검: {', '.join(sells)})"
+    lines += [
+        "📝 내 규칙 체크 (차트에서 직접 확인)",
+        "🟢 후행스팬이 캔들 뚫을때 매수신호",
+        f"📌 결론: {concl}",
+        f"한 줄 요약: {'시장 환경을 확인하며 선별해서 접근해.' if macro_judge != '정상' else '강세 수급 종목 위주로 눌림목 분할 접근해.'}",
+        "※ F&G가 오래됐으면 /fg 숫자 로 갱신해줘 (CNN 페이지 확인).",
+    ]
+    return "\n".join(lines)
+
+
+def auto_send_morning_briefing(token, chat_id):
+    """매일 오전 07:10 KST 이후 1회 자동 아침 브리핑 전송"""
+    try:
+        now_kst = datetime.utcnow() + timedelta(hours=9)
+        if now_kst.hour < 7 or (now_kst.hour == 7 and now_kst.minute < 10):
+            return
+        today_s = now_kst.strftime("%Y-%m-%d")
+        if os.path.exists(AUTO_MORNING_DATE_PATH):
+            if open(AUTO_MORNING_DATE_PATH, "r").read().strip() == today_s:
+                return
+        msg = build_morning_briefing()
+        send_msg(token, chat_id, msg)
+        open(AUTO_MORNING_DATE_PATH, "w").write(today_s)
+    except Exception:
+        pass
+
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
     offset = 0
     last_sheet_check = 0
+    last_auto_collect = 0
     print("🤖 OptionHub Telegram Bot & Inline Menu started!")
     while True:
         try:
             now = time.time()
+            if now - last_auto_collect >= 120:
+                auto_collect_big_flows(token, my_chat_id)
+                auto_scan_option_whales(token, my_chat_id)
+                auto_collect_daily_oi(token, my_chat_id)
+                auto_send_morning_briefing(token, my_chat_id)
+                last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
                 last_sheet_check = now
