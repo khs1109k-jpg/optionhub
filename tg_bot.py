@@ -618,6 +618,10 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연) 스캔 중...")
         send_msg(token, chat_id, build_intraday_option_changes())
 
+    elif low in ("/콜풋강세", "/콜풋", "/무무수급", "/cp") or cmd == "cmd:cpdom":
+        send_msg(token, chat_id, "📡 무무 실시간 콜/풋 강세 종목 스캔 중...")
+        send_msg(token, chat_id, build_moomoo_cp_dominance())
+
     elif low in ("/대형체결", "/bigflows", "/체결요약") or cmd == "cmd:bigflows":
         send_msg(token, chat_id, "🧾 대형 옵션 체결 · 신규/증가 스캔 중...")
         _bf_txt, _bf_png = build_big_option_flows_summary()
@@ -2005,6 +2009,119 @@ def auto_scan_big_flows_summary(token, chat_id):
     except Exception:
         pass
 
+
+def build_moomoo_cp_dominance():
+    import socket as _sock_cp
+    tks = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "SOXL", "SOXS", "SMH", "MU", "AMD", "PLTR", "AAPL", "META", "AMZN", "AVGO", "ORCL"]
+    try:
+        with _sock_cp.create_connection(("127.0.0.1", 11111), timeout=0.4):
+            pass
+    except Exception:
+        return "📡 무무 콜/풋 강세 스캔\n\n⚠️ 무무 OpenD(11111 포트)가 꺼져 있거나 응답이 없습니다."
+
+    qctx = None
+    stats = {}
+    try:
+        from moomoo import OpenQuoteContext, RET_OK
+        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        now_d = datetime.now()
+        start_d = now_d.strftime("%Y-%m-%d")
+        end_d = (now_d + timedelta(days=10)).strftime("%Y-%m-%d")
+        code_to_tk = {}
+        opt_codes = []
+        for tk in tks:
+            ret_c, df_c = qctx.get_option_chain(code=f"US.{tk}", start=start_d, end=end_d)
+            if ret_c == RET_OK and df_c is not None and not df_c.empty:
+                c_list = df_c["code"].tolist()[:50]
+                for oc in c_list:
+                    code_to_tk[oc] = tk
+                opt_codes.extend(c_list)
+        for i in range(0, len(opt_codes), 100):
+            batch = opt_codes[i:i+100]
+            ret_s, df_s = qctx.get_market_snapshot(batch)
+            if ret_s != RET_OK or df_s is None or df_s.empty:
+                continue
+            for _, r in df_s.iterrows():
+                code = str(r.get("code", ""))
+                tk = code_to_tk.get(code)
+                if not tk:
+                    continue
+                vol = int(r.get("volume", 0) or 0)
+                px = float(r.get("last_price", 0) or 0)
+                if vol <= 0 or px <= 0:
+                    continue
+                ask_p = float(r.get("ask_price", 0) or 0)
+                bid_p = float(r.get("bid_price", 0) or 0)
+                stk = float(r.get("option_strike_price", 0) or 0)
+                cp_s = "C" if "CALL" in str(r.get("option_type", "")).upper() else "P"
+                exp_s = str(r.get("strike_time", ""))[5:10]
+                prem = vol * px * 100.0
+                d = stats.setdefault(tk, {"c_prem": 0.0, "p_prem": 0.0, "c_vol": 0, "p_vol": 0, "bull": 0.0, "bear": 0.0, "top_c": (0.0, ""), "top_p": (0.0, "")})
+                if cp_s == "C":
+                    d["c_prem"] += prem; d["c_vol"] += vol
+                    if prem > d["top_c"][0]:
+                        d["top_c"] = (prem, f"{stk:g}C({exp_s}, {_fmt_prem_short(prem)})")
+                    if ask_p > 0 and px >= ask_p * 0.99: d["bull"] += prem
+                    elif bid_p > 0 and px <= bid_p * 1.01: d["bear"] += prem
+                else:
+                    d["p_prem"] += prem; d["p_vol"] += vol
+                    if prem > d["top_p"][0]:
+                        d["top_p"] = (prem, f"{stk:g}P({exp_s}, {_fmt_prem_short(prem)})")
+                    if bid_p > 0 and px <= bid_p * 1.01: d["bull"] += prem
+                    elif ask_p > 0 and px >= ask_p * 0.99: d["bear"] += prem
+    except Exception as _em:
+        return f"📡 무무 콜/풋 강세 스캔 오류: {_em}"
+    finally:
+        if qctx:
+            try: qctx.close()
+            except Exception: pass
+
+    call_dom, put_dom = [], []
+    for tk, d in stats.items():
+        tot_p = d["c_prem"] + d["p_prem"]
+        if tot_p < 500_000:
+            continue
+        c_pct = round(d["c_prem"] / tot_p * 100)
+        p_pct = 100 - c_pct
+        if c_pct >= 62 or (d["bull"] > d["bear"] * 1.6 and d["bull"] >= 1_000_000):
+            call_dom.append((d["c_prem"] - d["p_prem"], f"🟢 {tk}: 콜 {c_pct}% ({_fmt_prem_short(d['c_prem'])}) vs 풋 {p_pct}% ({_fmt_prem_short(d['p_prem'])}) | 대표 {d['top_c'][1]}"))
+        elif p_pct >= 62 or (d["bear"] > d["bull"] * 1.6 and d["bear"] >= 1_000_000):
+            put_dom.append((d["p_prem"] - d["c_prem"], f"🔴 {tk}: 풋 {p_pct}% ({_fmt_prem_short(d['p_prem'])}) vs 콜 {c_pct}% ({_fmt_prem_short(d['c_prem'])}) | 대표 {d['top_p'][1]}"))
+
+    if not call_dom and not put_dom:
+        return "📡 무무 실시간 콜/풋 쏠림 종목\n\n현재 콜/풋 한쪽으로 62% 이상 쏠린 종목이 없습니다."
+
+    out = ["📡 무무 실시간 콜/풋 강세 종목"]
+    if call_dom:
+        out.append("\n🔥 [콜(상승) 우위 종목]")
+        out.extend(x[1] for x in sorted(call_dom, reverse=True)[:6])
+    if put_dom:
+        out.append("\n🧊 [풋(하락·헷지) 우위 종목]")
+        out.extend(x[1] for x in sorted(put_dom, reverse=True)[:6])
+    return "\n".join(out)
+
+_LAST_CPDOM_SCAN_TS = 0.0
+
+def auto_scan_moomoo_cp_dominance(token, chat_id):
+    global _LAST_CPDOM_SCAN_TS
+    try:
+        from datetime import datetime, timezone, timedelta
+        kst = datetime.now(timezone(timedelta(hours=9)))
+        hm = kst.hour * 100 + kst.minute
+        wd = kst.weekday()
+        in_session = ((wd in (0, 1, 2, 3, 4) and hm >= 2330) or (wd in (1, 2, 3, 4, 5) and hm <= 600))
+        if not in_session:
+            return
+        now_ts = time.time()
+        if now_ts - _LAST_CPDOM_SCAN_TS < 1800:
+            return
+        _LAST_CPDOM_SCAN_TS = now_ts
+        msg = build_moomoo_cp_dominance()
+        if "우위 종목]" in msg:
+            send_msg(token, chat_id, msg)
+    except Exception:
+        pass
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -2023,6 +2140,7 @@ def main():
                 import threading as _th_bg
                 _th_bg.Thread(target=auto_scan_intraday_option_changes, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_big_flows_summary, args=(token, my_chat_id), daemon=True).start()
+                _th_bg.Thread(target=auto_scan_moomoo_cp_dominance, args=(token, my_chat_id), daemon=True).start()
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
