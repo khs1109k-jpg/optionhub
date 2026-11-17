@@ -2080,12 +2080,24 @@ if nav_menu == "⚡ 무무 실시간 차트":
         if (av >= 1e3) return (v / 1e3).toFixed(2) + "K";
         return v.toFixed(2);
       }};
+      const fmtKstTick = (t, tickType) => {{
+        const dt = typeof t === "number" ? new Date(t * 1000) : new Date(t.year, t.month - 1, t.day);
+        if (tickType === 0 || tickType === 1 || tickType === 2 || typeof t !== "number") {{
+          return new Intl.DateTimeFormat("ko-KR", {{ timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit" }}).format(dt).replace(/\. /g, "/").replace(".", "");
+        }}
+        return new Intl.DateTimeFormat("ko-KR", {{ timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }}).format(dt);
+      }};
+      const fmtKstCross = (t) => {{
+        if (typeof t !== "number") return `${{t.year}}-${{String(t.month).padStart(2,"0")}}-${{String(t.day).padStart(2,"0")}}`;
+        return new Intl.DateTimeFormat("ko-KR", {{ timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }}).format(new Date(t * 1000));
+      }};
       const baseOpt = {{
         layout: {{ background: {{ color: "#080c14" }}, textColor: "#d1d4dc", attributionLogo: false }},
         grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+        localization: {{ locale: "ko-KR", timeFormatter: fmtKstCross }},
         rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 92 }},
-        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, barSpacing: 4.5, minBarSpacing: 2, rightOffset: 8 }},
+        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, barSpacing: 4.5, minBarSpacing: 2, rightOffset: 8, tickMarkFormatter: fmtKstTick }},
       }};
       const elMain = document.getElementById("tv_main");
       const chart = LightweightCharts.createChart(elMain, baseOpt);
@@ -6859,16 +6871,20 @@ if nav_menu == "📬 인사이더 파이낸셜":
                 elif any(k in _bu for k in ("SPOTGAMMA", "스팟감마")):
                     _src_tag = "SpotGamma"
                 if _src_tag:
-                    _sttl = str(_rs.get("제목", _rs.get("섹션", f"{_src_tag} 리포트"))).strip()
-                    _sbody = str(_rs.get("한글 번역/해석", _rs.get("원문", _rs.get("내용", "")))).strip()
+                    _sttl = str(_rs.get("제목") or _rs.get("종목") or _rs.get("섹션") or f"{_src_tag} 리포트").strip()
+                    _s_ko = str(_rs.get("한글 번역/해석", "")).strip()
+                    _s_raw = str(_rs.get("영문 원문", _rs.get("원문", _rs.get("내용", "")))).strip()
+                    _has_kr = bool(re.search(r"[가-힣]{3,}", _s_ko))
+                    _sbody = _s_raw or _s_ko
+                    _ssum = _s_ko if _has_kr else ""
                     _sdt = str(_rs.get("날짜", ""))[:16]
                     sheet_ins_mails.append({
-                        "id": f"sh_{_src_tag[:4]}_{hash(_sttl + _sdt)}",
+                        "id": f"sh_{_src_tag[:4]}_{abs(hash(_sttl + _sdt))}",
                         "날짜": _sdt,
                         "출처": _src_tag,
                         "제목": _sttl or f"{_src_tag} 리포트",
                         "원문": _sbody,
-                        "요약": _sbody,
+                        "요약": _ssum,
                         "종목": ", ".join(extract_silpi_symbols(_sttl + " " + _sbody)[:5]) or "공통",
                     })
     except Exception:
@@ -6876,13 +6892,14 @@ if nav_menu == "📬 인사이더 파이낸셜":
 
     # 로컬 수신함 + ORDS + 구글 시트 통합 후 신규 건은 로컬 JSON에 자동 영구 저장
     merged_mails = list(local_mails)
-    seen_titles = {m.get("제목", "") for m in merged_mails}
+    seen_titles = {str(m.get("제목", "")).strip().lower() for m in merged_mails}
     _added_cnt = 0
     for om in (ords_mails + sheet_ins_mails):
-        if om.get("제목") and om.get("제목") not in seen_titles:
+        _tnorm = str(om.get("제목", "")).strip().lower()
+        if _tnorm and _tnorm not in seen_titles:
             merged_mails.insert(0, om)
             local_mails.insert(0, om)
-            seen_titles.add(om.get("제목", ""))
+            seen_titles.add(_tnorm)
             _added_cnt += 1
     if _added_cnt > 0:
         save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
@@ -6981,8 +6998,24 @@ if nav_menu == "📬 인사이더 파이낸셜":
                     save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
                     st.rerun()
             if mc3.button("📩 텔레그램", key=f"ins_tg_{mid}"):
-                _tg_m = mm.get("요약") if (mm.get("요약") and len(mm.get("요약","")) > 200) else f"📬 [{mm.get('출처','InsiderFinance')}] {mm.get('제목','')}\n종목: {mm.get('종목','')}\n\n{(mm.get('요약') or mm.get('원문',''))[:7000]}"
-                if send_telegram_msg(tg_token, tg_chat_id, _tg_m)[0]:
+                _cur_sum = str(mm.get("요약") or "").strip()
+                if not re.search(r"[가-힣]{10,}", _cur_sum):
+                    with st.spinner("한글 요약 생성 후 텔레그램 전송 중..."):
+                        _pr_tg = (
+                            "다음 미국 옵션 메일을 트레이더용으로 이모티콘을 넣어 한국어 핵심 요약해 주세요(3줄 요약 + 주요 종목·행사가·콜/풋·프리미엄 + 전략 포인트, 총 1500자 이내):\n"
+                            + str(mm.get("제목", "")) + "\n" + str(mm.get("원문", ""))[:6000]
+                        )
+                        _ok_ai_t, _ko_t = run_ai_analysis(_pr_tg)
+                        if _ok_ai_t and _ko_t:
+                            _cur_sum = _ko_t
+                            mm["요약"] = _ko_t
+                            for _lm in local_mails:
+                                if _lm.get("id") == mid or _lm.get("제목") == mm.get("제목"):
+                                    _lm["요약"] = _ko_t; break
+                            save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
+                _tg_body = _cur_sum if _cur_sum else str(mm.get("원문", ""))[:3300]
+                _tg_m = f"📬 [{mm.get('출처','InsiderFinance')}] {mm.get('제목','')}\n종목: {mm.get('종목','')}\n\n{_tg_body}"
+                if send_telegram_msg(tg_token, tg_chat_id, _tg_m[:3800])[0]:
                     st.toast("✅ 텔레그램 전송 완료!")
                 else:
                     st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
