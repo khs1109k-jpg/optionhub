@@ -1052,29 +1052,68 @@ def auto_collect_daily_oi(token, chat_id):
     done_tks = []
     for tk in tks:
         try:
-            t = yf.Ticker(tk)
-            exps = list(t.options or [])
-            week_exps = [e for e in exps if (_dt_oi.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 7]
-            target_exps = (week_exps if len(week_exps) >= 3 else exps[:3])[:7]
-            spot = float(t.fast_info.get("lastPrice", 0) or t.history(period="1d")["Close"].iloc[-1])
             rows = []
-            for exp in target_exps:
-                T = max((_dt_oi.strptime(exp, "%Y-%m-%d") - now_dt).days / 365.0, 1.0 / 365.0)
-                ch = t.option_chain(exp)
-                for is_c, df in [(True, ch.calls), (False, ch.puts)]:
-                    for _, r in df.iterrows():
-                        oi = 0 if str(r.get("openInterest")) == "nan" else int(r.get("openInterest") or 0)
-                        vol = 0 if str(r.get("volume")) == "nan" else int(r.get("volume") or 0)
-                        if oi > 0 or vol > 0:
-                            K = float(r["strike"]); iv = max(float(r.get("impliedVolatility") or 0.3), 0.05)
-                            d, g = _bs_dg(spot, K, T, 0.045, iv, is_c)
-                            rows.append({
-                                "만기": exp, "구분": "Call" if is_c else "Put", "행사가": K,
-                                "OI": oi, "거래량": vol, "IV(%)": round(iv * 100, 1),
-                                "Delta": round(d, 3), "Gamma": round(g, 4),
-                                "GEX($M)": round((1 if is_c else -1) * g * oi * 100 * (spot ** 2) * 0.01 / 1e6, 3),
-                                "DEX($M)": round(d * oi * 100 * spot / 1e6, 3),
-                            })
+            spot = 0.0
+            try:
+                _cb_sym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(tk, tk)
+                _cb_url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{_cb_sym}.json"
+                _cb_raw = json.loads(urllib.request.urlopen(urllib.request.Request(_cb_url, headers={"User-Agent": "Mozilla/5.0"}), timeout=8).read().decode("utf-8"))
+                _cb_d = _cb_raw.get("data") or {}
+                spot = float(_cb_d.get("current_price") or _cb_d.get("close") or 0.0)
+                _cb_opts = _cb_d.get("options") or []
+                _cb_exps = sorted({f"20{m.group(1)[:2]}-{m.group(1)[2:4]}-{m.group(1)[4:6]}" for o in _cb_opts for m in [re.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", str(o.get("option") or ""))] if m and f"20{m.group(1)[:2]}-{m.group(1)[2:4]}-{m.group(1)[4:6]}" >= today_s})
+                _wk_cb = [e for e in _cb_exps if (_dt_oi.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 7]
+                _tgt_cb = set((_wk_cb if len(_wk_cb) >= 3 else _cb_exps[:3])[:7])
+                for o in _cb_opts:
+                    _m = re.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", str(o.get("option") or ""))
+                    if not _m: continue
+                    _yymmdd, _cpc, _kraw = _m.groups()
+                    _exp_s = f"20{_yymmdd[:2]}-{_yymmdd[2:4]}-{_yymmdd[4:6]}"
+                    if _exp_s not in _tgt_cb: continue
+                    oi = int(o.get("open_interest") or 0)
+                    vol = int(o.get("volume") or 0)
+                    if oi <= 0 and vol <= 0: continue
+                    K = int(_kraw) / 1000.0
+                    is_c = (_cpc == "C")
+                    iv = float(o.get("iv") or 0.30)
+                    if iv <= 0.01: iv = 0.30
+                    T = max((_dt_oi.strptime(_exp_s, "%Y-%m-%d") - now_dt).days / 365.0, 1.0 / 365.0)
+                    s_ref = spot if spot > 0 else K
+                    d, g = _bs_dg(s_ref, K, T, 0.045, iv, is_c)
+                    rows.append({
+                        "만기": _exp_s, "구분": "Call" if is_c else "Put", "행사가": K,
+                        "OI": oi, "거래량": vol, "IV(%)": round(iv * 100, 1),
+                        "Delta": round(d, 3), "Gamma": round(g, 4),
+                        "GEX($M)": round((1 if is_c else -1) * g * oi * 100 * (s_ref ** 2) * 0.01 / 1e6, 3),
+                        "DEX($M)": round(d * oi * 100 * s_ref / 1e6, 3),
+                    })
+            except Exception:
+                rows = []
+            if sum(x["OI"] for x in rows if x["구분"] == "Call") < 500 or sum(x["OI"] for x in rows if x["구분"] == "Put") < 500:
+                rows = []
+                t = yf.Ticker(tk)
+                exps = list(t.options or [])
+                week_exps = [e for e in exps if (_dt_oi.strptime(e, "%Y-%m-%d").date() - now_dt.date()).days <= 7]
+                target_exps = (week_exps if len(week_exps) >= 3 else exps[:3])[:7]
+                spot = float(t.fast_info.get("lastPrice", 0) or t.history(period="1d")["Close"].iloc[-1])
+                rows = []
+                for exp in target_exps:
+                    T = max((_dt_oi.strptime(exp, "%Y-%m-%d") - now_dt).days / 365.0, 1.0 / 365.0)
+                    ch = t.option_chain(exp)
+                    for is_c, df in [(True, ch.calls), (False, ch.puts)]:
+                        for _, r in df.iterrows():
+                            oi = 0 if str(r.get("openInterest")) == "nan" else int(r.get("openInterest") or 0)
+                            vol = 0 if str(r.get("volume")) == "nan" else int(r.get("volume") or 0)
+                            if oi > 0 or vol > 0:
+                                K = float(r["strike"]); iv = max(float(r.get("impliedVolatility") or 0.3), 0.05)
+                                d, g = _bs_dg(spot, K, T, 0.045, iv, is_c)
+                                rows.append({
+                                    "만기": exp, "구분": "Call" if is_c else "Put", "행사가": K,
+                                    "OI": oi, "거래량": vol, "IV(%)": round(iv * 100, 1),
+                                    "Delta": round(d, 3), "Gamma": round(g, 4),
+                                    "GEX($M)": round((1 if is_c else -1) * g * oi * 100 * (spot ** 2) * 0.01 / 1e6, 3),
+                                    "DEX($M)": round(d * oi * 100 * spot / 1e6, 3),
+                                })
             if rows:
                 coi = sum(x["OI"] for x in rows if x["구분"] == "Call")
                 poi = sum(x["OI"] for x in rows if x["구분"] == "Put")
