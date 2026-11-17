@@ -1454,7 +1454,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_1sig = c_l2.checkbox("1시그마 (1σ)", value=True, key="ed_1sig")
             show_zg = c_l3.checkbox("감마플립", value=True, key="ed_zg")
             show_open_px = c_l4.checkbox("Open (시가)", value=True, key="ed_open_px")
-            show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR)", value=True, key="ed_vpvr_vol")
+            show_vpvr_vol = c_o5.checkbox("좌측 매물대(VPVR · 파랑)", value=True, key="ed_vpvr_vol")
             show_ichi_cloud = c_o6.checkbox("일목 구름대(Cloud)", value=False, key="ed_ichi_cloud")
             st.markdown("**일목균형표 세부 요소 (개별 넣기 · 빼기)**")
             ic_1, ic_2, ic_3, ic_4, ic_5 = st.columns(5)
@@ -1494,7 +1494,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             show_vol = c_s1.checkbox("거래량(Vol · 주 차트 하단)", value=True, key="ed_vol")
             show_icc = c_s2.checkbox("역시계곡선(아래 따로)", value=True, key="ed_icc")
             c_s3, c_s4, c_s5 = st.columns(3)
-            show_vpvr_opt = c_s3.checkbox("좌측 콜/풋 막대", value=True, key="ed_vpvr_opt")
+            show_vpvr_opt = c_s3.checkbox("좌측 콜/풋 막대(초록/빨강)", value=True, key="ed_vpvr_opt")
             show_rail_gex = c_s4.checkbox("우측 GEX 레일", value=True, key="ed_rail_gex")
             show_rail_nf = c_s5.checkbox("우측 Net Flow 레일", value=True, key="ed_rail_nf")
             vpvr_scale = st.slider("좌측 매물대·콜풋 막대 길이 (%)", 20, 500, 220, step=20, key="ed_vpvr_scale")
@@ -1954,12 +1954,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
         grid: {{ vertLines: {{ color: "rgba(42,46,57,0.35)" }}, horzLines: {{ color: "rgba(42,46,57,0.35)" }} }},
         crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
         rightPriceScale: {{ borderColor: "#2a2e39", minimumWidth: 92 }},
-        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false }},
+        timeScale: {{ borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, barSpacing: 7, minBarSpacing: 3, rightOffset: 8 }},
       }};
       const elMain = document.getElementById("tv_main");
       const chart = LightweightCharts.createChart(elMain, baseOpt);
       const cs = chart.addCandlestickSeries({{
-        upColor:"#26a69a", downColor:"#ef5350", borderVisible:false, wickUpColor:"#26a69a", wickDownColor:"#ef5350"
+        upColor:"#089981", downColor:"#f23645", borderVisible:true, borderUpColor:"#089981", borderDownColor:"#f23645", wickVisible:true, wickUpColor:"#089981", wickDownColor:"#f23645"
       }});
       cs.setData(d.candles);
       let vs = null;
