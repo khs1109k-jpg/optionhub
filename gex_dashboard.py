@@ -95,7 +95,7 @@ def _fetch_cboe_chain_rows(tk: str, max_exps: int = 6):
             delta = o.get("delta")
             gamma = o.get("gamma")
             if delta is None or gamma is None or float(gamma or 0) == 0:
-                delta, gamma = bs_delta_gamma(spot, strike, t_years, iv, is_call=(cp_code == "C"))
+                delta, gamma = _bs_delta_gamma(spot, strike, t_years, iv, cp_code)
             else:
                 delta, gamma = float(delta), float(gamma)
             last_px = float(o.get("last_trade_price") or 0.0)
@@ -117,13 +117,28 @@ def _fetch_cboe_chain_rows(tk: str, max_exps: int = 6):
     return 0.0, []
 
 
-def fetch_gex_chain_data(ticker: str, max_exps: int = 6):
+def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 0.0):
     import yfinance as yf
 
     tk = (ticker or "SPY").strip().upper()
     _cb_spot, _cb_rows = _fetch_cboe_chain_rows(tk, max_exps=max_exps)
     if _cb_rows:
         spot, rows = _cb_spot, _cb_rows
+        if spot_override and float(spot_override) > 0 and abs(float(spot_override) - spot) > 1e-4:
+            spot = float(spot_override)
+            for _r in rows:
+                _t_y = max(float(_r.get("dte", 0)), 0.5) / 365.0
+                _iv = float(_r.get("iv") or 0.30)
+                _cp = _r.get("cp", "C")
+                _st = float(_r.get("strike") or 0.0)
+                _oi = float(_r.get("oi") or 0.0)
+                if _st > 0:
+                    _dl, _gm = _bs_delta_gamma(spot, _st, _t_y, _iv, _cp)
+                    _gabs = (spot * spot * 0.01) * _gm * _oi * 100.0
+                    _r["delta"] = _dl
+                    _r["gamma"] = _gm
+                    _r["gex"] = _gabs if _cp == "C" else -_gabs
+                    _r["dex"] = _dl * _oi * 100.0 * spot
     else:
         t = yf.Ticker(tk)
 
@@ -142,6 +157,8 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6):
                     spot = float(hist["Close"].dropna().iloc[-1])
             except Exception:
                 pass
+        if spot_override and float(spot_override) > 0:
+            spot = float(spot_override)
 
         exps = list(getattr(t, "options", []) or [])
         if spot <= 0 or not exps:
@@ -421,18 +438,42 @@ def _get_mm_live_for_gex(tk):
                         res["px"] = round(v, 2); break
     except Exception:
         pass
+    if res["px"] <= 0:
+        try:
+            import urllib.request
+            _u8 = f"http://127.0.0.1:8502/quote?sym={clean}"
+            _j8 = json.loads(urllib.request.urlopen(_u8, timeout=0.5).read().decode("utf-8"))
+            _raw8 = _j8.get("raw") if isinstance(_j8.get("raw"), dict) else {}
+            for ek in ("overnight_price", "after_price", "pre_price", "ext_price", "last_price", "px", "price"):
+                _v8 = float(_raw8.get(ek) or _j8.get(ek) or 0)
+                if _v8 > 0:
+                    res["px"] = round(_v8, 2); break
+        except Exception:
+            pass
     parts = []
-    if res["px"] > 0:
-        parts.append(f"무무실시간 ${res['px']:,.2f}")
     try:
         import socket, concurrent.futures
         with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
             pass
         def _gex_mm_w():
             out_p = []
+            snap_px = 0.0
             from moomoo import OpenQuoteContext, SubType, RET_OK
             qc = OpenQuoteContext(host="127.0.0.1", port=11111)
             try:
+                try:
+                    r_sn, df_sn = qc.get_market_snapshot([sym])
+                    if r_sn == RET_OK and df_sn is not None and not df_sn.empty:
+                        sr = df_sn.iloc[0]
+                        for sk in ("overnight_price", "after_price", "pre_price", "last_price", "cur_price", "nominal_price"):
+                            try:
+                                sv = float(sr.get(sk) or 0)
+                                if sv > 0:
+                                    snap_px = round(sv, 2); break
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
                 qc.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
                 r_ob, df_ob = qc.get_order_book(sym, num=10)
                 if r_ob == RET_OK and isinstance(df_ob, dict):
@@ -452,14 +493,19 @@ def _get_mm_live_for_gex(tk):
             finally:
                 try: qc.close()
                 except Exception: pass
-            return out_p
+            return snap_px, out_p
         _ex_g = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            parts.extend(_ex_g.submit(_gex_mm_w).result(timeout=1.0))
+            _s_px, _s_out = _ex_g.submit(_gex_mm_w).result(timeout=1.2)
+            if _s_px and _s_px > 0:
+                res["px"] = _s_px
+            parts.extend(_s_out)
         finally:
             _ex_g.shutdown(wait=False)
     except Exception:
         pass
+    if res["px"] > 0:
+        parts.insert(0, f"무무실시간 ${res['px']:,.2f}")
     res["summary"] = " | ".join(parts)
     return res
 
@@ -479,7 +525,7 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
 
     max_exps = c2.slider("분석 만기 개수 (가까운 순)", 2, 10, 6, key="ai_gex_max_exps")
     if c3.button("🔄 실시간 새로고침", use_container_width=True, key="btn_ai_gex_refresh"):
-        fetch_gex_chain_data.clear()
+        _fetch_cboe_chain_rows.clear()
         st.rerun()
 
     qcols = st.columns(len(quick_tks))
@@ -489,14 +535,14 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
             st.rerun()
 
     tk_target = st.session_state.get("ai_gex_tk", "NVDA")
+    _mm_gex = _get_mm_live_for_gex(tk_target)
     with st.spinner(f"{tk_target} 실시간 옵션 체인 GEX·DEX·OI·Greeks 계산 중..."):
-        res = fetch_gex_chain_data(tk_target, max_exps=max_exps)
+        res = fetch_gex_chain_data(tk_target, max_exps=max_exps, spot_override=_mm_gex["px"])
 
     if not res.get("ok"):
         st.error(res.get("error", "데이터 조회 실패"))
         return
 
-    _mm_gex = _get_mm_live_for_gex(tk_target)
     spot = _mm_gex["px"] if _mm_gex["px"] > 0 else res["spot"]
     if _mm_gex["summary"]:
         st.caption(f"📡 무무 실시간 연동: {_mm_gex['summary']}")
