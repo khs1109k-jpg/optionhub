@@ -618,6 +618,14 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연) 스캔 중...")
         send_msg(token, chat_id, build_intraday_option_changes())
 
+    elif low in ("/강한콜풋", "/풋콜스캔", "/스캔", "/abscan") or cmd == "cmd:abscan":
+        send_msg(token, chat_id, "🚦 강한 풋·콜 스캔 (A·B 등급, 만기 14일 내) 실행 중...")
+        _ab_txt, _ab_png = build_strong_cp_scan()
+        if _ab_png:
+            send_photo_bytes(token, chat_id, _ab_png, _ab_txt)
+        else:
+            send_msg(token, chat_id, _ab_txt)
+
     elif low in ("/콜풋강세", "/콜풋", "/무무수급", "/cp") or cmd == "cmd:cpdom":
         send_msg(token, chat_id, "📡 무무 실시간 콜/풋 강세 종목 스캔 중...")
         send_msg(token, chat_id, build_moomoo_cp_dominance())
@@ -2122,6 +2130,246 @@ def auto_scan_moomoo_cp_dominance(token, chat_id):
     except Exception:
         pass
 
+
+CP_BASE_PATH = os.path.expanduser("~/.optionhub_cp_baseline.json")
+
+def _render_strong_cp_png(put_rows, call_rows, total_cnt, c_cnt, today_et):
+    if not put_rows and not call_rows:
+        return None
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.font_manager as fm
+        from matplotlib.patches import FancyBboxPatch
+
+        _font_set = False
+        for _fp in ["/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]:
+            if os.path.exists(_fp):
+                fm.fontManager.addfont(_fp)
+                plt.rcParams["font.family"] = fm.FontProperties(fname=_fp).get_name()
+                _font_set = True
+                break
+        if not _font_set:
+            plt.rcParams["font.sans-serif"] = ["NanumGothic", "Noto Sans CJK KR", "Malgun Gothic", "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        n_all = len(put_rows) + len(call_rows)
+        fig_h = max(4.8, 2.5 + n_all * 0.72 + (0.7 if put_rows else 0) + (0.7 if call_rows else 0))
+        fig = plt.figure(figsize=(13.2, fig_h), facecolor="#0a111d")
+        ax = fig.add_axes([0, 0, 1, 1], facecolor="#0a111d")
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 100)
+        ax.axis("off")
+
+        ax.text(2, 96.5, "강한 풋 · 강한 콜 스캔 (정확도 보정판)", color="#f8fafc", fontsize=14, fontweight="bold", va="center")
+        ax.text(2, 93.2, f"{today_et} ET · 만기 14일 이내 · {total_cnt}종목 확인 · A·B 등급만 표시 (C {c_cnt}종목 생략)", color="#94a3b8", fontsize=9.2, va="center")
+
+        y_cur = 88.5
+        cols = [(2, "종목"), (11, "등급·점수"), (20, "쏠림"), (28, "평소 대비"), (39, "가장 큰 계약"), (61, "집중도"), (68, "거래량/OI"), (77, "큰 체결 방향"), (89, "방향 추정")]
+        step = min(9.2, 78.0 / max(n_all + 2.5, 1))
+
+        def _draw_sec(title_s, title_col, rlist, yc):
+            if not rlist:
+                return yc
+            ax.text(2, yc, f"{title_s} · {len(rlist)}종목", color=title_col, fontsize=11, fontweight="bold", va="center")
+            yc -= step * 0.48
+            ax.add_patch(FancyBboxPatch((1.5, yc - step * 0.20), 97, step * 0.40, boxstyle="round,pad=0.1", facecolor="#101b2e", edgecolor="#1e3a5f", linewidth=0.6))
+            for cx, cn in cols:
+                ax.text(cx, yc, cn, color="#64748b", fontsize=8.3, fontweight="bold", va="center")
+            yc -= step * 0.55
+            for r in rlist:
+                ax.add_patch(FancyBboxPatch((1.5, yc - step * 0.45), 97, step * 0.85, boxstyle="round,pad=0.1", facecolor="#0d1626", edgecolor="#132238", linewidth=0.5))
+                ax.text(2, yc + step * 0.12, r["tk"], color="#f8fafc", fontsize=10, fontweight="bold", va="center")
+                gcol = "#34d399" if r["grade"] == "A" else "#fbbf24"
+                ax.text(11, yc + step * 0.12, f"{r['grade']} {r['score']}점", color=gcol, fontsize=9.2, fontweight="bold", va="center")
+                ax.text(20, yc + step * 0.12, r["skew_str"], color=title_col, fontsize=9.2, fontweight="bold", va="center")
+                ax.text(28, yc + step * 0.12, r["base_str"], color="#94a3b8", fontsize=8.5, va="center")
+                ax.text(39, yc + step * 0.12, r["top_str"], color="#cbd5e1", fontsize=8.6, va="center")
+                ax.text(61, yc + step * 0.12, f"{r['conc']}%", color="#cbd5e1", fontsize=8.8, va="center")
+                ax.text(68, yc + step * 0.12, f"{r['voi']:.1f}x", color="#e2e8f0", fontsize=8.8, fontweight="bold", va="center")
+                ax.text(77, yc + step * 0.12, r["big_dir"], color="#94a3b8", fontsize=8.5, va="center")
+                ax.text(89, yc + step * 0.12, r["dir_est"], color=r["dir_col"], fontsize=9, fontweight="bold", va="center")
+                ax.text(2, yc - step * 0.22, r["sub_note"], color="#64748b", fontsize=7.8, va="center")
+                yc -= step * 0.96
+            return yc - step * 0.35
+
+        y_cur = _draw_sec("풋 쏠림 (거래대금 기준)", "#f87171", put_rows, y_cur)
+        y_cur = _draw_sec("콜 쏠림 (거래대금 기준)", "#34d399", call_rows, y_cur)
+        ax.text(2, 2.2, "쏠림 = 당일만기·먼 OTM 제외한 거래대금 기준 · 지원 자료 CBOE 약 15분 지연 · ※ 거래 쏠림일 뿐 방향 확정 아님", color="#64748b", fontsize=8.2, va="center")
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor="#0a111d")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception as _er:
+        print("render_strong_cp_png err:", _er, flush=True)
+        return None
+
+def build_strong_cp_scan():
+    import re as _re_ab
+    from datetime import datetime, timezone, timedelta
+    et_now = datetime.now(timezone(timedelta(hours=-5)))
+    today_et = et_now.strftime("%Y-%m-%d")
+    tks = ["SOXL", "SOXS", "KORU", "TSLA", "NVDA", "AAPL", "AMD", "MU", "PLTR", "SPCX", "SMH", "SPY", "QQQ", "AVGO", "META"]
+    inv_tks = {"SOXS", "SQQQ", "SPXS", "NVD", "TSLQ"}
+
+    base_hist = {}
+    if os.path.exists(CP_BASE_PATH):
+        try:
+            base_hist = json.load(open(CP_BASE_PATH, "r", encoding="utf-8"))
+        except Exception:
+            base_hist = {}
+
+    put_rows, call_rows = [], []
+    c_cnt, checked = 0, 0
+    for tk in tks:
+        try:
+            url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{tk}.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            raw = json.loads(urllib.request.urlopen(req, timeout=6).read().decode("utf-8"))
+            dd = raw.get("data") or {}
+            opts = dd.get("options") or []
+            spot = float(dd.get("current_price") or dd.get("close") or 0.0)
+            if not opts or spot <= 0:
+                continue
+            checked += 1
+            c_prem, p_prem = 0.0, 0.0
+            best_c, best_p = None, None
+            for o in opts:
+                m = _re_ab.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", str(o.get("option") or ""))
+                if not m: continue
+                ym, cp_ch, kr = m.groups()
+                exp_s = f"20{ym[:2]}-{ym[2:4]}-{ym[4:6]}"
+                try:
+                    dte = (datetime.strptime(exp_s, "%Y-%m-%d").date() - et_now.date()).days
+                except Exception:
+                    continue
+                if dte < 1 or dte > 14:
+                    continue
+                strike = int(kr) / 1000.0
+                if strike < spot * 0.65 or strike > spot * 1.35:
+                    continue
+                vol = int(o.get("volume") or 0)
+                oi = int(o.get("open_interest") or 0)
+                if vol <= 0: continue
+                lp = float(o.get("last_trade_price") or 0)
+                bd = float(o.get("bid") or 0); ak = float(o.get("ask") or 0)
+                mid = (bd + ak) / 2.0 if (bd > 0 and ak > 0) else lp
+                prem = vol * mid * 100.0
+                if prem <= 0: continue
+                otm_pct = round(abs(strike - spot) / spot * 100)
+                rec = {"exp": f"{ym[2:4]}-{ym[4:6]}", "dte": dte, "cp": cp_ch, "k": strike, "vol": vol, "oi": oi, "prem": prem, "otm": otm_pct}
+                if cp_ch == "C":
+                    c_prem += prem
+                    if best_c is None or prem > best_c["prem"]:
+                        best_c = rec
+                else:
+                    p_prem += prem
+                    if best_p is None or prem > best_p["prem"]:
+                        best_p = rec
+
+            tot_prem = c_prem + p_prem
+            if tot_prem < 300_000:
+                continue
+            # 평소 대비 기준 저장
+            bh_list = [x for x in base_hist.get(tk, []) if x.get("d") != today_et][-19:]
+            avg_prev = (sum(x["p"] for x in bh_list) / len(bh_list)) if len(bh_list) >= 3 else 0.0
+            base_str = f"{tot_prem/avg_prev:.1f}x" if avg_prev > 0 else "기준 쌓는 중"
+            bh_list.append({"d": today_et, "p": round(tot_prem, 0)})
+            base_hist[tk] = bh_list
+
+            c_pct = round(c_prem / tot_prem * 100)
+            p_pct = 100 - c_pct
+            if max(c_pct, p_pct) < 62:
+                continue
+            is_put_dom = p_pct >= c_pct
+            dom_pct = p_pct if is_put_dom else c_pct
+            best = best_p if is_put_dom else best_c
+            if not best:
+                continue
+            conc = round(best["prem"] / tot_prem * 100)
+            voi = best["vol"] / float(max(best["oi"], 1))
+            score = (3 if dom_pct >= 85 else (2 if dom_pct >= 72 else 1)) + (2 if conc >= 25 else (1 if conc >= 15 else 0)) + (2 if voi >= 3.0 else (1 if voi >= 1.2 else 0)) + (2 if tot_prem >= 10_000_000 else (1 if tot_prem >= 3_000_000 else 0))
+            grade = "A" if score >= 7 else ("B" if score >= 4 else "C")
+            if grade == "C":
+                c_cnt += 1
+                continue
+
+            is_inv = tk in inv_tks
+            if is_put_dom:
+                dir_est = "기초 상승 쪽" if is_inv else "하락 쪽"
+                dir_col = "#34d399" if is_inv else "#f87171"
+            else:
+                dir_est = "기초 하락 쪽" if is_inv else "상승 쪽"
+                dir_col = "#f87171" if is_inv else "#34d399"
+
+            cp_kr = "풋" if best["cp"] == "P" else "콜"
+            sub_note = f"거래량이 OI의 {voi:.1f}배 ({'새 포지션 가능' if voi >= 1.0 else '기존 포지션 회전'}) · 규모 {_fmt_prem_short(tot_prem)} · {base_str}"
+            if is_inv:
+                sub_note += " · 인버스 ETF"
+            row_d = {
+                "tk": tk, "grade": grade, "score": score,
+                "skew_str": f"{dom_pct}% {'풋' if is_put_dom else '콜'}",
+                "base_str": base_str,
+                "top_str": f"{best['exp']} {best['k']:g}{cp_kr} · {best['dte']}일 · OTM {best['otm']}%",
+                "conc": conc, "voi": voi, "big_dir": "-",
+                "dir_est": dir_est, "dir_col": dir_col, "sub_note": sub_note,
+            }
+            if is_put_dom:
+                put_rows.append(row_d)
+            else:
+                call_rows.append(row_d)
+        except Exception:
+            continue
+
+    try:
+        with open(CP_BASE_PATH, "w", encoding="utf-8") as _f:
+            json.dump(base_hist, _f, ensure_ascii=False)
+    except Exception:
+        pass
+
+    put_rows.sort(key=lambda x: x["score"], reverse=True)
+    call_rows.sort(key=lambda x: x["score"], reverse=True)
+    if not put_rows and not call_rows:
+        return f"🚦 강한 풋·콜 스캔 (A·B 등급, 만기 14일 내)\n\n현재 조건에 맞는 종목이 없습니다. (C {c_cnt}종목 생략)", None
+
+    p_str = ", ".join(f"{r['tk']}({r['grade']})" for r in put_rows) or "없음"
+    c_str = ", ".join(f"{r['tk']}({r['grade']})" for r in call_rows) or "없음"
+    txt = (
+        f"🚦 강한 풋·콜 스캔 (A·B 등급, 만기 14일 내)\n"
+        f"🔴 풋 쏠림: {p_str}\n"
+        f"🟢 콜 쏠림: {c_str}\n"
+        f"※ 거래 쏠림일 뿐 방향 확정 아님"
+    )
+    png_b = _render_strong_cp_png(put_rows, call_rows, checked, c_cnt, today_et)
+    return txt, png_b
+
+_LAST_ABSCAN_TS = 0.0
+
+def auto_scan_strong_cp(token, chat_id):
+    global _LAST_ABSCAN_TS
+    try:
+        from datetime import datetime, timezone, timedelta
+        kst = datetime.now(timezone(timedelta(hours=9)))
+        hm = kst.hour * 100 + kst.minute
+        wd = kst.weekday()
+        in_session = ((wd in (0, 1, 2, 3, 4) and hm >= 2330) or (wd in (1, 2, 3, 4, 5) and hm <= 600))
+        if not in_session:
+            return
+        now_ts = time.time()
+        if now_ts - _LAST_ABSCAN_TS < 1800:
+            return
+        _LAST_ABSCAN_TS = now_ts
+        txt, png_b = build_strong_cp_scan()
+        if png_b:
+            send_photo_bytes(token, chat_id, png_b, txt)
+        elif "쏠림:" in txt:
+            send_msg(token, chat_id, txt)
+    except Exception:
+        pass
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -2141,6 +2389,7 @@ def main():
                 _th_bg.Thread(target=auto_scan_intraday_option_changes, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_big_flows_summary, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_moomoo_cp_dominance, args=(token, my_chat_id), daemon=True).start()
+                _th_bg.Thread(target=auto_scan_strong_cp, args=(token, my_chat_id), daemon=True).start()
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
