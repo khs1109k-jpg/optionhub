@@ -774,6 +774,65 @@ def format_emoji_review_tg(raw_txt):
     return s
 
 
+
+SENT_GEEKS_PATH = os.path.expanduser("~/.optionhub_sent_geeks.json")
+
+
+def send_photo_url(token, chat_id, photo_url, caption=""):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        payload = json.dumps({
+            "chat_id": chat_id,
+            "photo": photo_url,
+            "caption": caption[:1000],
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=15).read()
+        return True
+    except Exception:
+        return False
+
+
+def check_sheet_geeks(token, chat_id):
+    """구글 시트(AI노트_뉴스시황)에 새 Geeks/Menthor/SpotGamma 리포트가 저장되면 차트 이미지+한글 요약 자동 텔레그램 전송"""
+    try:
+        first_run = not os.path.exists(SENT_GEEKS_PATH)
+        sent = set()
+        if not first_run:
+            try:
+                sent = set(json.load(open(SENT_GEEKS_PATH, "r", encoding="utf-8")))
+            except Exception:
+                sent = set()
+        rows = fetch_sheet_rows("AI노트_뉴스시황")
+        sub = [r for r in rows if any(k in str(r.get("섹션", "")) for k in ("Geeks", "맨도큐", "Menthor", "SpotGamma"))]
+        if not sub:
+            return
+        today_kst = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y-%m-%d")
+        for r in sub:
+            dt_s = str(r.get("날짜", "")).strip()
+            tk_s = str(r.get("종목", "")).strip()
+            sec_s = str(r.get("섹션", "")).strip()
+            ko_s = str(r.get("한글 번역/해석", "")).strip()
+            img_u = str(r.get("이미지URL", r.get("이미지", ""))).strip()
+            uid = f"{dt_s}|{sec_s}|{tk_s}|{ko_s[:30]}"
+            if uid in sent:
+                continue
+            sent.add(uid)
+            # 첫 실행 시에는 오늘 날짜 리포트만 즉시 발송하고 과거 이력은 스킵
+            if first_run and not dt_s.startswith(today_kst):
+                continue
+            cap = f"📐 [{sec_s}] {tk_s} ({dt_s})\n\n{ko_s}"
+            if img_u.startswith("http"):
+                ok_p = send_photo_url(token, chat_id, img_u, cap)
+                if not ok_p:
+                    send_msg(token, chat_id, cap + f"\n🖼 {img_u}")
+            else:
+                send_msg(token, chat_id, cap)
+        json.dump(list(sent)[-500:], open(SENT_GEEKS_PATH, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def check_sheet_review(token, chat_id):
     try:
         sent_list = []
@@ -1516,6 +1575,7 @@ def main():
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
+                check_sheet_geeks(token, my_chat_id)
                 last_sheet_check = now
 
             url = f"https://api.telegram.org/bot{token}/getUpdates?timeout=20&offset={offset}"
