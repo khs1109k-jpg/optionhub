@@ -1688,15 +1688,28 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if cur_bundle is None or not cur_bundle["candles"]:
         cur_bundle, icc_df = _build_tf_bundle(candles)
 
-    # 무무 OpenD 실제 체결 틱(get_rt_ticker) 기반 CVD 보정
+    # 무무 OpenD 실제 체결 틱(get_rt_ticker) 기반 CVD 보정 (1.2초 타임아웃 안전 가드)
     _mm_tick_cvd_series = []
     if show_cvd:
         try:
-            from moomoo import OpenQuoteContext, SubType, RET_OK
-            _q_cvd = OpenQuoteContext(host="127.0.0.1", port=11111)
-            _q_cvd.subscribe([sel_syn], [SubType.TICKER], subscribe_push=False)
-            _rt_r, _df_tkr = _q_cvd.get_rt_ticker(sel_syn, num=500)
-            _q_cvd.close()
+            import socket, concurrent.futures
+            with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+                pass
+            def _fetch_cvd_w():
+                from moomoo import OpenQuoteContext, SubType, RET_OK
+                qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+                try:
+                    qc.subscribe([sel_syn], [SubType.TICKER], subscribe_push=False)
+                    return qc.get_rt_ticker(sel_syn, num=500)
+                finally:
+                    try: qc.close()
+                    except Exception: pass
+            _ex_c = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                _rt_r, _df_tkr = _ex_c.submit(_fetch_cvd_w).result(timeout=1.2)
+            finally:
+                _ex_c.shutdown(wait=False)
+            from moomoo import RET_OK
             if _rt_r == RET_OK and _df_tkr is not None and not _df_tkr.empty and cur_bundle.get("cvd"):
                 _cum_t = 0.0
                 _t_map = {}
@@ -1818,44 +1831,57 @@ if nav_menu == "⚡ 무무 실시간 차트":
             f"<td style='padding:3px 6px;color:#94a3b8;'>{_si['note']}</td>"
             f"</tr>"
         )
-    # 무무 OpenD 실시간 옵션 체인 스냅샷 우선 조회 (숫자 무무 기준 일치)
+    # 무무 OpenD 실시간 옵션 체인 스냅샷 우선 조회 (1.5초 타임아웃 안전 가드)
     if len(_stream_items) < 10:
-        _mm_opt_filled = False
         try:
-            from moomoo import OpenQuoteContext, RET_OK
-            _q_opt = OpenQuoteContext(host="127.0.0.1", port=11111)
-            _now_d = pd.Timestamp.now(tz="America/New_York")
-            _rc, _dfc = _q_opt.get_option_chain(code=sel_syn, start=_now_d.strftime("%Y-%m-%d"), end=(_now_d + pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
-            if _rc == RET_OK and _dfc is not None and not _dfc.empty:
-                _codes = _dfc["code"].tolist()[:80]
-                _rs, _dfs = _q_opt.get_market_snapshot(_codes)
-                if _rs == RET_OK and _dfs is not None and not _dfs.empty:
-                    _sp_lim = float(cur["px"] or 0)
-                    if _sp_lim > 0 and "option_strike_price" in _dfs.columns:
-                        _sk_s = pd.to_numeric(_dfs["option_strike_price"], errors="coerce").fillna(0)
-                        _dfs = _dfs[(_sk_s >= _sp_lim * 0.65) & (_sk_s <= _sp_lim * 1.35)]
-                    _dfs["_prem"] = pd.to_numeric(_dfs.get("volume", 0), errors="coerce").fillna(0) * pd.to_numeric(_dfs.get("last_price", 0), errors="coerce").fillna(0) * 100.0
-                    _dfs = _dfs[_dfs["_prem"] > 0].sort_values("_prem", ascending=False)
-                    for _, _mr in _dfs.head(12 - len(_stream_items)).iterrows():
-                        _pv = float(_mr["_prem"])
-                        _ps = f"${_pv/1e6:.2f}M" if _pv >= 1e6 else (f"${_pv/1e3:.1f}K" if _pv >= 1e3 else f"${int(_pv)}")
-                        _vv = int(_mr.get("volume", 0) or 0)
-                        _oiv = int(_mr.get("option_open_interest", 0) or 0)
-                        _pxm = float(_mr.get("last_price", 0) or 0)
-                        _askm = float(_mr.get("ask_price", 0) or 0)
-                        _bidm = float(_mr.get("bid_price", 0) or 0)
-                        _bsm = "BUY" if (_askm > 0 and _pxm >= _askm * 0.99) else ("SELL" if (_bidm > 0 and _pxm <= _bidm * 1.01) else "FLOW")
-                        _cpm = "C" if "CALL" in str(_mr.get("option_type", "")).upper() else "P"
-                        _skm = float(_mr.get("option_strike_price", 0) or 0)
-                        _exm = str(_mr.get("strike_time", "-"))[5:10]
-                        _stream_items.append({
-                            "tm": "MOOMOO", "exp": _exm, "stk": f"{_skm:g}", "cp": _cpm,
-                            "bs": _bsm, "prem": _ps, "vol": f"{_vv:,}", "cnt": "-",
-                            "oi": f"{_oiv/1e3:.1f}K" if _oiv >= 1000 else str(_oiv),
-                            "note": "MOOMOO LIVE",
-                        })
-                        _mm_opt_filled = True
-            _q_opt.close()
+            import socket, concurrent.futures
+            with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+                pass
+            def _fetch_mm_opt_w():
+                from moomoo import OpenQuoteContext, RET_OK
+                qo = OpenQuoteContext(host="127.0.0.1", port=11111)
+                try:
+                    _now_d = pd.Timestamp.now(tz="America/New_York")
+                    _rc, _dfc = qo.get_option_chain(code=sel_syn, start=_now_d.strftime("%Y-%m-%d"), end=(_now_d + pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
+                    if _rc == RET_OK and _dfc is not None and not _dfc.empty:
+                        _codes = _dfc["code"].tolist()[:80]
+                        _rs, _dfs = qo.get_market_snapshot(_codes)
+                        if _rs == RET_OK and _dfs is not None and not _dfs.empty:
+                            return _dfs
+                finally:
+                    try: qo.close()
+                    except Exception: pass
+                return None
+            _ex_o = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                _dfs = _ex_o.submit(_fetch_mm_opt_w).result(timeout=1.5)
+            finally:
+                _ex_o.shutdown(wait=False)
+            if _dfs is not None and not _dfs.empty:
+                _sp_lim = float(cur["px"] or 0)
+                if _sp_lim > 0 and "option_strike_price" in _dfs.columns:
+                    _sk_s = pd.to_numeric(_dfs["option_strike_price"], errors="coerce").fillna(0)
+                    _dfs = _dfs[(_sk_s >= _sp_lim * 0.65) & (_sk_s <= _sp_lim * 1.35)]
+                _dfs["_prem"] = pd.to_numeric(_dfs.get("volume", 0), errors="coerce").fillna(0) * pd.to_numeric(_dfs.get("last_price", 0), errors="coerce").fillna(0) * 100.0
+                _dfs = _dfs[_dfs["_prem"] > 0].sort_values("_prem", ascending=False)
+                for _, _mr in _dfs.head(12 - len(_stream_items)).iterrows():
+                    _pv = float(_mr["_prem"])
+                    _ps = f"${_pv/1e6:.2f}M" if _pv >= 1e6 else (f"${_pv/1e3:.1f}K" if _pv >= 1e3 else f"${int(_pv)}")
+                    _vv = int(_mr.get("volume", 0) or 0)
+                    _oiv = int(_mr.get("option_open_interest", 0) or 0)
+                    _pxm = float(_mr.get("last_price", 0) or 0)
+                    _askm = float(_mr.get("ask_price", 0) or 0)
+                    _bidm = float(_mr.get("bid_price", 0) or 0)
+                    _bsm = "BUY" if (_askm > 0 and _pxm >= _askm * 0.99) else ("SELL" if (_bidm > 0 and _pxm <= _bidm * 1.01) else "FLOW")
+                    _cpm = "C" if "CALL" in str(_mr.get("option_type", "")).upper() else "P"
+                    _skm = float(_mr.get("option_strike_price", 0) or 0)
+                    _exm = str(_mr.get("strike_time", "-"))[5:10]
+                    _stream_items.append({
+                        "tm": "MOOMOO", "exp": _exm, "stk": f"{_skm:g}", "cp": _cpm,
+                        "bs": _bsm, "prem": _ps, "vol": f"{_vv:,}", "cnt": "-",
+                        "oi": f"{_oiv/1e3:.1f}K" if _oiv >= 1000 else str(_oiv),
+                        "note": "MOOMOO LIVE",
+                    })
         except Exception:
             pass
     if len(_stream_items) < 10:
