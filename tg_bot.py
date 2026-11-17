@@ -505,6 +505,10 @@ def handle_command(token, chat_id, text):
     elif low in ("/레벨알림", "/levels") or cmd == "cmd:levels":
         send_msg(token, chat_id, build_level_alert())
 
+    elif low in ("/장중변화", "/옵션변화", "/변화") or cmd == "cmd:intraday":
+        send_msg(token, chat_id, "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연) 스캔 중...")
+        send_msg(token, chat_id, build_intraday_option_changes())
+
     elif low in ("/종합평", "/summary") or cmd == "cmd:summary":
         send_msg(token, chat_id, get_app_review())
 
@@ -1598,6 +1602,146 @@ def auto_send_morning_briefing(token, chat_id):
         pass
 
 
+
+def _fmt_prem_short(v):
+    if v >= 1e6:
+        return f"${v/1e6:.1f}M"
+    if v >= 1e3:
+        return f"${v/1e3:.0f}K"
+    return f"${v:.0f}"
+
+def build_intraday_option_changes():
+    import re as _re_ic
+    hist = {}
+    if os.path.exists(OI_PATH):
+        try:
+            with open(OI_PATH, "r", encoding="utf-8") as _f:
+                hist = json.load(_f)
+        except Exception:
+            hist = {}
+    base_tks = ["SOXL", "TSLA", "SOXS", "PLTR", "AAPL", "NVDA", "AVGO", "SMH", "SPY", "MU", "QQQ", "AMD", "ORCL"]
+    tks = list(dict.fromkeys(list(hist.keys()) + base_tks))
+    blocks = []
+    for tk in tks[:18]:
+        try:
+            cboe_sym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(tk, tk)
+            url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{cboe_sym}.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            raw = json.loads(urllib.request.urlopen(req, timeout=6).read().decode("utf-8"))
+            data_d = raw.get("data") or {}
+            opts = data_d.get("options") or []
+            spot = float(data_d.get("current_price") or data_d.get("close") or 0.0)
+            if not opts or spot <= 0:
+                continue
+
+            snaps = hist.get(tk) or []
+            prev_snap = snaps[-1] if snaps else {}
+            prev_cw = float(prev_snap.get("CallWall", 0) or 0)
+            prev_pw = float(prev_snap.get("PutWall", 0) or 0)
+            prev_put_oi = float(prev_snap.get("Put_OI", 0) or 0)
+            prev_call_oi = float(prev_snap.get("Call_OI", 0) or 0)
+            prev_put_pct = round(prev_put_oi / max(prev_put_oi + prev_call_oi, 1) * 100) if (prev_put_oi + prev_call_oi) > 0 else None
+
+            call_oi_by_k, put_oi_by_k = {}, {}
+            tot_c_vol, tot_p_vol = 0, 0
+            new_pos_cands, rot_cands = [], []
+            for o in opts:
+                occ = str(o.get("option") or "")
+                m = _re_ic.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", occ)
+                if not m:
+                    continue
+                yymmdd, cp_ch, k_raw = m.groups()
+                mm_dd = f"{yymmdd[2:4]}-{yymmdd[4:6]}"
+                strike = int(k_raw) / 1000.0
+                oi = int(o.get("open_interest") or 0)
+                vol = int(o.get("volume") or 0)
+                last_px = float(o.get("last_trade_price") or 0)
+                bid = float(o.get("bid") or 0)
+                ask = float(o.get("ask") or 0)
+                mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last_px
+                prem = vol * mid * 100.0
+                if cp_ch == "C":
+                    tot_c_vol += vol
+                    if spot * 0.98 <= strike <= spot * 1.25:
+                        call_oi_by_k[strike] = call_oi_by_k.get(strike, 0) + oi
+                else:
+                    tot_p_vol += vol
+                    if spot * 0.80 <= strike <= spot * 1.02:
+                        put_oi_by_k[strike] = put_oi_by_k.get(strike, 0) + oi
+
+                if vol >= 1000 and oi >= 20 and vol > oi:
+                    ratio = vol / float(oi)
+                    new_pos_cands.append((ratio, vol, f"🆕 {strike:g}{cp_ch} {mm_dd} 거래 {vol:,} > OI {oi:,} ({ratio:.1f}배) → 새 포지션 가능성 · 내일 OI로 확인"))
+                if oi >= 100 and vol / float(oi) >= 0.30 and prem >= 500_000:
+                    pct = round(vol / float(oi) * 100)
+                    if ask > 0 and last_px >= ask * 0.99:
+                        side_txt = "매수 체결 쪽(신규·되사기 가능)"
+                    elif bid > 0 and last_px <= bid * 1.01:
+                        side_txt = "매도 체결 쪽(정리 가능)"
+                    else:
+                        side_txt = "호가 중간"
+                    rot_cands.append((prem, f"🔄 큰 회전 {strike:g}{cp_ch} {mm_dd} · 거래 {vol:,} / OI {oi:,} ({pct}%) · 규모 {_fmt_prem_short(prem)} · {side_txt} — 신규/청산은 거래량만으로 구분 못 해요"))
+
+            cur_cw = max(call_oi_by_k, key=call_oi_by_k.get) if call_oi_by_k else 0.0
+            cur_pw = max(put_oi_by_k, key=put_oi_by_k.get) if put_oi_by_k else 0.0
+            lines_tk = []
+            for _, _, msg_n in sorted(new_pos_cands, reverse=True)[:2]:
+                lines_tk.append(msg_n)
+            for _, msg_r in sorted(rot_cands, reverse=True)[:4]:
+                lines_tk.append(msg_r)
+            if cur_cw > 0 and spot > cur_cw:
+                lines_tk.append(f"🚀 현재가 ${spot:,.2f} Call Wall {cur_cw:g} 위로 돌파 → 과열·추격 주의")
+            if cur_pw > 0 and spot < cur_pw:
+                lines_tk.append(f"⚠️ 현재가 ${spot:,.2f} Put Wall {cur_pw:g} 아래로 이탈 → 변동성 확대 구간")
+            if prev_cw > 0 and cur_cw > 0 and abs(cur_cw - prev_cw) >= max(1.0, prev_cw * 0.02):
+                if cur_cw > prev_cw:
+                    lines_tk.append(f"🧱 Call Wall 이동 {prev_cw:g} → {cur_cw:g} (어제 대비 위로 ↑) · 저항이 올라감 = 상단 열림")
+                else:
+                    lines_tk.append(f"🧱 Call Wall 이동 {prev_cw:g} → {cur_cw:g} (어제 대비 아래로 ↓) · 저항이 내려옴 = 상단 눌림")
+            if prev_pw > 0 and cur_pw > 0 and abs(cur_pw - prev_pw) >= max(1.0, prev_pw * 0.02):
+                if cur_pw < prev_pw:
+                    lines_tk.append(f"🧱 Put Wall 이동 {prev_pw:g} → {cur_pw:g} (어제 대비 아래로 ↓) · 지지가 내려감 = 바닥 약해짐")
+                else:
+                    lines_tk.append(f"🧱 Put Wall 이동 {prev_pw:g} → {cur_pw:g} (어제 대비 위로 ↑) · 지지가 올라감 = 바닥 단단해짐")
+            if prev_put_pct is not None and (tot_c_vol + tot_p_vol) >= 1000:
+                cur_put_pct = round(tot_p_vol / float(tot_c_vol + tot_p_vol) * 100)
+                if cur_put_pct - prev_put_pct >= 15:
+                    lines_tk.append(f"🔻 풋 쪽으로 급쏠림: 풋 비중 {prev_put_pct}% → {cur_put_pct}%")
+                elif prev_put_pct - cur_put_pct >= 15:
+                    lines_tk.append(f"🔺 콜 쪽으로 급쏠림: 콜 비중 {100-prev_put_pct}% → {100-cur_put_pct}%")
+
+            if lines_tk:
+                blocks.append(f"🔎 {tk} ${spot:,.2f}\n" + "\n".join(lines_tk))
+        except Exception:
+            continue
+
+    if not blocks:
+        return "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연)\n\n현재 특이 변화가 감지된 종목이 없습니다."
+    return "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연)\n\n" + "\n\n".join(blocks) + "\n\n(방향·신규는 추정 · 확인 후 판단)"
+
+_LAST_INTRADAY_SCAN_TS = 0.0
+
+def auto_scan_intraday_option_changes(token, chat_id):
+    global _LAST_INTRADAY_SCAN_TS
+    try:
+        from datetime import datetime, timezone, timedelta
+        kst = datetime.now(timezone(timedelta(hours=9)))
+        # 미 증시 본장 시간대 (화~토 새벽 23:30 ~ 06:00 KST) 30분마다 자동 푸시
+        hm = kst.hour * 100 + kst.minute
+        wd = kst.weekday()
+        in_session = ((wd in (0, 1, 2, 3, 4) and hm >= 2330) or (wd in (1, 2, 3, 4, 5) and hm <= 600))
+        if not in_session:
+            return
+        now_ts = time.time()
+        if now_ts - _LAST_INTRADAY_SCAN_TS < 1800:
+            return
+        _LAST_INTRADAY_SCAN_TS = now_ts
+        msg = build_intraday_option_changes()
+        if "🔎 " in msg:
+            send_msg(token, chat_id, msg)
+    except Exception:
+        pass
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -1613,6 +1757,7 @@ def main():
                 auto_scan_option_whales(token, my_chat_id)
                 auto_collect_daily_oi(token, my_chat_id)
                 auto_send_morning_briefing(token, my_chat_id)
+                auto_scan_intraday_option_changes(token, my_chat_id)
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
