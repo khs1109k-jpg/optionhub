@@ -89,6 +89,115 @@ def send_msg(token, chat_id, text, reply_markup=None):
         with urllib.request.urlopen(req, timeout=15) as resp:
             resp.read()
 
+def send_photo_bytes(token, chat_id, img_bytes, caption=""):
+    if not token or not chat_id or not img_bytes:
+        return False
+    try:
+        import requests
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            data={"chat_id": chat_id, "caption": (caption or "")[:1000]},
+            files={"photo": ("bigflows.png", img_bytes, "image/png")},
+            timeout=20,
+        )
+        return r.status_code == 200
+    except Exception as _ep:
+        print("send_photo_bytes err:", _ep, flush=True)
+        return False
+
+def _render_bigflows_card_png(items, tot_bull, tot_bear, tot_bias, tk_lines):
+    if not items:
+        return None
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.font_manager as fm
+        from matplotlib.patches import FancyBboxPatch
+
+        _font_set = False
+        for _fp in ["/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]:
+            if os.path.exists(_fp):
+                fm.fontManager.addfont(_fp)
+                plt.rcParams["font.family"] = fm.FontProperties(fname=_fp).get_name()
+                _font_set = True
+                break
+        if not _font_set:
+            plt.rcParams["font.sans-serif"] = ["NanumGothic", "Noto Sans CJK KR", "Malgun Gothic", "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        rows = sorted(items, key=lambda x: x["prem"], reverse=True)[:18]
+        n_rows = len(rows)
+        n_tk = min(len(tk_lines), 8)
+        fig_h = max(6.5, 2.2 + n_rows * 0.42 + n_tk * 0.34)
+        fig = plt.figure(figsize=(12.5, fig_h), facecolor="#0a111d")
+        ax = fig.add_axes([0, 0, 1, 1], facecolor="#0a111d")
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 100)
+        ax.axis("off")
+
+        cols = [(2, "종목"), (12, "EXP"), (22, "계약"), (37, "BUY/SELL"), (48, "수량"), (58, "총 PREM"), (70, "해석")]
+        y_top = 96.5
+        ax.text(2, y_top + 1.2, f"대형 옵션 체결 · 상위 {n_rows}건 (CBOE 실시간 집계)", color="#f8fafc", fontsize=13, fontweight="bold", va="center")
+        y_hdr = y_top - 3.2
+        ax.add_patch(FancyBboxPatch((1.5, y_hdr - 1.8), 97, 3.6, boxstyle="round,pad=0.2", facecolor="#101b2e", edgecolor="#1e3a5f", linewidth=0.8))
+        for cx, cname in cols:
+            ax.text(cx, y_hdr, cname, color="#94a3b8", fontsize=9.5, fontweight="bold", va="center")
+
+        row_step = (y_hdr - 4.0 - (n_tk * 3.1 + 9.0)) / max(n_rows, 1)
+        row_step = min(row_step, 4.1)
+        y_cur = y_hdr - 3.8
+        for idx, it in enumerate(rows):
+            bg = "#0d1626" if idx % 2 == 0 else "#09111e"
+            ax.add_patch(FancyBboxPatch((1.5, y_cur - row_step * 0.45), 97, row_step * 0.88, boxstyle="round,pad=0.1", facecolor=bg, edgecolor="#132238", linewidth=0.5))
+            ax.text(2, y_cur, f"{it['tk']} ({it['kind'][:2]})", color="#e2e8f0", fontsize=9, fontweight="bold", va="center")
+            ax.text(12, y_cur, it["exp"], color="#94a3b8", fontsize=8.8, va="center")
+            cp_col = "#10b981" if it["cp"] == "C" else "#ef4444"
+            cp_bg = "#0b2e26" if it["cp"] == "C" else "#2e1218"
+            cp_nm = "CALL" if it["cp"] == "C" else "PUT"
+            ax.text(22, y_cur, f" {it['strike']:g} {cp_nm} ", color=cp_col, fontsize=8.5, fontweight="bold", va="center", bbox=dict(boxstyle="round,pad=0.22", facecolor=cp_bg, edgecolor=cp_col, linewidth=0.6))
+            sd_col = "#22c55e" if "BUY" in it["side"] else ("#f87171" if "SELL" in it["side"] else "#fbbf24")
+            ax.text(37, y_cur, it["side"], color=sd_col, fontsize=9, fontweight="bold", va="center")
+            ax.text(48, y_cur, f"{it['vol']:,}", color="#cbd5e1", fontsize=8.8, va="center")
+            ax.text(58, y_cur, f"${it['prem']/1e6:.2f}M", color="#fbbf24", fontsize=9, fontweight="bold", va="center")
+            if it["deep"]:
+                note = "깊은 ITM · 헤지/대체 가능"
+                nc = "#94a3b8"
+            elif it["cp"] == "C" and "BUY" in it["side"]:
+                note = f"상승 베팅 · {it['strike']:g} 위로 갈 거라 봄"
+                nc = "#34d399"
+            elif it["cp"] == "P" and "SELL" in it["side"]:
+                note = f"하단 지지 · {it['strike']:g} 아래는 안 간다"
+                nc = "#34d399"
+            elif it["cp"] == "P" and "BUY" in it["side"]:
+                note = f"하락 베팅·헤지 · {it['strike']:g} 아래 대비"
+                nc = "#f87171"
+            elif it["cp"] == "C" and "SELL" in it["side"]:
+                note = f"상단 제한 · {it['strike']:g} 위는 어렵다(저항)"
+                nc = "#f87171"
+            else:
+                note = "사고팔기 섞임 · 방향 불명"
+                nc = "#94a3b8"
+            ax.text(70, y_cur, note, color=nc, fontsize=8.5, va="center")
+            y_cur -= row_step
+
+        box_h = 4.5 + n_tk * 2.9
+        y_box = 2.0
+        ax.add_patch(FancyBboxPatch((1.5, y_box), 97, box_h, boxstyle="round,pad=0.3", facecolor="#0d1b2a", edgecolor="#1e3a5f", linewidth=1.0))
+        ax.text(3, y_box + box_h - 2.2, f"종목별 해석 · 전체: 강세 ${tot_bull/1e6:.1f}M vs 약세 ${tot_bear/1e6:.1f}M → {tot_bias}", color="#38bdf8", fontsize=10, fontweight="bold", va="center")
+        for ti, tline in enumerate(tk_lines[:n_tk]):
+            tc = "#34d399" if "강세 우위" in tline else ("#f87171" if "약세 우위" in tline else "#cbd5e1")
+            ax.text(3.2, y_box + box_h - 4.8 - ti * 2.8, tline, color=tc, fontsize=8.8, va="center")
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor="#0a111d")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception as _er:
+        print("render_bigflows_card err:", _er, flush=True)
+        return None
+
 
 def answer_callback(token, cb_id):
     try:
@@ -511,7 +620,10 @@ def handle_command(token, chat_id, text):
 
     elif low in ("/대형체결", "/bigflows", "/체결요약") or cmd == "cmd:bigflows":
         send_msg(token, chat_id, "🧾 대형 옵션 체결 · 신규/증가 스캔 중...")
-        send_msg(token, chat_id, build_big_option_flows_summary())
+        _bf_txt, _bf_png = build_big_option_flows_summary()
+        if _bf_png:
+            send_photo_bytes(token, chat_id, _bf_png, "🧾 대형 옵션 체결 상위 표 & 종목별 해석")
+        send_msg(token, chat_id, _bf_txt)
 
     elif low in ("/종합평", "/summary") or cmd == "cmd:summary":
         send_msg(token, chat_id, get_app_review())
@@ -1801,14 +1913,14 @@ def build_big_option_flows_summary():
                         bear_p = prem
                 items.append({
                     "tk": tk, "cp": cp_ch, "strike": strike, "exp": mm_dd,
-                    "prem": prem, "side": side, "kind": kind_tag,
+                    "vol": vol, "prem": prem, "side": side, "kind": kind_tag,
                     "bull_p": bull_p, "bear_p": bear_p, "deep": is_deep_itm,
                 })
         except Exception:
             continue
 
     if not items:
-        return "🧾 대형 옵션 체결 · 신규/증가\n\n현재 기준($1.5M+) 대형 체결이 없습니다."
+        return "🧾 대형 옵션 체결 · 신규/증가\n\n현재 기준($1.5M+) 대형 체결이 없습니다.", None
 
     dir_items = [x for x in items if not x["deep"]]
     top_items = sorted(dir_items or items, key=lambda x: x["prem"], reverse=True)[:5]
@@ -1859,13 +1971,15 @@ def build_big_option_flows_summary():
         lv_str = f" → {' / '.join(lv_parts)}" if lv_parts else ""
         tk_lines.append(f"- {t} {bias_s} (강세 ${d['bull']/1e6:.1f}M · 약세 ${d['bear']/1e6:.1f}M){lv_str}")
 
-    return (
+    _txt_out = (
         f"🧾 대형 옵션 체결 · 신규/증가 {len(top_items)}건\n"
         + "\n".join(top_lines)
         + f"\n\n전체: 강세 ${tot_bull/1e6:.1f}M vs 약세 ${tot_bear/1e6:.1f}M → {tot_bias}\n"
         + "\n".join(tk_lines)
         + "\n\n(방향은 추정 · 확인 후 판단)"
     )
+    _png_out = _render_bigflows_card_png(dir_items or items, tot_bull, tot_bear, tot_bias, tk_lines)
+    return _txt_out, _png_out
 
 _LAST_BIGFLOW_SCAN_TS = 0.0
 
@@ -1883,8 +1997,10 @@ def auto_scan_big_flows_summary(token, chat_id):
         if now_ts - _LAST_BIGFLOW_SCAN_TS < 1800:
             return
         _LAST_BIGFLOW_SCAN_TS = now_ts
-        msg = build_big_option_flows_summary()
+        msg, png_b = build_big_option_flows_summary()
         if "전체: 강세" in msg:
+            if png_b:
+                send_photo_bytes(token, chat_id, png_b, "🧾 대형 옵션 체결 상위 표 & 종목별 해석")
             send_msg(token, chat_id, msg)
     except Exception:
         pass
@@ -1904,8 +2020,9 @@ def main():
                 auto_scan_option_whales(token, my_chat_id)
                 auto_collect_daily_oi(token, my_chat_id)
                 auto_send_morning_briefing(token, my_chat_id)
-                auto_scan_intraday_option_changes(token, my_chat_id)
-                auto_scan_big_flows_summary(token, my_chat_id)
+                import threading as _th_bg
+                _th_bg.Thread(target=auto_scan_intraday_option_changes, args=(token, my_chat_id), daemon=True).start()
+                _th_bg.Thread(target=auto_scan_big_flows_summary, args=(token, my_chat_id), daemon=True).start()
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
