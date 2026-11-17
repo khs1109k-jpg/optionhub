@@ -273,9 +273,11 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 
     total_put_prem = float(by_k["put_prem"].sum())
 
     # Call Wall & Put Wall
-    _bk_c = by_k[by_k["strike"] >= spot * 0.98]
+    _bk_c = by_k[(by_k["strike"] >= spot * 0.98) & (by_k["strike"] <= spot * 1.25)]
+    if _bk_c.empty: _bk_c = by_k[by_k["strike"] >= spot * 0.98]
     if _bk_c.empty: _bk_c = by_k
-    _bk_p = by_k[by_k["strike"] <= spot * 1.02]
+    _bk_p = by_k[(by_k["strike"] >= spot * 0.80) & (by_k["strike"] <= spot * 1.02)]
+    if _bk_p.empty: _bk_p = by_k[by_k["strike"] <= spot * 1.02]
     if _bk_p.empty: _bk_p = by_k
     call_wall = float(_bk_c.loc[_bk_c["call_gex"].idxmax(), "strike"]) if _bk_c["call_gex"].max() > 0 else float(_bk_c.loc[_bk_c["call_oi"].idxmax(), "strike"])
     put_wall = float(_bk_p.loc[_bk_p["put_gex"].idxmin(), "strike"]) if _bk_p["put_gex"].min() < 0 else float(_bk_p.loc[_bk_p["put_oi"].idxmax(), "strike"])
