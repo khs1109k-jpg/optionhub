@@ -420,32 +420,42 @@ def _get_mm_live_for_gex(tk):
     parts = []
     if res["px"] > 0:
         parts.append(f"무무실시간 ${res['px']:,.2f}")
-    qctx = None
     try:
-        from moomoo import OpenQuoteContext, SubType, RET_OK
-        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
-        qctx.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
-        r_ob, df_ob = qctx.get_order_book(sym, num=10)
-        if r_ob == RET_OK and isinstance(df_ob, dict):
-            bids = df_ob.get("Bid") or []
-            asks = df_ob.get("Ask") or []
-            if bids:
-                tb = max(bids, key=lambda x: x[1])
-                parts.append(f"매수벽 ${float(tb[0]):.2f}({int(tb[1]):,})")
-            if asks:
-                ta = max(asks, key=lambda x: x[1])
-                parts.append(f"매도벽 ${float(ta[0]):.2f}({int(ta[1]):,})")
-        r_tk, df_tk = qctx.get_rt_ticker(sym, num=200)
-        if r_tk == RET_OK and df_tk is not None and not df_tk.empty:
-            bv = sum(float(tr.get("turnover", 0) or 0) for _, tr in df_tk.iterrows() if "BUY" in str(tr.get("ticker_direction", "")).upper())
-            sv = sum(float(tr.get("turnover", 0) or 0) for _, tr in df_tk.iterrows() if "SELL" in str(tr.get("ticker_direction", "")).upper())
-            parts.append(f"틱CVD {(bv-sv):+,.0f}$")
+        import socket, concurrent.futures
+        with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+            pass
+        def _gex_mm_w():
+            out_p = []
+            from moomoo import OpenQuoteContext, SubType, RET_OK
+            qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+            try:
+                qc.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
+                r_ob, df_ob = qc.get_order_book(sym, num=10)
+                if r_ob == RET_OK and isinstance(df_ob, dict):
+                    bids = df_ob.get("Bid") or []
+                    asks = df_ob.get("Ask") or []
+                    if bids:
+                        tb = max(bids, key=lambda x: x[1])
+                        out_p.append(f"매수벽 ${float(tb[0]):.2f}({int(tb[1]):,})")
+                    if asks:
+                        ta = max(asks, key=lambda x: x[1])
+                        out_p.append(f"매도벽 ${float(ta[0]):.2f}({int(ta[1]):,})")
+                r_tk, df_tk = qc.get_rt_ticker(sym, num=200)
+                if r_tk == RET_OK and df_tk is not None and not df_tk.empty:
+                    bv = sum(float(tr.get("turnover", 0) or 0) for _, tr in df_tk.iterrows() if "BUY" in str(tr.get("ticker_direction", "")).upper())
+                    sv = sum(float(tr.get("turnover", 0) or 0) for _, tr in df_tk.iterrows() if "SELL" in str(tr.get("ticker_direction", "")).upper())
+                    out_p.append(f"틱CVD {(bv-sv):+,.0f}$")
+            finally:
+                try: qc.close()
+                except Exception: pass
+            return out_p
+        _ex_g = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            parts.extend(_ex_g.submit(_gex_mm_w).result(timeout=1.0))
+        finally:
+            _ex_g.shutdown(wait=False)
     except Exception:
         pass
-    finally:
-        if qctx is not None:
-            try: qctx.close()
-            except Exception: pass
     res["summary"] = " | ".join(parts)
     return res
 
