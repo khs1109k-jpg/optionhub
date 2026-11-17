@@ -56,6 +56,19 @@ WL_PATH = os.path.expanduser("~/.optionhub_watchlist.json")
 JOURNAL_PATH = os.path.expanduser("~/.optionhub_journal.json")
 
 
+
+def _snap_total_oi(sn):
+    try:
+        return sum(int(x.get("OI", 0) or 0) for x in (sn.get("상세") or []))
+    except Exception:
+        return 0
+
+def _pick_valid_snaps(snaps):
+    if not isinstance(snaps, list):
+        return []
+    valid = [s for s in snaps if _snap_total_oi(s) >= 500]
+    return valid if valid else snaps
+
 OI_PATH = os.path.expanduser("~/.optionhub_oi_history.json")
 BIG_FLOWS_PATH = os.path.expanduser("~/.optionhub_big_flows.json")
 
@@ -1004,7 +1017,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     opt_bars = []
     _opt_src_tk = opt_tk if opt_tk in oi_hist_m else clean_tk
     if _opt_src_tk in oi_hist_m and oi_hist_m[_opt_src_tk]:
-        snap_m = oi_hist_m[_opt_src_tk][-1]
+        snap_m = _pick_valid_snaps(oi_hist_m[_opt_src_tk])[-1]
         det_m = snap_m.get("상세", [])
         spot_m = float(snap_m.get("Spot", cur["px"] or 0) or 0)
         calls_m = [x for x in det_m if x.get("구분") == "Call"]

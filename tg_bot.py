@@ -1078,6 +1078,8 @@ def auto_collect_daily_oi(token, chat_id):
             if rows:
                 coi = sum(x["OI"] for x in rows if x["구분"] == "Call")
                 poi = sum(x["OI"] for x in rows if x["구분"] == "Put")
+                if coi + poi < 500:
+                    continue
                 hist.setdefault(tk, []).append({
                     "수집시각": now_dt.strftime("%Y-%m-%d %H:%M"),
                     "Spot": round(spot, 2), "Call_OI": coi, "Put_OI": poi,
