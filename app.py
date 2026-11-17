@@ -1789,7 +1789,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             _v_use = float(r_c["volume"] or 0)
             if _v_use <= 0 and abs(float(r_c["close"]) - float(r_c["open"])) > 0:
                 _v_use = round(abs(float(r_c["close"]) - float(r_c["open"])) * 10000.0, 0)
-            o_vol.append({"time": t_i, "value": _v_use, "color": "rgba(38,166,154,0.5)" if is_up else "rgba(239,83,80,0.5)"})
+            o_vol.append({"time": t_i, "value": _v_use, "color": "rgba(38,166,154,0.55)" if is_up else "rgba(239,83,80,0.55)"})
             o_vwap.append({"time": t_i, "value": round(float(r_c["vwap"]), 2)})
             o_cvd.append({"time": t_i, "value": round(float(r_c["cvd"]), 1)})
             o_bii.append({"time": t_i, "value": round(float(r_c["bii"]), 2)})
@@ -2485,7 +2485,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             const barW = Math.max(2, Math.min(6, Math.round((chartRight / Math.max(visVols.length, 30)) * 0.62)));
             visVols.forEach(vv => {{
               const bh = Math.min(maxBarH, Math.max(3, Math.round((vv.val / capV) * maxBarH)));
-              ctx.fillStyle = vv.col.includes("ef") || vv.col.includes("f2") || vv.col.includes("5350") ? "rgba(239,68,68,0.68)" : "rgba(34,197,94,0.68)";
+              ctx.fillStyle = (vv.col.includes("239") || vv.col.includes("ef") || vv.col.includes("f2") || vv.col.includes("5350")) ? "rgba(239,68,68,0.72)" : "rgba(34,197,94,0.72)";
               ctx.fillRect(Math.round(vv.x - barW / 2), plotBot - bh, barW, bh);
             }});
             const picked = [];
