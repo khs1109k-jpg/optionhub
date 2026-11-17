@@ -1003,7 +1003,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             df_dm = pd.DataFrame(det_m)
             _df_put_d = df_dm[df_dm["구분"] == "Put"] if "구분" in df_dm.columns else df_dm
             if spot_m > 0 and not _df_put_d.empty:
-                _df_put_near = _df_put_d[(_df_put_d["행사가"] >= 0.75 * spot_m) & (_df_put_d["행사가"] <= 1.25 * spot_m)]
+                _df_put_near = _df_put_d[(_df_put_d["행사가"] >= 0.88 * spot_m) & (_df_put_d["행사가"] <= 1.12 * spot_m)]
                 if not _df_put_near.empty:
                     _df_put_d = _df_put_near
             if "GEX($M)" in _df_put_d.columns and not _df_put_d.empty:
@@ -1060,7 +1060,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         if _zg_y: zg_lv = _zg_y
                     _df_yp = df_yd[df_yd["구분"] == "Put"]
                     if sp_ref > 0 and not _df_yp.empty:
-                        _df_ypn = _df_yp[(_df_yp["행사가"] >= 0.75 * sp_ref) & (_df_yp["행사가"] <= 1.25 * sp_ref)]
+                        _df_ypn = _df_yp[(_df_yp["행사가"] >= 0.88 * sp_ref) & (_df_yp["행사가"] <= 1.12 * sp_ref)]
                         if not _df_ypn.empty: _df_yp = _df_ypn
                     if "GEX($M)" in _df_yp.columns and not _df_yp.empty:
                         _ygex = _df_yp.groupby("행사가")["GEX($M)"].sum().abs()
