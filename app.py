@@ -755,6 +755,70 @@ def _start_live_quote_server():
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     _db_p = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+    _mm_live_cache = {}
+    _mm_lock = threading.Lock()
+
+    def _fetch_mm_micro(sym_s):
+        now_t = time.time()
+        with _mm_lock:
+            ent = _mm_live_cache.get(sym_s)
+            if ent and (now_t - ent[0]) < 3.5:
+                return ent[1]
+        res = {"ok_mm": False, "bid_wall": None, "ask_wall": None, "ba_ratio": None, "tick_cvd": None, "buy_pct": None, "big_net": None, "small_net": None}
+        qctx = None
+        try:
+            from moomoo import OpenQuoteContext, SubType, RET_OK
+            qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            qctx.subscribe([sym_s], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
+            r_ob, df_ob = qctx.get_order_book(sym_s, num=10)
+            if r_ob == RET_OK and isinstance(df_ob, dict):
+                bids = df_ob.get("Bid") or []
+                asks = df_ob.get("Ask") or []
+                if bids:
+                    top_b = max(bids, key=lambda x: x[1])
+                    res["bid_wall"] = {"p": round(float(top_b[0]), 2), "q": int(top_b[1])}
+                if asks:
+                    top_a = max(asks, key=lambda x: x[1])
+                    res["ask_wall"] = {"p": round(float(top_a[0]), 2), "q": int(top_a[1])}
+                sum_b = sum(float(x[1]) for x in bids)
+                sum_a = sum(float(x[1]) for x in asks)
+                if sum_b + sum_a > 0:
+                    res["ba_ratio"] = round(sum_b / (sum_b + sum_a) * 100.0, 1)
+                res["ok_mm"] = True
+            r_tk, df_tk = qctx.get_rt_ticker(sym_s, num=200)
+            if r_tk == RET_OK and df_tk is not None and not df_tk.empty:
+                buy_v, sell_v = 0.0, 0.0
+                for _, tr in df_tk.iterrows():
+                    d_str = str(tr.get("ticker_direction", "")).upper()
+                    t_amt = float(tr.get("turnover", 0) or (float(tr.get("price", 0) or 0) * float(tr.get("volume", 0) or 0)))
+                    if "BUY" in d_str:
+                        buy_v += t_amt
+                    elif "SELL" in d_str:
+                        sell_v += t_amt
+                res["tick_cvd"] = round(buy_v - sell_v, 0)
+                if buy_v + sell_v > 0:
+                    res["buy_pct"] = round(buy_v / (buy_v + sell_v) * 100.0, 1)
+                res["ok_mm"] = True
+            r_cd, df_cd = qctx.get_capital_distribution(sym_s)
+            if r_cd == RET_OK and df_cd is not None and not df_cd.empty:
+                row0 = df_cd.iloc[0]
+                b_in = float(row0.get("capital_in_big", 0) or 0) + float(row0.get("capital_in_super", 0) or 0)
+                b_out = float(row0.get("capital_out_big", 0) or 0) + float(row0.get("capital_out_super", 0) or 0)
+                s_in = float(row0.get("capital_in_small", 0) or 0)
+                s_out = float(row0.get("capital_out_small", 0) or 0)
+                res["big_net"] = round(b_in - b_out, 0)
+                res["small_net"] = round(s_in - s_out, 0)
+        except Exception:
+            pass
+        finally:
+            if qctx is not None:
+                try:
+                    qctx.close()
+                except Exception:
+                    pass
+        with _mm_lock:
+            _mm_live_cache[sym_s] = (time.time(), res)
+        return res
 
     class _QHandler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -808,6 +872,7 @@ def _start_live_quote_server():
                             v = float(qd.get(ek) or 0)
                             if v > 0:
                                 px = v; break
+                        _mm_ex = _fetch_mm_micro(sym) if qs.get("micro", ["0"])[0] == "1" else {}
                         out = {
                             "ok": px > 0,
                             "sym": sym,
@@ -815,6 +880,7 @@ def _start_live_quote_server():
                             "ts": int(row[0] or time.time()),
                             "vol": float(qd.get("volume") or qd.get("vol") or 0),
                             "bars": bars_out[-30:],
+                            "micro": _mm_ex,
                         }
                 body = json.dumps(out).encode("utf-8")
                 self.send_response(200)
@@ -1802,6 +1868,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
       <span>🟡 <b>FLIP GAMMA</b>: <b style="color:#f59e0b;">{f"${zg_lv:g}" if zg_lv else "-"}</b></span>
       <span>🔵 <b>1σ 상단/하단</b>: <b style="color:#38bdf8;">{f"${sig_l_lv:g} ~ ${sig_h_lv:g}" if (sig_h_lv and sig_l_lv) else "-"}</b></span>
       <span>⚪ <b>OPEN</b>: <b style="color:#e2e8f0;">{f"${merged_tf_sets['1일봉'][-1]['open']:g}" if merged_tf_sets.get("1일봉") else "-"}</b></span>
+      <span id="tv_micro_bar" style="margin-left:auto; color:#94a3b8; font-size:11px;">📡 무무 60호가 · 틱CVD · 휩쏘감시 대기중</span>
     </div>
     <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
@@ -2441,7 +2508,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         try {{
           if (!liveLastBar || curTfSec >= 86400) return;
           const host = (window.parent && window.parent.location && window.parent.location.hostname) || window.location.hostname || "132.226.3.145";
-          const resp = await fetch(`http://${{host}}:8502/quote?sym=${{encodeURIComponent(d.sym || "")}}&sec=${{curTfSec}}`, {{ cache: "no-store" }});
+          const resp = await fetch(`http://${{host}}:8502/quote?sym=${{encodeURIComponent(d.sym || "")}}&sec=${{curTfSec}}&micro=1`, {{ cache: "no-store" }});
           if (!resp.ok) return;
           const q = await resp.json();
           if (!q || !q.ok || !q.px) return;
@@ -2483,6 +2550,24 @@ if nav_menu == "⚡ 무무 실시간 차트":
             sBii.update({{ time: liveLastBar.time, value: biiVal }});
           }}
           updateHud(liveLastBar, true);
+          const mBar = document.getElementById("tv_micro_bar");
+          if (mBar && q.micro && q.micro.ok_mm) {{
+            const mc = q.micro;
+            const bwS = mc.bid_wall ? `매수벽 $${{mc.bid_wall.p}}(${{mc.bid_wall.q.toLocaleString()}})` : "";
+            const awS = mc.ask_wall ? `매도벽 $${{mc.ask_wall.p}}(${{mc.ask_wall.q.toLocaleString()}})` : "";
+            const tCvd = mc.tick_cvd !== null ? `틱CVD ${{mc.tick_cvd >= 0 ? "+" : ""}}${{fmtCompact(mc.tick_cvd)}}` : "";
+            const bPct = mc.buy_pct !== null ? `(매수 ${{mc.buy_pct}}%)` : "";
+            const bigS = mc.big_net !== null ? `기관 ${{mc.big_net >= 0 ? "+" : ""}}${{fmtCompact(mc.big_net)}}` : "";
+            let wsScore = 0;
+            if (d.zg && Math.abs(px - Number(d.zg)) / Math.max(px, 1) <= 0.012) wsScore += 1;
+            if (mc.tick_cvd !== null && liveLastBar) {{
+              const upBar = liveLastBar.close > liveLastBar.open;
+              if ((upBar && mc.tick_cvd < 0) || (!upBar && mc.tick_cvd > 0)) wsScore += 1;
+            }}
+            if (mc.big_net !== null && liveLastBar && liveLastBar.close > liveLastBar.open && mc.big_net < 0) wsScore += 1;
+            const wsTag = wsScore >= 2 ? `<b style="color:#ef4444;">🔴 휩쏘경보(${{wsScore}})</b>` : (wsScore === 1 ? `<b style="color:#f59e0b;">🟡 휩쏘주의</b>` : `<b style="color:#22c55e;">🟢 정상수급</b>`);
+            mBar.innerHTML = `${{wsTag}} · <span style="color:#22c55e;">${{bwS}}</span> / <span style="color:#f87171;">${{awS}}</span> · <span style="color:#38bdf8;">${{tCvd}} ${{bPct}}</span> · <span style="color:#fbbf24;">${{bigS}}</span>`;
+          }}
         }} catch (e) {{}}
       }}, 2000);
     </script>
@@ -3169,6 +3254,27 @@ def _compute_top10_oi_surge(oi_hist, all_raw_flows, saved_big_flows):
     rows.sort(key=lambda x: (x["기관점수"], x["프리미엄($M)"]), reverse=True)
     return rows[:10]
 
+
+def format_emoji_review(raw_txt):
+    """종합평 텍스트에 섹션별 이모티콘·줄바꿈·강조 포맷을 자동 적용"""
+    import re
+    s = str(raw_txt or "").strip()
+    if not s:
+        return s
+    s = re.sub(r"\s*(\[[^\]]+\])\s*", r"📣 **\1**\n\n", s, count=1)
+    reps = [
+        (r"\s*1\)\s*시장\s*총평\s*:?", "\n\n📌 **1️⃣ 시장 총평**\n• "),
+        (r"\s*2\)\s*기관\s*수급\s*핵심\s*:?", "\n\n🏦 **2️⃣ 기관 수급 핵심**\n• "),
+        (r"\s*3\)\s*섹터별\s*전략\s*:?", "\n\n🎯 **3️⃣ 섹터별 전략**\n• "),
+        (r"\s*4\)\s*주목\s*종목\s*:?", "\n\n👀 **4️⃣ 주목 종목**\n• "),
+        (r"\s*5\)\s*리스크\s*요인\s*:?", "\n\n⚠️ **5️⃣ 리스크 요인**\n• "),
+    ]
+    for pat, rep in reps:
+        s = re.sub(pat, rep, s)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s
+
+
 if nav_menu == "📝 오늘의 종합평":
     st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
     st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
@@ -3189,13 +3295,33 @@ if nav_menu == "📝 오늘의 종합평":
             st.dataframe(pd.DataFrame(_hm_top10), hide_index=True, use_container_width=True)
 
 
+    _df_rv = load_ai_notes_sheet()
+    _latest_rv_txt, _latest_rv_dt = "", ""
+    if not _df_rv.empty:
+        _mask_rv = _df_rv.apply(lambda r: "종합평" in str(r.to_dict()), axis=1)
+        _rv_rows = _df_rv[_mask_rv]
+        if not _rv_rows.empty:
+            _lr = _rv_rows.iloc[-1]
+            _latest_rv_dt = str(_lr.get("날짜", ""))
+            _latest_rv_txt = format_emoji_review(str(_lr.get("한글 번역/해석", "")))
+
     col_r1, col_r2 = st.columns([4, 1])
     with col_r2:
         if st.button("📩 이 종합평 텔레그램으로 바로 보내기", type="primary", use_container_width=True):
             t_tok, t_cid = load_tg_config()
-            ok, msg = send_telegram_msg(t_tok, t_cid, DAILY_REVIEW_2026_11_11)
+            _send_body = f"📝 [OptionHub 자동 종합평] {_latest_rv_dt}\n\n{_latest_rv_txt}" if _latest_rv_txt else DAILY_REVIEW_2026_11_11
+            ok, msg = send_telegram_msg(t_tok, t_cid, _send_body)
             if ok: st.success(f"✅ {msg}")
             else: st.error(f"❌ {msg}")
+
+    if _latest_rv_txt:
+        _html_rv = _latest_rv_txt.replace("\n", "<br>").replace("**", "")
+        st.markdown(f"""
+        <div class='flow-card' style='border-left: 4px solid #fbbf24; background: #0f172a; padding: 14px 18px; border-radius: 8px; margin-bottom: 12px;'>
+            <div style='color:#fbbf24; font-weight:800; font-size:15px; margin-bottom:8px;'>📝 최신 자동 종합평 ({_latest_rv_dt})</div>
+            <div style='color:#e2e8f0; font-size:14px; line-height:1.75;'>{_html_rv}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("""
     <div class='flow-card' style='border-left: 4px solid #3b82f6;'>
@@ -3896,6 +4022,73 @@ if nav_menu == "📊 OI(미결제약정) 수집":
             st.success(f"✅ {m_tk} 수동 OI 스냅샷 저장 완료!")
 
 # ================= TAB WATCH: PERSONAL WATCHLIST =================
+    # [추가] 5일 OI 변화 히트맵 · 벽(Wall) 이동 추적 · 대량 청산(Unwind) 경보
+    st.markdown("---")
+    st.subheader("🗺️ 5일 OI 변화 히트맵 · Wall 이동 · 대량 청산(Unwind) 경보")
+    _hm_hist = load_json_file(OI_PATH, {})
+    _hm_tks = [k for k, v in _hm_hist.items() if isinstance(v, list) and len(v) >= 1]
+    if _hm_tks:
+        _hm_tk = st.selectbox("히트맵 종목 선택", sorted(_hm_tks), index=sorted(_hm_tks).index("SOXL") if "SOXL" in _hm_tks else 0, key="oi_hm_tk")
+        _snaps_hm = _hm_hist.get(_hm_tk, [])[-5:]
+        _wall_rows = []
+        _oi_mat = {}
+        _dates_hm = []
+        for _sn in _snaps_hm:
+            _dt_h = str(_sn.get("수집시각", _sn.get("날짜", "-")))[:10]
+            _dates_hm.append(_dt_h)
+            _det_h = _sn.get("상세", [])
+            _sp_h = float(_sn.get("Spot", 0) or 0)
+            _calls_h = [x for x in _det_h if x.get("구분") == "Call"]
+            _puts_h = [x for x in _det_h if x.get("구분") == "Put"]
+            _cw_h = max(_calls_h, key=lambda x: x.get("OI", 0)).get("행사가") if _calls_h else None
+            _pw_h = max(_puts_h, key=lambda x: x.get("OI", 0)).get("행사가") if _puts_h else None
+            _net_g_h = round(sum(float(x.get("GEX($M)", 0) or 0) for x in _det_h), 2)
+            _wall_rows.append({"날짜": _dt_h, "Spot": f"${_sp_h:.2f}" if _sp_h else "-", "Call Wall": f"${_cw_h:g}" if _cw_h else "-", "Put Wall": f"${_pw_h:g}" if _pw_h else "-", "Net GEX($M)": f"{_net_g_h:+.2f}M"})
+            for _x in _det_h:
+                _k_h = float(_x.get("행사가", 0) or 0)
+                if _sp_h > 0 and not (0.7 * _sp_h <= _k_h <= 1.3 * _sp_h):
+                    continue
+                _lbl_k = f"${_k_h:g} {'C' if _x.get('구분')=='Call' else 'P'}"
+                _oi_mat.setdefault(_lbl_k, {})[_dt_h] = _oi_mat.get(_lbl_k, {}).get(_dt_h, 0) + int(_x.get("OI", 0) or 0)
+
+        if _wall_rows:
+            st.markdown("**📌 날짜별 Call Wall / Put Wall 이동 추적**")
+            st.dataframe(pd.DataFrame(_wall_rows), use_container_width=True, hide_index=True)
+
+        if len(_snaps_hm) >= 2 and _oi_mat:
+            _d_prev, _d_last = _dates_hm[-2], _dates_hm[-1]
+            _unwinds = []
+            _surges = []
+            for _lk, _dmap in _oi_mat.items():
+                _v0 = int(_dmap.get(_d_prev, 0))
+                _v1 = int(_dmap.get(_d_last, 0))
+                _dv = _v1 - _v0
+                if _v0 >= 1000 and _dv <= -max(500, int(_v0 * 0.25)):
+                    _unwinds.append(f"{_lk} ({_dv:+,}, {_dv/_v0*100:.1f}%)")
+                elif _dv >= 500:
+                    _surges.append((_dv, f"{_lk} (+{_dv:,}, 총 {_v1:,})"))
+            _c_al1, _c_al2 = st.columns(2)
+            if _surges:
+                _surges.sort(reverse=True)
+                _c_al1.success("🔥 **전일 대비 확정 ΔOI 급증 TOP3**\n\n" + "\n".join(f"- {x[1]}" for x in _surges[:3]))
+            if _unwinds:
+                _c_al2.warning("⚠️ **OPEX · 대형 OI 청산(Unwind -25%+) 경보**\n\n" + "\n".join(f"- {u}" for u in _unwinds[:4]))
+
+        if _oi_mat:
+            _df_hm = pd.DataFrame.from_dict(_oi_mat, orient="index").fillna(0).astype(int)
+            _df_hm["_tot"] = _df_hm.sum(axis=1)
+            _df_hm = _df_hm.sort_values("_tot", ascending=False).head(15).drop(columns=["_tot"])
+            if not _df_hm.empty:
+                fig_hm = go.Figure(data=go.Heatmap(
+                    z=_df_hm.values, x=list(_df_hm.columns), y=list(_df_hm.index),
+                    colorscale="YlOrRd", text=_df_hm.values, texttemplate="%{text:,}",
+                    hovertemplate="행사가: %{y}<br>날짜: %{x}<br>OI: %{z:,}<extra></extra>"
+                ))
+                fig_hm.update_layout(title=f"{_hm_tk} 행사가별 5일 OI 누적 히트맵 (상위 15개)", template="plotly_dark", height=420, margin=dict(l=70, r=20, t=45, b=30))
+                st.plotly_chart(fig_hm, use_container_width=True)
+    else:
+        st.info("아직 저장된 OI 스냅샷이 없습니다. 위에서 OI 수집을 1회 이상 실행하면 5일 변화 히트맵이 표시됩니다.")
+
 if nav_menu == "⭐ 내 관심종목":
     st.title("⭐ 내 관심종목 (Watchlist) 전용 모아보기")
     st.caption("보유 중이거나 주시하는 종목만 골라 수급과 뉴스를 한눈에 확인하고 텔레그램으로 바로 받아보세요.")
@@ -4940,6 +5133,80 @@ def get_gemini_api_key():
             pass
     return ""
 
+
+def get_moomoo_live_snapshot(tk):
+    """moomoo.db 실시간 가격 + OpenD 60호가/틱CVD/기관자금을 AI 분석용으로 통합 조회"""
+    import sqlite3
+    clean = str(tk or "").strip().upper().replace("US.", "")
+    sym = f"US.{clean}"
+    out = {"ok": False, "px": 0.0, "bid_wall": None, "ask_wall": None, "tick_cvd": None, "buy_pct": None, "big_net": None, "summary": "무무 실시간 미연결"}
+    db_p = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+    try:
+        if os.path.exists(db_p):
+            con = sqlite3.connect(f"file:{db_p}?mode=ro", uri=True, timeout=2)
+            row = con.execute("SELECT data FROM quotes WHERE sym=?", (sym,)).fetchone()
+            con.close()
+            if row and row[0]:
+                qd = json.loads(row[0])
+                for ek in ("overnight_price", "after_price", "pre_price", "ext_price", "last_price", "px", "price"):
+                    v = float(qd.get(ek) or 0)
+                    if v > 0:
+                        out["px"] = round(v, 2); out["ok"] = True; break
+    except Exception:
+        pass
+    qctx = None
+    try:
+        from moomoo import OpenQuoteContext, SubType, RET_OK
+        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        qctx.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
+        r_ob, df_ob = qctx.get_order_book(sym, num=10)
+        if r_ob == RET_OK and isinstance(df_ob, dict):
+            bids = df_ob.get("Bid") or []
+            asks = df_ob.get("Ask") or []
+            if bids:
+                tb = max(bids, key=lambda x: x[1])
+                out["bid_wall"] = (round(float(tb[0]), 2), int(tb[1]))
+            if asks:
+                ta = max(asks, key=lambda x: x[1])
+                out["ask_wall"] = (round(float(ta[0]), 2), int(ta[1]))
+            out["ok"] = True
+        r_tk, df_tk = qctx.get_rt_ticker(sym, num=200)
+        if r_tk == RET_OK and df_tk is not None and not df_tk.empty:
+            bv, sv = 0.0, 0.0
+            for _, tr in df_tk.iterrows():
+                ds = str(tr.get("ticker_direction", "")).upper()
+                amt = float(tr.get("turnover", 0) or (float(tr.get("price", 0) or 0) * float(tr.get("volume", 0) or 0)))
+                if "BUY" in ds: bv += amt
+                elif "SELL" in ds: sv += amt
+            out["tick_cvd"] = round(bv - sv, 0)
+            if bv + sv > 0:
+                out["buy_pct"] = round(bv / (bv + sv) * 100.0, 1)
+            out["ok"] = True
+        r_cd, df_cd = qctx.get_capital_distribution(sym)
+        if r_cd == RET_OK and df_cd is not None and not df_cd.empty:
+            r0 = df_cd.iloc[0]
+            bi = float(r0.get("capital_in_big", 0) or 0) + float(r0.get("capital_in_super", 0) or 0)
+            bo = float(r0.get("capital_out_big", 0) or 0) + float(r0.get("capital_out_super", 0) or 0)
+            out["big_net"] = round(bi - bo, 0)
+    except Exception:
+        pass
+    finally:
+        if qctx is not None:
+            try: qctx.close()
+            except Exception: pass
+    parts = []
+    if out["px"] > 0: parts.append(f"무무실시간가 ${out['px']:,.2f}")
+    if out["bid_wall"]: parts.append(f"60호가매수벽 ${out['bid_wall'][0]}({out['bid_wall'][1]:,}주)")
+    if out["ask_wall"]: parts.append(f"60호가매도벽 ${out['ask_wall'][0]}({out['ask_wall'][1]:,}주)")
+    if out["tick_cvd"] is not None:
+        parts.append(f"틱CVD {out['tick_cvd']:+,.0f}$ (매수비중 {out['buy_pct']}%)")
+    if out["big_net"] is not None:
+        parts.append(f"기관순매수 {out['big_net']:+,.0f}$")
+    if parts:
+        out["summary"] = " | ".join(parts)
+    return out
+
+
 def run_ai_analysis(prompt_text, img_b64=None, img_path=None):
     """Gemini 무료 API 우선 호출 (이미지 Vision 지원) -> 키 없거나 실패 시 로컬 Ollama(qwen2.5:7b) 무료 폴백"""
     import urllib.request
@@ -5761,7 +6028,8 @@ if nav_menu == "🎯 행사가별·동반 체결":
                     _auto_flows.append(f"[TG] {_th.get('exp','')} {_th.get('strike','')} {_th.get('cp','')} {_th.get('side','')} {_th.get('prem_str','')} ({_th.get('qty',0):,}계약 · {_th.get('tag','')})")
                 _auto_flow_txt = chr(10).join(_auto_flows) if _auto_flows else "수신된 외부 대량 체결 없음 (체인 기준 분석)"
 
-                _spot_use = _proto_px_ov if _proto_px_ov > 0 else spot_live
+                _mm_snap = get_moomoo_live_snapshot(tk_f)
+                _spot_use = _proto_px_ov if _proto_px_ov > 0 else (_mm_snap["px"] if _mm_snap["px"] > 0 else spot_live)
                 _regime_txt = "포지티브 감마(+GEX)" if _tot_gex >= 0 else "네거티브 감마(-GEX)"
                 _proto_prompt = f"""[시스템 프롬프트: 옵션 데이터 기반 기계적 데이트레이딩 터미널 모드]
 너는 감정, 위로, 매크로 내러티브(뉴스/시황), 주관적 추측을 완전히 배제하고 오직 아래 입력된 옵션 데이터(GEX, 행사가별 거래량, OI 변화)의 수학적/기계적 역학만으로 답변하는 데이터 터미널이다.
@@ -5776,11 +6044,18 @@ if nav_menu == "🎯 행사가별·동반 체결":
 {chr(10).join(_top_lines)}
 - 자동 연동 대량 체결 (구글 시트 · 텔레그램):
 {_auto_flow_txt}
+- 무무 실시간 수급(60호가·틱CVD·기관자금): {_mm_snap["summary"]}
 - 추가 수동 입력: {_proto_extra.strip() if _proto_extra.strip() else '없음'}
 
-[트레이더 제약 조건]
+[트레이더 제약 조건 & 휩쏘(Whipsaw) 정밀 필터 5원칙]
 - 타임프레임: 오버나잇 없는 순수 '당일 진입 · 당일 청산' 데이트레이딩 (당일 마찰 노드 기준).
 - 계좌 제약(일본 증권사 현물 계좌 차금결제 제한): 당일 매수 후 매도한 자금으로 동일 종목 당일 재매수 불가 → 가장 승률 높은 자리에서 '1일 1회 왕복(One Shot, One Kill)' 기준.
+- 휩쏘(가짜 돌파) 방어 5원칙:
+  1) Flip Gamma ±1% 이내 또는 음감마(-GEX) 구간에서는 돌파 즉시 추격 금지(5~15분봉 종가 안착 확인).
+  2) 가격 돌파 시 CVD·HIRO·틱 매수세가 역방향(다이버전스)이면 유동성 털기(휩쏘)로 판정.
+  3) 거래량 스파이크 + 긴 윗/아랫꼬리 발생 시 스탑 헌팅 경보 발령.
+  4) 0DTE/대형 OI Wall 근접 시 핀닝 회귀 가능성 반영.
+  5) 위 휩쏘 조건 2개 이상 동시 충족 시 성급한 Long/Short 대신 반드시 HOLD(관망) 우선.
 
 [출력 포맷 - 반드시 아래 2개 섹션으로만 기계적 출력]
 1. 데이터 역학 구조 (Regime & Nodes)
@@ -5804,7 +6079,8 @@ if nav_menu == "🎯 행사가별·동반 체결":
                     _long_reject = "Reject (추격 매수 거부)" if not _is_pos else "조건부 진입 가능"
                     _proto_out = (
                         f"### 1. 데이터 역학 구조 (Regime & Nodes)\n"
-                        f"* **감마 체제 판정**: 현재가 `${_spot_use:,.2f}` ({_proto_sess}) vs 감마 플립 `${_zg_v:,.2f}` → **{_reg_s}** (`총 Net GEX ${_tot_gex:+.2f}M`). 딜러 기본 헷징 방향은 **{_hedge_s}**입니다.\n"
+                        f"* **감마 체제 & 무무 실시간 수급**: 현재가 `${_spot_use:,.2f}` ({_proto_sess}) vs 감마 플립 `${_zg_v:,.2f}` → **{_reg_s}** (`총 Net GEX ${_tot_gex:+.2f}M`). 딜러 기본 헷징 방향은 **{_hedge_s}**입니다.\n"
+                        f"  * 📡 **무무 실시간**: {_mm_snap['summary']}\n"
                         f"* **콜/풋 월 & 마찰 노드**: 메인 저항 **Call Wall `${_cw_v:g}`**, 메인 지지 **Put Wall `${_pw_v:g}`**, P/C 비율 `Vol {_pc_vol} · OI {_pc_oi}`. 상위 마찰 행사가:\n"
                         + chr(10).join(f"  {ln}" for ln in _top_lines[:5]) + "\n\n"
                         f"### 2. 기계적 실행 프로토콜 (Long / Short / Hold)\n"
@@ -5818,8 +6094,8 @@ if nav_menu == "🎯 행사가별·동반 체결":
                         f"  * **타점 A (리젝션 숏)**: `${_zg_v:,.2f}` (Flip) 또는 **Call Wall `${_cw_v:g}`** 도달 후 윗꼬리 저항 시 `{_inv_tk}` 매수\n"
                         f"  * **타점 B (브레이크아웃 숏)**: `${_spot_use*0.98:,.2f}` 하단 노드 거래량 동반 이탈 시 `{_inv_tk}` 추격 매수\n"
                         f"  * **당일 익절가 / 손절가**: 익절 **Put Wall `${_pw_v:g}`** / 손절 `${_cw_v*1.01:,.2f}` 돌파 안착 시\n"
-                        f"* **C. 관망 (Hold / No Trade) 조건**\n"
-                        f"  * **`${_mid_lo:,.2f}` ~ `${_mid_hi:,.2f}`** 구간 횡보 시 상·하단 GEX 마찰이 겹쳐 손익비 `1:1` 미만이므로 매매를 중지하고 대기합니다."
+                        f"* **C. 관망 (Hold / No Trade) 및 휩쏘(Whipsaw) 방어 조건**\n"
+                        f"  * **`${_mid_lo:,.2f}` ~ `${_mid_hi:,.2f}`** 구간 횡보 또는 **Flip `${_zg_v:,.2f}` ±1% 인접 + 음감마(-GEX)** 휩쏘 구간에서는 1일 1회 차금결제 보호를 위해 추격 진입을 중지하고 `5~15분봉 안착`·`틱 CVD 동조` 확인 전까지 관망합니다."
                     )
                 st.session_state[f"proto_report_{tk_f}"] = _proto_out
 
@@ -6347,7 +6623,7 @@ def build_insider_section_gcal_events(mm, sc, idx, tr_val="", ko_val="", auto_ai
     return _created, ko_val
 
 if nav_menu == "📬 인사이더 파이낸셜":
-    st.title("📬 인사이더 파이낸셜 (InsiderFinance · 아침 메일 자동 피드)")
+    st.title("📬 인사이더 · 긱스 · 멘도큐 통합 수신함 (아침 메일 자동 피드)")
     st.caption("아침에 수신되는 InsiderFinance · MenthorQ · Barchart · SpotGamma 메일을 Oracle DB 및 서버 수신함에서 불러와 Gemini AI 한국어 요약과 함께 표시합니다.")
 
     INSIDER_MAIL_PATH = os.path.expanduser("~/.optionhub_insider_mails.json")
@@ -6434,13 +6710,51 @@ if nav_menu == "📬 인사이더 파이낸셜":
         st.rerun()
 
     ords_mails, ords_ok = _fetch_ords_mails()
-    # 로컬 수신함 + ORDS 통합 (중복 제목 제거)
+    # 구글 시트(AI노트_뉴스시황)의 InsiderFinance · Geeks of Finance · Menthor Q · SpotGamma 통합 수집
+    sheet_ins_mails = []
+    try:
+        _df_ins_sh = load_ai_notes_sheet()
+        if not _df_ins_sh.empty:
+            for _idx_s, _rs in _df_ins_sh.iloc[::-1].iterrows():
+                _blob_s = str(_rs.to_dict())
+                _bu = _blob_s.upper()
+                _src_tag = None
+                if any(k in _bu for k in ("INSIDER", "EVENING EDGE", "인사이더")):
+                    _src_tag = "InsiderFinance"
+                elif any(k in _bu for k in ("GEEK", "GREEKS", "긱스", "그릭스")):
+                    _src_tag = "Geeks of Finance"
+                elif any(k in _bu for k in ("MENTHOR", "멘토", "멘도")):
+                    _src_tag = "Menthor Q"
+                elif any(k in _bu for k in ("SPOTGAMMA", "스팟감마")):
+                    _src_tag = "SpotGamma"
+                if _src_tag:
+                    _sttl = str(_rs.get("제목", _rs.get("섹션", f"{_src_tag} 리포트"))).strip()
+                    _sbody = str(_rs.get("한글 번역/해석", _rs.get("원문", _rs.get("내용", "")))).strip()
+                    _sdt = str(_rs.get("날짜", ""))[:16]
+                    sheet_ins_mails.append({
+                        "id": f"sh_{_src_tag[:4]}_{hash(_sttl + _sdt)}",
+                        "날짜": _sdt,
+                        "출처": _src_tag,
+                        "제목": _sttl or f"{_src_tag} 리포트",
+                        "원문": _sbody,
+                        "요약": _sbody,
+                        "종목": ", ".join(extract_silpi_symbols(_sttl + " " + _sbody)[:5]) or "공통",
+                    })
+    except Exception:
+        pass
+
+    # 로컬 수신함 + ORDS + 구글 시트 통합 후 신규 건은 로컬 JSON에 자동 영구 저장
     merged_mails = list(local_mails)
     seen_titles = {m.get("제목", "") for m in merged_mails}
-    for om in ords_mails:
-        if om.get("제목") not in seen_titles:
-            merged_mails.append(om)
+    _added_cnt = 0
+    for om in (ords_mails + sheet_ins_mails):
+        if om.get("제목") and om.get("제목") not in seen_titles:
+            merged_mails.insert(0, om)
+            local_mails.insert(0, om)
             seen_titles.add(om.get("제목", ""))
+            _added_cnt += 1
+    if _added_cnt > 0:
+        save_json_file(INSIDER_MAIL_PATH, local_mails[:100])
 
     im_c1.info(
         f"📡 Oracle ORDS 연동: **{'정상' if ords_ok else '로컬 수신함 모드'}** · "
@@ -6489,14 +6803,21 @@ if nav_menu == "📬 인사이더 파이낸셜":
                 st.success("✅ 저장되었습니다!")
                 st.rerun()
 
-    # 검색 필터
-    f_ins1, f_ins2 = st.columns([2.5, 1.0])
+    # 검색 & 출처 필터
+    f_ins1, f_ins2, f_ins3 = st.columns([2.0, 1.2, 1.0])
     ins_kw = f_ins1.text_input("🔍 메일 검색 (종목 · 제목 · 내용)", "", key="ins_kw").strip().lower()
-    ins_tk_filter = f_ins2.text_input("티커 필터", "", placeholder="예: SOXL, NVDA", key="ins_tk_f").strip().upper()
+    ins_src_filter = f_ins2.selectbox("출처 필터", ["전체", "InsiderFinance", "Geeks of Finance", "Menthor Q", "SpotGamma"], key="ins_src_f")
+    ins_tk_filter = f_ins3.text_input("티커 필터", "", placeholder="예: SOXL, NVDA", key="ins_tk_f").strip().upper()
 
     shown_mails = []
     for mm in merged_mails:
-        blob = (mm.get("제목", "") + " " + mm.get("요약", "") + " " + mm.get("원문", "") + " " + mm.get("종목", "")).lower()
+        blob = (mm.get("출처", "") + " " + mm.get("제목", "") + " " + mm.get("요약", "") + " " + mm.get("원문", "") + " " + mm.get("종목", "")).lower()
+        if ins_src_filter != "전체":
+            _su = str(mm.get("출처", "")).upper()
+            if ins_src_filter == "InsiderFinance" and "INSIDER" not in _su and "인사이더" not in _su: continue
+            if ins_src_filter == "Geeks of Finance" and not any(k in _su for k in ("GEEK", "GREEKS", "긱스", "그릭스")): continue
+            if ins_src_filter == "Menthor Q" and not any(k in _su for k in ("MENTHOR", "멘토", "멘도")): continue
+            if ins_src_filter == "SpotGamma" and not any(k in _su for k in ("SPOT", "스팟")): continue
         if ins_kw and ins_kw not in blob:
             continue
         if ins_tk_filter and ins_tk_filter not in blob.upper():
