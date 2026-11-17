@@ -3181,8 +3181,9 @@ if nav_menu == "⚡ 무무 실시간 차트":
             import socket as _sk_bf, concurrent.futures as _cf_bf
             with _sk_bf.create_connection(("127.0.0.1", 11111), timeout=0.2):
                 pass
+            _mm_diag_msgs = []
             def _fetch_mm_bk_fl_w():
-                _out_bk, _out_fl = {}, {}
+                _out_bk, _out_fl, _errs = {}, {}, []
                 from moomoo import OpenQuoteContext, SubType, RET_OK
                 _qc_b = OpenQuoteContext(host="127.0.0.1", port=11111)
                 try:
@@ -3191,40 +3192,73 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         try:
                             _qc_b.subscribe([_sym_b], [SubType.ORDER_BOOK], subscribe_push=False)
                             _rb, _dfb = _qc_b.get_order_book(_sym_b, num=15)
-                            if _rb == RET_OK and isinstance(_dfb, dict):
+                            if _rb == RET_OK and isinstance(_dfb, dict) and (_dfb.get("Bid") or _dfb.get("Ask")):
                                 _out_bk = {"Bid": _dfb.get("Bid") or [], "Ask": _dfb.get("Ask") or []}
-                        except Exception:
-                            pass
+                            else:
+                                _rs_b, _dfs_b = _qc_b.get_market_snapshot([_sym_b])
+                                if _rs_b == RET_OK and _dfs_b is not None and not _dfs_b.empty:
+                                    _sr = _dfs_b.iloc[0]
+                                    _bp1 = float(_sr.get("bid_price", 0) or 0); _bv1 = float(_sr.get("bid_vol", 0) or 0)
+                                    _ap1 = float(_sr.get("ask_price", 0) or 0); _av1 = float(_sr.get("ask_vol", 0) or 0)
+                                    if _bp1 > 0 or _ap1 > 0:
+                                        _out_bk = {"Bid": [(_bp1, _bv1, 1)] if _bp1 > 0 else [], "Ask": [(_ap1, _av1, 1)] if _ap1 > 0 else []}
+                                if not _out_bk:
+                                    _errs.append(f"호가: {_dfb if _rb != RET_OK else '수신 대기'}")
+                        except Exception as _eb:
+                            _errs.append(f"호가예외: {_eb}")
                     if _need_fl:
                         try:
                             _rf, _dff = _qc_b.get_capital_distribution(_sym_b)
                             if _rf == RET_OK and _dff is not None and not _dff.empty:
                                 _fr = _dff.iloc[0]
                                 _out_fl = {
-                                    "inB": float(_fr.get("capital_in_big", 0) or 0),
-                                    "outB": float(_fr.get("capital_out_big", 0) or 0),
+                                    "inB": float(_fr.get("capital_in_big", 0) or 0) + float(_fr.get("capital_in_super", 0) or 0),
+                                    "outB": float(_fr.get("capital_out_big", 0) or 0) + float(_fr.get("capital_out_super", 0) or 0),
                                     "inM": float(_fr.get("capital_in_mid", 0) or 0),
                                     "outM": float(_fr.get("capital_out_mid", 0) or 0),
                                     "inS": float(_fr.get("capital_in_small", 0) or 0),
                                     "outS": float(_fr.get("capital_out_small", 0) or 0),
                                 }
-                        except Exception:
-                            pass
+                            if not _out_fl or all(v == 0 for v in _out_fl.values()):
+                                _qc_b.subscribe([_sym_b], [SubType.TICKER], subscribe_push=False)
+                                _rt_f, _dft_f = _qc_b.get_rt_ticker(_sym_b, num=300)
+                                if _rt_f == RET_OK and _dft_f is not None and not _dft_f.empty:
+                                    _b_big, _s_big, _b_mid, _s_mid, _b_sm, _s_sm = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                                    for _, _tr in _dft_f.iterrows():
+                                        _tv = float(_tr.get("turnover", 0) or 0)
+                                        _td = str(_tr.get("ticker_direction", "")).upper()
+                                        if _tv >= 50000:
+                                            if "BUY" in _td: _b_big += _tv
+                                            elif "SELL" in _td: _s_big += _tv
+                                        elif _tv >= 10000:
+                                            if "BUY" in _td: _b_mid += _tv
+                                            elif "SELL" in _td: _s_mid += _tv
+                                        else:
+                                            if "BUY" in _td: _b_sm += _tv
+                                            elif "SELL" in _td: _s_sm += _tv
+                                    if (_b_big + _s_big + _b_mid + _s_mid + _b_sm + _s_sm) > 0:
+                                        _out_fl = {"inB": _b_big, "outB": _s_big, "inM": _b_mid, "outM": _s_mid, "inS": _b_sm, "outS": _s_sm}
+                                elif _rf != RET_OK:
+                                    _errs.append(f"자금: {_dff}")
+                        except Exception as _ef:
+                            _errs.append(f"자금예외: {_ef}")
                 finally:
                     try: _qc_b.close()
                     except Exception: pass
-                return _out_bk, _out_fl
+                return _out_bk, _out_fl, _errs
             _ex_bf = _cf_bf.ThreadPoolExecutor(max_workers=1)
             try:
-                _fb_bk, _fb_fl = _ex_bf.submit(_fetch_mm_bk_fl_w).result(timeout=1.2)
+                _fb_bk, _fb_fl, _fb_errs = _ex_bf.submit(_fetch_mm_bk_fl_w).result(timeout=3.0)
                 if _fb_bk:
                     aux_map["book"] = _fb_bk
                 if _fb_fl and any(v != 0 for v in _fb_fl.values()):
                     aux_map["flow"] = _fb_fl
+                if _fb_errs:
+                    _mm_diag_msgs.extend(_fb_errs)
             finally:
                 _ex_bf.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as _e_top:
+            _mm_diag_msgs.append(f"OpenD: {_e_top}")
 
     col_b1, col_b2 = st.columns(2)
     with col_b1:
