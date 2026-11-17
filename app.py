@@ -2181,15 +2181,15 @@ if nav_menu == "⚡ 무무 실시간 차트":
     <div id="tv_wrap" style="background:#080c14; border:1px solid #1e293b; border-radius:8px; overflow:hidden; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; background:#0d131f; border-bottom:1px solid #1e293b; padding:5px 10px; font-family:sans-serif; font-size:12px; color:#cbd5e1;">
       <span id="tv_hint" style="color:#94a3b8;">🖱️ 커서 모드 · 빈 곳 상하좌우 드래그=이동 · 우측 축 드래그=세로확대 · 휠=확대/축소</span>
-      <div style="display:flex; align-items:center; gap:5px;">
-        <button class="tv-tf" data-tf="1분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1분봉</button>
-        <button class="tv-tf" data-tf="5분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">5분봉</button>
-        <button class="tv-tf" data-tf="10분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">10분봉</button>
-        <button class="tv-tf" data-tf="1일봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">1일봉</button>
-        <button id="tv_tog_vpvr" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">매물대</button>
-        <button id="tv_tog_opt" style="background:#1e293b;color:#4ade80;border:1px solid #22c55e;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">콜풋막대</button>
-        <button id="tv_tog_flow" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;">옵션표</button>
-        <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 10px;cursor:pointer;font-weight:700;">⛶ 전체화면 확대</button>
+      <div style="display:flex; align-items:center; gap:4px; flex-wrap:nowrap; white-space:nowrap;">
+        <button class="tv-tf" data-tf="1분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">1분봉</button>
+        <button class="tv-tf" data-tf="5분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">5분봉</button>
+        <button class="tv-tf" data-tf="10분봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">10분봉</button>
+        <button class="tv-tf" data-tf="1일봉" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">1일봉</button>
+        <button id="tv_tog_vpvr" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">매물대</button>
+        <button id="tv_tog_opt" style="background:#1e293b;color:#4ade80;border:1px solid #22c55e;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">콜풋막대</button>
+        <button id="tv_tog_flow" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;border-radius:4px;padding:3px 6px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">옵션표</button>
+        <button id="tv_fs" style="background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;padding:3px 8px;cursor:pointer;font-weight:700;font-size:11px;white-space:nowrap;">⛶ 전체화면 확대</button>
       </div>
     </div>
     <div style="display:flex; width:100%;">
