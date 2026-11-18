@@ -1387,6 +1387,7 @@ MENU_ITEMS = [
     "⏰ Telegram Scheduler",
     "🎯 Portfolio Trigger",
     "📋 AI Trade Plan",
+    "📡 OI Change Radar",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -11690,3 +11691,124 @@ if nav_menu == "📋 AI Trade Plan":
         )
         if send_telegram_msg(tg_token, tg_chat_id, _tp_msg)[0]:
             st.toast("✅ AI Trade Plan 텔레그램 전송 완료!")
+
+
+def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
+    flow_hints = {}
+    for _sr in (raw_flows_l or []):
+        try:
+            _tk = str(_sr[1]).strip().upper()
+            _cp = "Call" if "CALL" in str(_sr[3]).upper() else ("Put" if "PUT" in str(_sr[3]).upper() else "")
+            _typ = str(_sr[13] if len(_sr) > 13 else "").upper()
+            _sd = str(_sr[10] if len(_sr) > 10 else "").upper()
+            _d = flow_hints.setdefault((_tk, _cp), {"ask": 0, "bid": 0, "sweep": 0})
+            if "SWEEP" in _typ: _d["sweep"] += 1
+            if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd: _d["ask"] += 1
+            elif "BID" in _sd or "BELOW" in _typ or "SELL" in _sd: _d["bid"] += 1
+        except Exception:
+            pass
+
+    call_surge, put_surge, oi_drop = [], [], []
+    for tk, snaps in (oi_hist_d or {}).items():
+        if not isinstance(snaps, list) or len(snaps) < 2:
+            continue
+        by_day = {}
+        for sn in snaps:
+            dt_k = str(sn.get("수집시각", ""))[:10]
+            if dt_k and sn.get("상세"):
+                by_day[dt_k] = sn
+        days = sorted(by_day.keys())
+        if len(days) >= 2:
+            prev_sn, last_sn = by_day[days[-2]], by_day[days[-1]]
+        else:
+            prev_sn, last_sn = snaps[-2], snaps[-1]
+
+        prev_map = {}
+        for x in (prev_sn.get("상세") or []):
+            k = (str(x.get("만기", "")), str(x.get("구분", "")), float(x.get("행사가", 0) or 0))
+            prev_map[k] = prev_map.get(k, 0) + int(x.get("OI", 0) or 0)
+
+        for x in (last_sn.get("상세") or []):
+            exp_s = str(x.get("만기", ""))
+            cp_raw = str(x.get("구분", ""))
+            cp_norm = "Call" if cp_raw.upper().startswith("C") or "콜" in cp_raw else "Put"
+            stk_v = float(x.get("행사가", 0) or 0)
+            now_oi = int(x.get("OI", 0) or 0)
+            prev_oi = prev_map.get((exp_s, cp_raw, stk_v), 0)
+            delta_oi = now_oi - prev_oi
+            if abs(delta_oi) < 200:
+                continue
+            vol_v = int(x.get("거래량", 0) or 0)
+            voi_v = round(vol_v / max(now_oi, 1), 2)
+            prem_usd = float(x.get("프리미엄($)", 0) or 0)
+            chg_pct = round(delta_oi / prev_oi * 100.0, 1) if prev_oi > 0 else (100.0 if delta_oi > 0 else -100.0)
+
+            fh = flow_hints.get((tk, cp_norm), {"ask": 0, "bid": 0, "sweep": 0})
+            if delta_oi > 0:
+                if fh["ask"] > fh["bid"] or fh["sweep"] > 0 or voi_v >= 1.5:
+                    est_act = "BTO (신규 매수)"
+                elif fh["bid"] > fh["ask"]:
+                    est_act = "STO (신규 매도)"
+                else:
+                    est_act = "BTO/STO (신규)"
+            else:
+                if fh["ask"] > fh["bid"]:
+                    est_act = "BTC (숏 커버)"
+                elif fh["bid"] > fh["ask"]:
+                    est_act = "STC (롱 청산)"
+                else:
+                    est_act = "STC/BTC (청산)"
+
+            badge = "🔥 +100%↑" if chg_pct >= 100 else ("⚡ +50%↑" if chg_pct >= 50 else ("📈 +20%↑" if chg_pct >= 20 else ("📉 -20%↓" if chg_pct <= -20 else "-")))
+            rec = {
+                "종목": tk, "계약": f"${stk_v:g}{'C' if cp_norm == 'Call' else 'P'} ({exp_s[5:]})",
+                "전일OI": prev_oi, "현재OI": now_oi, "ΔOI": delta_oi, "변화율(%)": chg_pct,
+                "구간": badge, "Vol/OI": voi_v,
+                "프리미엄": f"${prem_usd/1e6:.2f}M" if prem_usd >= 1e6 else f"${prem_usd/1e3:.0f}K",
+                "Sweep/Ask": f"S:{fh['sweep']} · A:{fh['ask']}",
+                "기관판독": est_act,
+            }
+            if delta_oi > 0:
+                (call_surge if cp_norm == "Call" else put_surge).append(rec)
+            else:
+                oi_drop.append(rec)
+
+    call_surge.sort(key=lambda r: (r["ΔOI"], r["변화율(%)"]), reverse=True)
+    put_surge.sort(key=lambda r: (r["ΔOI"], r["변화율(%)"]), reverse=True)
+    oi_drop.sort(key=lambda r: r["ΔOI"])
+    return call_surge[:10], put_surge[:10], oi_drop[:10]
+
+
+if nav_menu == "📡 OI Change Radar":
+    st.title("📡 OI Change Radar (전일 대비 OI 급증·청산 추적)")
+    st.caption("전일 대비 콜/풋 OI 변화율(+20% · +50% · +100%) 및 Volume/OI · Premium · Above Ask · Sweep 기반 BTO/STO/STC/BTC 자동 추정")
+
+    _min_pct_opt = st.radio("최소 변화율 필터", ["전체", "+20% 이상", "+50% 이상", "+100% 이상"], horizontal=True, key="radar_min_pct")
+    _min_pct_v = {"전체": 0.0, "+20% 이상": 20.0, "+50% 이상": 50.0, "+100% 이상": 100.0}.get(_min_pct_opt, 0.0)
+    _cs10, _ps10, _dr10 = compute_oi_change_radar(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+
+    _cs_f = [r for r in _cs10 if r["변화율(%)"] >= _min_pct_v]
+    _ps_f = [r for r in _ps10 if r["변화율(%)"] >= _min_pct_v]
+    _dr_f = [r for r in _dr10 if abs(r["변화율(%)"]) >= _min_pct_v]
+
+    _rt1, _rt2, _rt3 = st.tabs([f"🟢 콜 OI 급증 TOP10 ({len(_cs_f)})", f"🔴 풋 OI 급증 TOP10 ({len(_ps_f)})", f"🧹 OI 감소 TOP10 ({len(_dr_f)})"])
+    with _rt1:
+        if _cs_f: st.dataframe(pd.DataFrame(_cs_f), hide_index=True, use_container_width=True)
+        else: st.info("조건에 해당하는 콜 OI 급증 계약이 없습니다. (2일 이상 OI 스냅샷 필요)")
+    with _rt2:
+        if _ps_f: st.dataframe(pd.DataFrame(_ps_f), hide_index=True, use_container_width=True)
+        else: st.info("조건에 해당하는 풋 OI 급증 계약이 없습니다.")
+    with _rt3:
+        if _dr_f: st.dataframe(pd.DataFrame(_dr_f), hide_index=True, use_container_width=True)
+        else: st.info("조건에 해당하는 OI 감소 계약이 없습니다.")
+
+    if st.button("📩 OI Change Radar 텔레그램 전송", type="primary", key="btn_radar_tg"):
+        _rd_lines = ["📡 *[OptionHub OI Change Radar]*\n", "🟢 *콜 OI 급증 TOP 5*"] + [
+            f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _cs_f[:5]
+        ] + ["", "🔴 *풋 OI 급증 TOP 5*"] + [
+            f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _ps_f[:5]
+        ] + ["", "🧹 *OI 감소 TOP 5*"] + [
+            f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _dr_f[:5]
+        ]
+        if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_rd_lines))[0]:
+            st.toast("✅ OI Change Radar 텔레그램 전송 완료!")
