@@ -518,8 +518,10 @@ def compute_conviction_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov
     snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
     last_sn = snaps[-1] if snaps else {}
     prev_sn = snaps[-2] if len(snaps) >= 2 else {}
-    if not last_sn:
-        last_sn = _fetch_live_oi_fallback(tk)
+    if (not last_sn) or (not last_sn.get("상세") and float(last_sn.get("Net_GEX_M", 0) or 0) == 0):
+        _fb_di = _fetch_live_oi_fallback(tk)
+        if _fb_di:
+            last_sn = {**last_sn, **_fb_di}
 
     spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
     net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
@@ -703,8 +705,10 @@ def compute_trend_reversal_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spo
     snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
     last_sn = snaps[-1] if snaps else {}
     prev_sn = snaps[-2] if len(snaps) >= 2 else {}
-    if not last_sn and use_live_fallback:
-        last_sn = _fetch_live_oi_fallback(tk)
+    if use_live_fallback and ((not last_sn) or (not last_sn.get("상세") and float(last_sn.get("Net_GEX_M", 0) or 0) == 0)):
+        _fb_sn = _fetch_live_oi_fallback(tk)
+        if _fb_sn:
+            last_sn = {**last_sn, **_fb_sn}
 
     spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
     net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
@@ -887,7 +891,11 @@ def compute_dealer_intent(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.
                     mp_v = float(calc_max_pain(_df_d) or 0)
                 if (cw_v <= 0 or pw_v <= 0) and "행사가" in _df_d.columns:
                     _g_cw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("C") & (_df_d["행사가"] >= spot_v * 0.98) & (_df_d["행사가"] <= spot_v * 1.25)]
+                    if _g_cw.empty:
+                        _g_cw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("C") & (_df_d["행사가"] >= spot_v * 0.40) & (_df_d["행사가"] <= spot_v * 2.20)]
                     _g_pw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("P") & (_df_d["행사가"] >= spot_v * 0.80) & (_df_d["행사가"] <= spot_v * 1.02)]
+                    if _g_pw.empty:
+                        _g_pw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("P") & (_df_d["행사가"] >= spot_v * 0.40) & (_df_d["행사가"] <= spot_v * 2.20)]
                     if cw_v <= 0 and not _g_cw.empty:
                         cw_v = float(_g_cw.groupby("행사가")["OI"].sum().idxmax())
                     if pw_v <= 0 and not _g_pw.empty:
