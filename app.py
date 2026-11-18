@@ -518,6 +518,8 @@ def compute_conviction_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov
     snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
     last_sn = snaps[-1] if snaps else {}
     prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+    if not last_sn:
+        last_sn = _fetch_live_oi_fallback(tk)
 
     spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
     net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
@@ -696,11 +698,13 @@ def _reversal_grade_and_verdict(score):
     verdict = "🟢 LONG" if s >= 8 else ("🟡 HOLD" if s >= 5 else "🔴 SHORT")
     return grade, verdict
 
-def compute_trend_reversal_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.0, net_gex_ov=None, zero_gamma_ov=None, vol_oi_ov=None):
+def compute_trend_reversal_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.0, net_gex_ov=None, zero_gamma_ov=None, vol_oi_ov=None, use_live_fallback=False):
     tk = str(tk_in or "").strip().upper()
     snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
     last_sn = snaps[-1] if snaps else {}
     prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+    if not last_sn and use_live_fallback:
+        last_sn = _fetch_live_oi_fallback(tk)
 
     spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
     net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
@@ -825,6 +829,28 @@ def render_trend_reversal_card(r_res):
             st.markdown("**실패 항목**")
             st.markdown("\n".join(f"- ❌ {x}" for x in r_res["failed"]) if r_res["failed"] else "- 없음")
 
+
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_live_oi_fallback(tk_in):
+    try:
+        _rows, _sp, _st = fetch_cboe_oi(tk_in)
+        if not _rows:
+            return {}
+        _df = pd.DataFrame(_rows)
+        _call_oi = int(_df[_df["구분"] == "Call"]["OI"].sum()) if "구분" in _df.columns else 0
+        _put_oi = int(_df[_df["구분"] == "Put"]["OI"].sum()) if "구분" in _df.columns else 0
+        _net_gex = round(float(_df["GEX($M)"].sum()), 2) if "GEX($M)" in _df.columns else 0.0
+        _net_dex = round(float(_df["DEX($M)"].sum()), 2) if "DEX($M)" in _df.columns else 0.0
+        return {
+            "Spot": float(_sp or 0),
+            "Net_GEX_M": _net_gex,
+            "Net_DEX_M": _net_dex,
+            "Call_OI": _call_oi,
+            "Put_OI": _put_oi,
+            "상세": _rows,
+        }
+    except Exception:
+        return {}
 
 # =========================================================
 # 🎯 Dealer Intent Engine (세력 의도 판독기)
@@ -4683,6 +4709,8 @@ if nav_menu == "📝 오늘의 종합평":
             _rv_def = _rv_tks.index("SOXL") if "SOXL" in _rv_tks else 0
             _sel_rv_tk = st.selectbox("🔍 Trend Reversal 상세 체크리스트 종목", _rv_tks, index=_rv_def, key="home_rev_sel_tk")
             _sel_rv_res = next(r for r in _rev_rank if r["tk"] == _sel_rv_tk)
+            if _sel_rv_tk not in load_json_file(OI_PATH, {}):
+                _sel_rv_res = compute_trend_reversal_score(_sel_rv_tk, load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), use_live_fallback=True)
             render_trend_reversal_card(_sel_rv_res)
 
     with st.container(border=True):
