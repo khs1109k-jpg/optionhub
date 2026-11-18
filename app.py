@@ -11771,6 +11771,73 @@ if nav_menu == "🎯 Portfolio Trigger":
                 st.toast("✅ 포트폴리오 현황 텔레그램 전송 완료!")
 
 
+def compute_protocol_probability(tk_in, oi_hist_d, raw_flows_l, big_flows_l, c_res=None, r_res=None, di_res=None):
+    tk = str(tk_in or "").strip().upper()
+    c_res = c_res or compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+    r_res = r_res or compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l, use_live_fallback=True)
+    di_res = di_res or compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
+
+    spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
+    cw_v = float(di_res.get("cw", 0) or 0)
+    pw_v = float(di_res.get("pw", 0) or 0)
+    zg_v = float(di_res.get("zg", 0) or 0)
+    net_gex = float(di_res.get("net_gex", 0) or c_res.get("net_gex", 0) or 0)
+
+    raw_l = max(8.0, min(75.0, c_res["score"] * 0.42 + r_res["score"] * 3.8 + di_res["p_up"] * 0.20))
+    raw_s = max(8.0, min(75.0, (100 - c_res["score"]) * 0.42 + (10 - r_res["score"]) * 3.8 + di_res["p_down"] * 0.20))
+    raw_h = max(10.0, 100.0 - raw_l - raw_s) if (raw_l + raw_s) < 90.0 else 15.0
+    tot = raw_l + raw_s + raw_h
+    p_long = int(round(raw_l / tot * 100))
+    p_short = int(round(raw_s / tot * 100))
+    p_hold = max(5, 100 - p_long - p_short)
+    if p_long + p_short + p_hold != 100:
+        p_long += 100 - (p_long + p_short + p_hold)
+
+    conf_l, _ = compute_signal_confidence("LONG", c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
+    conf_s, _ = compute_signal_confidence("SHORT", c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
+    conf_h, _ = compute_signal_confidence("HOLD", c_res["score"], net_gex, c_res["net_dex"], False, False, False, c_res["prem_m"], False)
+
+    exp_l = round(((cw_v - spot_v) / spot_v * 100.0), 1) if (spot_v > 0 and cw_v > spot_v) else 6.0
+    exp_s = round(((spot_v - pw_v) / spot_v * 100.0), 1) if (spot_v > 0 and 0 < pw_v < spot_v) else 8.0
+    exp_l = max(2.5, min(25.0, exp_l))
+    exp_s = max(2.5, min(25.0, exp_s))
+
+    risk_l = "낮음" if (net_gex > 0 and spot_v >= zg_v > 0) else ("높음" if net_gex < 0 else "중간")
+    risk_s = "낮음" if (net_gex < 0 and (zg_v <= 0 or spot_v < zg_v)) else ("높음" if net_gex > 100 else "중간")
+    risk_h = "낮음" if abs(net_gex) < 50 else "중간"
+
+    if p_short >= p_long and p_short >= p_hold:
+        best_proto = "🔴 SHORT"
+    elif p_long >= p_short and p_long >= p_hold:
+        best_proto = "🟢 LONG"
+    else:
+        best_proto = "🟡 HOLD"
+
+    reasons = []
+    if net_gex < 0: reasons.append("Negative Gamma")
+    elif net_gex > 0: reasons.append("Positive Gamma")
+    else: reasons.append("GEX 부족")
+    if spot_v > 0 and zg_v > 0:
+        reasons.append(f"{zg_v:g} Flip {'돌파' if spot_v >= zg_v else '하회'}")
+    if "SHORT" in best_proto and pw_v > 0:
+        reasons.append(f"{pw_v:g} Put Wall")
+    elif "LONG" in best_proto and cw_v > 0:
+        reasons.append(f"{cw_v:g} Call Wall")
+    if c_res.get("net_doi", 0) > 0:
+        reasons.append("Call OI 증가")
+    elif c_res.get("net_doi", 0) < 0:
+        reasons.append("Put OI 증가")
+    if net_gex <= 0 and "GEX 부족" not in reasons:
+        reasons.append("GEX 부족")
+
+    return {
+        "long": {"prob": p_long, "conf": conf_l, "exp": f"+{exp_l:.1f}%", "risk": risk_l},
+        "short": {"prob": p_short, "conf": conf_s, "exp": f"+{exp_s:.1f}%", "risk": risk_s},
+        "hold": {"prob": p_hold, "conf": conf_h, "exp": "±1.5%", "risk": risk_h},
+        "best": best_proto,
+        "reasons": reasons[:5],
+    }
+
 def compute_ai_trade_plan(tk_in, oi_hist_d, raw_flows_l, big_flows_l):
     tk = str(tk_in or "").strip().upper()
     c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
@@ -11831,8 +11898,9 @@ def compute_ai_trade_plan(tk_in, oi_hist_d, raw_flows_l, big_flows_l):
         conclusion = f"현재는 HOLD(중립) 구간. ${stop_px:g} 지지 여부 및 ${t1_px:g} 돌파 확인 후 진입 권장." if spot_v > 0 else "방향성 확인 후 진입 권장."
 
     _tp_conf, _tp_rsn = compute_signal_confidence(plan_dir, c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
+    _proto = compute_protocol_probability(tk, oi_hist_d, raw_flows_l, big_flows_l, c_res=c_res, r_res=r_res, di_res=di_res)
     return {
-        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10", "conf": _tp_conf, "conf_reasons": _tp_rsn,
+        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10", "conf": _tp_conf, "conf_reasons": _tp_rsn, "proto": _proto,
         "intent": di_res["intent"], "sm_detected": sm_r.get("score", 0) >= 60, "sm_score": sm_r.get("score", 0),
         "alerts": tk_alerts, "dir": plan_dir,
         "entry": f"${entry_lo:g}~${entry_hi:g}" if spot_v > 0 else "-",
@@ -11866,6 +11934,14 @@ def render_ai_trade_plan_card(tp, key_prefix="tp"):
         if tp["alerts"]:
             st.caption("🚨 최근 AI Alert: " + " | ".join(a.get("title", "") for a in tp["alerts"]))
         st.info(f"💡 **한줄결론:** {tp['conclusion']}")
+        _pr = tp.get("proto")
+        if _pr:
+            st.markdown("---")
+            st.markdown(f"**🎲 Protocol Probability Engine · 가장 유리한 프로토콜: {_pr['best']}** (`{' · '.join(_pr['reasons'])}`)")
+            _pc1, _pc2, _pc3 = st.columns(3)
+            _pc1.metric("🟢 LONG", f"확률 {_pr['long']['prob']}%", f"신뢰도 {_pr['long']['conf']}% · 기대수익 {_pr['long']['exp']} · 리스크 {_pr['long']['risk']}")
+            _pc2.metric("🔴 SHORT", f"확률 {_pr['short']['prob']}%", f"신뢰도 {_pr['short']['conf']}% · 기대수익 {_pr['short']['exp']} · 리스크 {_pr['short']['risk']}")
+            _pc3.metric("🟡 HOLD", f"확률 {_pr['hold']['prob']}%", f"신뢰도 {_pr['hold']['conf']}% · 기대수익 {_pr['hold']['exp']} · 리스크 {_pr['hold']['risk']}")
 
 
 if nav_menu == "📋 AI Trade Plan":
