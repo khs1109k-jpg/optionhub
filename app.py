@@ -2815,6 +2815,13 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 "bii": [], "macd": [], "macd_sig": [], "macd_hist": [], "rsi": [],
             }, pd.DataFrame()
         df_c = pd.DataFrame(c_list)
+        _pos_vols = df_c["volume"][df_c["volume"] > 0]
+        if len(_pos_vols) >= 10:
+            _v_med = float(_pos_vols.median() or 0)
+            _v_p95 = float(_pos_vols.quantile(0.95) or 0)
+            _v_cap = max(_v_p95 * 2.5, _v_med * 10.0)
+            if _v_med > 0 and float(_pos_vols.max()) > _v_med * 15.0:
+                df_c["volume"] = df_c["volume"].clip(upper=_v_cap)
         tp = (df_c["high"] + df_c["low"] + df_c["close"]) / 3.0
         v_safe = df_c["volume"].replace(0, 1)
         df_c["vwap"] = (tp * v_safe).cumsum() / v_safe.cumsum()
@@ -3529,8 +3536,54 @@ if nav_menu == "⚡ 무무 실시간 차트":
               ctx.fillText(tag, xOff + 3, y + 3);
               xOff += 16;
             }}
-            // 왼쪽 막대 옆 금액 숫자는 가독성을 위해 기본 숨김
+            const _fmtK = (mv) => mv >= 1 ? ("$" + mv.toFixed(1) + "M") : ("$" + (mv * 1000).toFixed(1) + "K");
+            if (totM >= visMax * 0.08) {{
+              ctx.font = "bold 10px monospace";
+              const _cTxt = "C " + _fmtK(cVal);
+              const _pTxt = "P " + _fmtK(pVal);
+              ctx.fillStyle = "#34d399";
+              ctx.fillText(_cTxt, xOff, y + 3);
+              const _cwTxt = ctx.measureText(_cTxt).width + 6;
+              ctx.fillStyle = "#f87171";
+              ctx.fillText(_pTxt, xOff + _cwTxt, y + 3);
+            }}
           }});
+        }}
+        // 장중 변곡점(TURN) 점선 박스 표시
+        if (d.candles && d.candles.length > 20) {{
+          let minIdx = -1, minLow = Infinity;
+          const scanStart = Math.max(0, d.candles.length - 180);
+          for (let i = scanStart; i < d.candles.length - 5; i++) {{
+            const x = chart.timeScale().timeToCoordinate(d.candles[i].time);
+            if (x !== null && x >= 30 && x <= mw - 120 && Number(d.candles[i].low) < minLow) {{
+              minLow = Number(d.candles[i].low);
+              minIdx = i;
+            }}
+          }}
+          if (minIdx >= 0) {{
+            const c0 = d.candles[Math.max(0, minIdx - 2)];
+            const c1 = d.candles[Math.min(d.candles.length - 1, minIdx + 3)];
+            const tx0 = chart.timeScale().timeToCoordinate(c0.time);
+            const tx1 = chart.timeScale().timeToCoordinate(c1.time);
+            const tyTop = cs.priceToCoordinate(Number(d.candles[minIdx].high) * 1.004);
+            const tyBot = cs.priceToCoordinate(minLow * 0.998);
+            if (tx0 !== null && tx1 !== null && tyTop !== null && tyBot !== null) {{
+              const bx = Math.min(tx0, tx1) - 4;
+              const bw = Math.max(24, Math.abs(tx1 - tx0) + 8);
+              const by = Math.min(tyTop, tyBot);
+              const bh = Math.max(22, Math.abs(tyBot - tyTop));
+              ctx.save();
+              ctx.strokeStyle = "rgba(250, 204, 21, 0.85)";
+              ctx.lineWidth = 1.2;
+              ctx.setLineDash([4, 3]);
+              ctx.strokeRect(bx, by, bw, bh);
+              ctx.setLineDash([]);
+              ctx.font = "bold 10px monospace";
+              ctx.fillStyle = "#fef08a";
+              ctx.fillText("TURN", bx + Math.max(0, (bw - 24) / 2), by - 4);
+              ctx.restore();
+            }}
+          }}
         }}
         // 중앙 라벨 수평 옵션 레벨선 (CALL / GAMMA / GEX CALL / SIG_L / OPEN / DELTA / SIG_H / GEX WALL PUT)
         const lvSpecs = [
