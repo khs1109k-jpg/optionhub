@@ -1193,10 +1193,107 @@ def compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l):
     results.sort(key=lambda x: (x["score"], x["prem_m"]), reverse=True)
     return results
 
+
+# =========================================================
+# 🏆 AI Watchlist Engine (오늘의 TOP 10 종합 선정 · 목표가/손절가/벽 자동 산출)
+# =========================================================
+def compute_ai_watchlist(oi_hist_d, raw_flows_l, big_flows_l, fill_live_walls=False):
+    base = ["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "PLTR", "AMZN", "AAPL", "AVGO", "SPY", "QQQ", "SMH"]
+    extra_sh = [str(r[1]).strip().upper() for r in (raw_flows_l or []) if len(r) > 1 and str(r[1]).strip()]
+    tks = list(dict.fromkeys(base + list((oi_hist_d or {}).keys()) + extra_sh))[:25]
+    items = []
+    for tk in tks:
+        c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+        r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+        snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+        last_sn = snaps[-1] if snaps else {}
+        prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+
+        spot_v = float(c_res.get("spot", 0) or last_sn.get("Spot", 0) or 0)
+        if spot_v <= 0:
+            try:
+                _ms = get_moomoo_live_snapshot(tk)
+                if _ms.get("px", 0) > 0:
+                    spot_v = float(_ms["px"])
+            except Exception:
+                pass
+
+        cw_v = float(last_sn.get("CallWall", 0) or 0)
+        pw_v = float(last_sn.get("PutWall", 0) or 0)
+        zg_v = float(last_sn.get("ZeroGamma", 0) or 0)
+        mp_v = float(last_sn.get("MaxPain", 0) or 0)
+        if last_sn.get("상세") and spot_v > 0 and (cw_v <= 0 or pw_v <= 0 or zg_v <= 0):
+            try:
+                _dfd = pd.DataFrame(last_sn["상세"])
+                _dfd["행사가"] = pd.to_numeric(_dfd["행사가"], errors="coerce")
+                _dfd["OI"] = pd.to_numeric(_dfd.get("OI", 0), errors="coerce").fillna(0)
+                _dfd["GEX($M)"] = pd.to_numeric(_dfd.get("GEX($M)", 0), errors="coerce").fillna(0)
+                _dfd = _dfd.dropna(subset=["행사가"])
+                if zg_v <= 0 and not _dfd.empty:
+                    zg_v = float(calc_zero_gamma(_dfd.groupby("행사가", as_index=False)["GEX($M)"].sum(), spot_v) or 0)
+                _cps = _dfd["구분"].astype(str).str.upper()
+                if cw_v <= 0:
+                    _gc = _dfd[(_cps.str.startswith("C") | _cps.str.contains("콜")) & (_dfd["행사가"] >= spot_v * 0.98) & (_dfd["행사가"] <= spot_v * 1.25)]
+                    if not _gc.empty and _gc["OI"].sum() > 0:
+                        cw_v = float(_gc.groupby("행사가")["OI"].sum().idxmax())
+                if pw_v <= 0:
+                    _gp = _dfd[(_cps.str.startswith("P") | _cps.str.contains("풋")) & (_dfd["행사가"] >= spot_v * 0.80) & (_dfd["행사가"] <= spot_v * 1.02)]
+                    if not _gp.empty and _gp["OI"].sum() > 0:
+                        pw_v = float(_gp.groupby("행사가")["OI"].sum().idxmax())
+            except Exception:
+                pass
+
+        # OI 증가율(%)
+        tot_prev = int(prev_sn.get("Call_OI", 0) or 0) + int(prev_sn.get("Put_OI", 0) or 0) if prev_sn else 0
+        tot_now = int(last_sn.get("Call_OI", 0) or 0) + int(last_sn.get("Put_OI", 0) or 0) if last_sn else 0
+        oi_chg_pct = round((tot_now - tot_prev) / tot_prev * 100.0, 1) if tot_prev > 0 else 0.0
+
+        # 종합 점수 (0~100): Conviction(50%) + TrendReversal(30%) + DealerIntent/OI/DP 보너스(20%)
+        di_bonus = 10 if (c_res["net_gex"] > 0 and spot_v >= zg_v > 0) else (6 if c_res["net_gex"] > 0 else 2)
+        oi_bonus = 5 if oi_chg_pct > 5 else (3 if oi_chg_pct > 0 else 0)
+        dp_bonus = c_res["DARKPOOL"]
+        total_score = min(100, int(round(c_res["score"] * 0.50 + (r_res["score"] * 10) * 0.30 + di_bonus + oi_bonus + dp_bonus)))
+        verdict = "🟢 LONG" if total_score >= 70 else ("🟡 HOLD" if total_score >= 45 else "🔴 SHORT")
+
+        if verdict == "🔴 SHORT":
+            target_px = pw_v if (pw_v > 0 and (spot_v <= 0 or pw_v < spot_v)) else (round(spot_v * 0.95, 2) if spot_v > 0 else 0.0)
+            stop_px = cw_v if (cw_v > 0 and (spot_v <= 0 or cw_v > spot_v)) else (zg_v if zg_v > spot_v else (round(spot_v * 1.03, 2) if spot_v > 0 else 0.0))
+        else:
+            target_px = cw_v if (cw_v > 0 and (spot_v <= 0 or cw_v > spot_v)) else (mp_v if mp_v > spot_v else (round(spot_v * 1.05, 2) if spot_v > 0 else 0.0))
+            stop_px = pw_v if (pw_v > 0 and (spot_v <= 0 or pw_v < spot_v)) else (zg_v if (zg_v > 0 and zg_v < spot_v) else (round(spot_v * 0.96, 2) if spot_v > 0 else 0.0))
+
+        items.append({
+            "tk": tk, "score": total_score, "verdict": verdict,
+            "conv": c_res["score"], "rev": r_res["score"],
+            "spot": spot_v, "target": target_px, "stop": stop_px,
+            "cw": cw_v, "pw": pw_v, "zg": zg_v,
+            "oi_chg_pct": oi_chg_pct, "vol_oi": c_res["max_voi"],
+            "prem_m": c_res["prem_m"], "dp": c_res["dp_lbl"],
+        })
+    items.sort(key=lambda x: (x["score"], x["prem_m"]), reverse=True)
+    top10 = items[:10]
+    if fill_live_walls:
+        for it in top10:
+            if it["cw"] <= 0 or it["pw"] <= 0 or it["zg"] <= 0:
+                _di_live = compute_dealer_intent(it["tk"], oi_hist_d, raw_flows_l, big_flows_l, spot_ov=it["spot"])
+                if it["spot"] <= 0 and _di_live["spot"] > 0:
+                    it["spot"] = _di_live["spot"]
+                it["cw"] = _di_live["cw"] or it["cw"]
+                it["pw"] = _di_live["pw"] or it["pw"]
+                it["zg"] = _di_live["zg"] or it["zg"]
+                if it["verdict"] == "🔴 SHORT":
+                    it["target"] = it["pw"] if (it["pw"] > 0 and (it["spot"] <= 0 or it["pw"] < it["spot"])) else (round(it["spot"] * 0.95, 2) if it["spot"] > 0 else 0.0)
+                    it["stop"] = it["cw"] if (it["cw"] > 0 and (it["spot"] <= 0 or it["cw"] > it["spot"])) else (round(it["spot"] * 1.03, 2) if it["spot"] > 0 else 0.0)
+                else:
+                    it["target"] = it["cw"] if (it["cw"] > 0 and (it["spot"] <= 0 or it["cw"] > it["spot"])) else (round(it["spot"] * 1.05, 2) if it["spot"] > 0 else 0.0)
+                    it["stop"] = it["pw"] if (it["pw"] > 0 and (it["spot"] <= 0 or it["pw"] < it["spot"])) else (round(it["spot"] * 0.96, 2) if it["spot"] > 0 else 0.0)
+    return top10
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
     "🏦 Smart Money Tracker",
+    "🏆 AI Watchlist",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -4934,6 +5031,37 @@ if nav_menu == "📝 오늘의 종합평":
                 for i, r in enumerate(_sm_list[:10], 1)
             ])
             st.dataframe(_df_sm_home, hide_index=True, use_container_width=True)
+
+    with st.container(border=True):
+        _wl_h1, _wl_h2, _wl_h3 = st.columns([2.4, 0.8, 0.8])
+        _wl_h1.subheader("🏆 TODAY WATCHLIST (AI 자동 선정 TOP 10)")
+        _wl_fill_live = _wl_h2.checkbox("실시간 벽 보완", value=False, key="chk_home_wl_live")
+        _wl_top10 = compute_ai_watchlist(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), fill_live_walls=_wl_fill_live)
+        if _wl_h3.button("📩 Watchlist 텔레그램", use_container_width=True, key="btn_home_wl_tg"):
+            _wl_txt = "🏆 *[TODAY AI WATCHLIST TOP 10]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* | Score {r['score']} | {r['verdict']} | 목표 ${r['target']:g} / 손절 ${r['stop']:g} (CW ${r['cw']:g} · PW ${r['pw']:g})"
+                for i, r in enumerate(_wl_top10, 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _wl_txt)[0]:
+                st.toast("✅ AI Watchlist 텔레그램 전송 완료!")
+        if _wl_top10:
+            _wl_top5 = st.columns(5)
+            for _wi, (_wcol, _wr) in enumerate(zip(_wl_top5, _wl_top10[:5]), 1):
+                _wcol.metric(f"{_wi}. {_wr['tk']} ({_wr['verdict']})", f"Score {_wr['score']}", f"목표 ${ _wr['target']:g} / 손절 ${_wr['stop']:g}" if _wr["target"] > 0 else f"Conv {_wr['conv']} · Rev {_wr['rev']}/10")
+            st.dataframe(pd.DataFrame([
+                {
+                    "순위": i, "종목": r["tk"], "Score": r["score"], "판정": r["verdict"],
+                    "현재가": f"${r['spot']:,.2f}" if r["spot"] > 0 else "-",
+                    "목표가": f"${r['target']:,.2f}" if r["target"] > 0 else "-",
+                    "손절가": f"${r['stop']:,.2f}" if r["stop"] > 0 else "-",
+                    "Call Wall": f"${r['cw']:g}" if r["cw"] > 0 else "-",
+                    "Put Wall": f"${r['pw']:g}" if r["pw"] > 0 else "-",
+                    "Flip Gamma": f"${r['zg']:g}" if r["zg"] > 0 else "-",
+                    "Conv/Rev": f"{r['conv']} / {r['rev']}/10",
+                    "Vol/OI": f"{r['vol_oi']:.1f}", "Prem($M)": f"${r['prem_m']:.1f}M", "DP": r["dp"],
+                }
+                for i, r in enumerate(_wl_top10, 1)
+            ]), hide_index=True, use_container_width=True)
 
     @st.cache_data(ttl=300, show_spinner=False)
     def _calc_trend_reversal_7():
@@ -10864,3 +10992,35 @@ if nav_menu == "🏦 Smart Money Tracker":
                 st.toast("✅ 텔레그램 전송 완료!")
     else:
         st.info("선택한 필터 조건을 모두 만족하는 종목이 없습니다. 필터를 완화해 보세요.")
+
+
+if nav_menu == "🏆 AI Watchlist":
+    st.title("🏆 TODAY WATCHLIST (AI 자동 선정 TOP 10)")
+    st.caption("Conviction Score · Trend Reversal · Dealer Intent · OI 증가율 · Volume/OI · Premium · Dark Pool 종합 선정")
+    _wl_p_live = st.checkbox("⚡ Cboe/Yahoo 실시간 Call Wall · Put Wall · Flip Gamma 자동 보완", value=True, key="chk_page_wl_live")
+    _wl_p_list = compute_ai_watchlist(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), fill_live_walls=_wl_p_live)
+    if _wl_p_list:
+        _wp5 = st.columns(5)
+        for _wi, (_wc, _wr) in enumerate(zip(_wp5, _wl_p_list[:5]), 1):
+            _wc.metric(f"{_wi}. {_wr['tk']} ({_wr['verdict']})", f"Score {_wr['score']}", f"목표 ${_wr['target']:g} / 손절 ${_wr['stop']:g}" if _wr["target"] > 0 else "-")
+        st.dataframe(pd.DataFrame([
+            {
+                "순위": i, "종목": r["tk"], "Score": r["score"], "판정": r["verdict"],
+                "현재가": f"${r['spot']:,.2f}" if r["spot"] > 0 else "-",
+                "목표가": f"${r['target']:,.2f}" if r["target"] > 0 else "-",
+                "손절가": f"${r['stop']:,.2f}" if r["stop"] > 0 else "-",
+                "Call Wall": f"${r['cw']:g}" if r["cw"] > 0 else "-",
+                "Put Wall": f"${r['pw']:g}" if r["pw"] > 0 else "-",
+                "Flip Gamma": f"${r['zg']:g}" if r["zg"] > 0 else "-",
+                "OI증가율": f"{r['oi_chg_pct']:+.1f}%",
+                "Vol/OI": f"{r['vol_oi']:.1f}", "Prem($M)": f"${r['prem_m']:.1f}M", "DP": r["dp"],
+            }
+            for i, r in enumerate(_wl_p_list, 1)
+        ]), hide_index=True, use_container_width=True)
+        if st.button("📩 TODAY WATCHLIST 텔레그램 전송", type="primary", key="btn_wl_page_tg"):
+            _wl_p_txt = "🏆 *[TODAY AI WATCHLIST TOP 10]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* | Score {r['score']} | {r['verdict']} | 목표 ${r['target']:g} / 손절 ${r['stop']:g} (CW ${r['cw']:g} · PW ${r['pw']:g} · Flip ${r['zg']:g})"
+                for i, r in enumerate(_wl_p_list, 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _wl_p_txt)[0]:
+                st.toast("✅ AI Watchlist 텔레그램 전송 완료!")
