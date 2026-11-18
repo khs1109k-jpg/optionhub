@@ -9916,17 +9916,39 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                         _fg_mm = _go_mm.Figure()
                         _k0 = _kern[0] or 1.0
                         _fg_mm.add_trace(_go_mm.Scatter(y=[round((x/_k0 - 1)*100, 2) for x in _kern], mode="lines", name="현재 패턴(%)", line=dict(color="#38bdf8", width=3)))
-                        for _mi, _mt in enumerate(_matches[:5], 1):
-                            _mp_arr = _ext_px_arr(_mt.get("match_prices")) + _ext_px_arr(_mt.get("trailing_prices"))
-                            if _mp_arr:
-                                _m0 = _mp_arr[0] or 1.0
-                                _lbl_m = f"#{_mi} ({_mt.get('start_date', '')}~{_mt.get('end_date', '')}, {float(_mt.get('score',0)):.3f})"
-                                _fg_mm.add_trace(_go_mm.Scatter(y=[round((x/_m0 - 1)*100, 2) for x in _mp_arr], mode="lines", name=_lbl_m, opacity=0.75))
+                        _mm_clean_rows = []
+                        for _mi, _mt in enumerate(_matches[:10], 1):
+                            _mp_raw = _mt.get("match_prices")
+                            _tr_raw = _mt.get("trailing_prices")
+                            _mp_list = _ext_px_arr(_mp_raw)
+                            _tr_list = _ext_px_arr(_tr_raw)
+                            _mp_dates = list(_mp_raw.keys()) if isinstance(_mp_raw, dict) else []
+                            _tr_dates = list(_tr_raw.keys()) if isinstance(_tr_raw, dict) else []
+                            _sd_m = _mt.get("start_date") or (_mp_dates[0] if _mp_dates else "-")
+                            _ed_m = _mt.get("end_date") or (_mp_dates[-1] if _mp_dates else "-")
+                            _tr_ed = _tr_dates[-1] if _tr_dates else "-"
+                            _sc_v = float(_mt.get("score", 0) or 0)
+                            _m_ret = round((_mp_list[-1] / _mp_list[0] - 1) * 100, 2) if (len(_mp_list) >= 2 and _mp_list[0]) else 0.0
+                            _t_ret = round((_tr_list[-1] / _mp_list[-1] - 1) * 100, 2) if (_tr_list and _mp_list and _mp_list[-1]) else 0.0
+                            if _mi <= 5 and (_mp_list or _tr_list):
+                                _comb = _mp_list + _tr_list
+                                _m0 = _comb[0] or 1.0
+                                _lbl_m = f"#{_mi} ({_sd_m}~{_ed_m}, {_sc_v:.3f})"
+                                _fg_mm.add_trace(_go_mm.Scatter(y=[round((x/_m0 - 1)*100, 2) for x in _comb], mode="lines", name=_lbl_m, opacity=0.78))
+                            _mm_clean_rows.append({
+                                "순위": _mi,
+                                "유사 구간 (과거)": f"{_sd_m} ~ {_ed_m}",
+                                "이후 추적 종료": _tr_ed,
+                                "유사도": round(_sc_v, 3),
+                                "매칭구간 수익률": f"{_m_ret:+.2f}%",
+                                "이후 수익률": f"{_t_ret:+.2f}%",
+                                "이후 방향": "🟢 상승" if _t_ret > 0 else ("🔴 하락" if _t_ret < 0 else "⚪ 보합"),
+                            })
                         _fg_mm.add_vline(x=len(_kern)-1, line_color="#fbbf24", line_dash="dash", annotation_text="현재 시점 이후 →")
                         _fg_mm.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=400, yaxis_title="수익률(%)", margin=dict(l=16, r=16, t=35, b=20))
                         st.plotly_chart(_fg_mm, use_container_width=True, key="persp_mm_chart")
-                    if _matches:
-                        st.dataframe(pd.DataFrame([{k: v for k, v in m.items() if not isinstance(v, list)} for m in _matches]), use_container_width=True, hide_index=True)
+                        if _mm_clean_rows:
+                            st.dataframe(pd.DataFrame(_mm_clean_rows), use_container_width=True, hide_index=True)
             else:
                 st.info("우측 `🧠 유사패턴 조회` 버튼을 눌러주세요.")
 
