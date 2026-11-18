@@ -108,7 +108,7 @@ def _fetch_cboe_chain_rows(tk: str, max_exps: int = 6):
             rows.append({
                 "exp": exp_str, "dte": dte, "cp": cp_code, "strike": strike,
                 "oi": oi, "vol": vol, "iv": iv, "delta": delta, "gamma": gamma,
-                "gex": gex, "dex": dex, "prem": prem, "mid": mid,
+                "gex_abs": abs(gex), "net_gex": gex, "dex_val": dex, "prem": prem, "mid": mid,
             })
         if rows and sum(r["oi"] for r in rows) >= 100:
             return spot, rows
@@ -182,7 +182,7 @@ def _fetch_moomoo_chain_rows(tk: str, max_exps: int = 6):
                         rows_mm.append({
                             "exp": exp_str, "dte": int(dte), "cp": cp_code, "strike": strike,
                             "oi": oi, "vol": vol, "iv": iv, "delta": delta, "gamma": gamma,
-                            "gex": gex, "dex": dex, "prem": prem, "mid": mid,
+                            "gex_abs": abs(gex), "net_gex": gex, "dex_val": dex, "prem": prem, "mid": mid,
                         })
                 if rows_mm and sum(r["oi"] for r in rows_mm) >= 100:
                     return spot_mm, rows_mm
@@ -229,8 +229,9 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 
                     _gabs = (spot * spot * 0.01) * _gm * _oi * 100.0
                     _r["delta"] = _dl
                     _r["gamma"] = _gm
-                    _r["gex"] = _gabs if _cp == "C" else -_gabs
-                    _r["dex"] = _dl * _oi * 100.0 * spot
+                    _r["gex_abs"] = _gabs
+                    _r["net_gex"] = _gabs if _cp == "C" else -_gabs
+                    _r["dex_val"] = _dl * _oi * 100.0 * spot
     else:
         t = yf.Ticker(tk)
 
@@ -325,6 +326,12 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 
         return {"ok": False, "error": f"'{tk}' 옵션 체인 유효 데이터가 없습니다.", "ticker": tk}
 
     df = pd.DataFrame(rows)
+    if "net_gex" not in df.columns and "gex" in df.columns:
+        df["net_gex"] = df["gex"]
+    if "gex_abs" not in df.columns and "net_gex" in df.columns:
+        df["gex_abs"] = df["net_gex"].abs()
+    if "dex_val" not in df.columns and "dex" in df.columns:
+        df["dex_val"] = df["dex"]
 
     # 행사가별 집계
     by_k = pd.DataFrame({"strike": sorted(df["strike"].unique())})
