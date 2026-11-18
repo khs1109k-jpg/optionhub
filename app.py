@@ -3313,6 +3313,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         "sig_h": sig_h_lv if show_1sig else None,
         "sig_l": sig_l_lv if show_1sig else None,
         "open_px": round(float(merged_tf_sets["1일봉"][-1]["open"]), 2) if (show_open_px and merged_tf_sets.get("1일봉")) else (round(float(candles[-1]["open"]), 2) if (show_open_px and candles) else None),
+        "prev_close": round(float(merged_tf_sets["1일봉"][-2]["close"]), 2) if (merged_tf_sets.get("1일봉") and len(merged_tf_sets["1일봉"]) >= 2) else (round(float(cur.get("raw", {}).get("prev_close_price") or cur.get("raw", {}).get("prev_close") or 0), 2) if isinstance(cur.get("raw"), dict) else 0),
         "delta_k": delta_lv if (show_zg and delta_lv and (not cur["px"] or 0.55 * cur["px"] <= float(delta_lv) <= 1.45 * cur["px"])) else None,
         "gex_c_k": gex_c_lv if (show_cw and gex_c_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_c_lv) <= 1.45 * cur["px"])) else None,
         "gex_p_k": gex_p_lv if (show_pw and gex_p_lv and (not cur["px"] or 0.55 * cur["px"] <= float(gex_p_lv) <= 1.45 * cur["px"])) else None,
@@ -3861,10 +3862,14 @@ if nav_menu == "⚡ 무무 실시간 차트":
           (d.delta_k ? ` <span style="color:#38bdf8;">DELTA ${{d.delta_k}}</span>` : "") +
           (d.volumes && d.volumes.length ? ` <span style="color:#a78bfa;">VOL ${{fmtCompact(d.volumes.reduce((a,x)=>a+Number(x.value||0),0))}}</span>` : "");
         const colP = (b && b.close >= b.open) ? "#22c55e" : "#ef4444";
-        const l2 = b ? `O <b style="color:#e2e8f0;">${{b.open}}</b>  H <b style="color:#e2e8f0;">${{b.high}}</b>  L <b style="color:#e2e8f0;">${{b.low}}</b>  C <b style="color:${{colP}};">${{b.close}}</b>` + (isLive ? ` <span style="color:#22c55e;">● LIVE</span>` : "") : "";
+        const refP = Number(d.prev_close || d.open_px || (d.candles && d.candles.length ? d.candles[0].open : 0) || 0);
+        const pctV = (b && refP > 0) ? ((Number(b.close) - refP) / refP * 100.0) : 0.0;
+        const pctStr = (b && refP > 0) ? `(${{pctV >= 0 ? "+" : ""}}${{pctV.toFixed(2)}}%)` : "";
+        const pctCol = pctV >= 0 ? "#22c55e" : "#ef4444";
+        const l2 = b ? `O <b style="color:#e2e8f0;">${{b.open}}</b>  H <b style="color:#e2e8f0;">${{b.high}}</b>  L <b style="color:#e2e8f0;">${{b.low}}</b>  C <b style="color:${{colP}};">${{b.close}}</b> <b style="color:${{pctCol}};">${{pctStr}}</b>` + (isLive ? ` <span style="color:#22c55e;">● LIVE</span>` : "") : "";
         hudEl.innerHTML = l1 + (l2 ? `<br>${{l2}}` : "");
         if (hudREl && b) {{
-          hudREl.innerHTML = `<b style="color:#f8fafc;font-size:12px;">LAST ${{b.close}}</b><br><span style="color:#38bdf8;">${{d.tf_cur || "1분봉"}}</span>`;
+          hudREl.innerHTML = `<b style="color:#f8fafc;font-size:12px;">$${{b.close}} <span style="color:${{pctCol}};">${{pctStr}}</span></b><br><span style="color:#38bdf8;">${{d.tf_cur || "1분봉"}}</span>`;
         }}
       }}
       updateHud(null, false);
