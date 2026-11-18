@@ -9709,7 +9709,7 @@ def _perspicium_get(path, params_items, api_key):
         _url = f"https://perspicium.com/api/v0{path}"
         _r = requests.get(
             _url,
-            headers={"Authorization": f"ApiKey {api_key}", "Accept": "application/json", "Accept-Encoding": "gzip, deflate", "User-Agent": "OptionHub/1.0"},
+            headers={"Authorization": f"ApiKey {api_key}", "Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": "OptionHub/1.0"},
             params=list(params_items or ()),
             timeout=(4, 15),
         )
