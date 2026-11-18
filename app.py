@@ -6891,13 +6891,16 @@ if nav_menu == "📰 대형 옵션 체결":
             for _r in _lg_filt[:12]:
                 _scol = "#10b981" if _r["side"] == "ASK" else ("#ef4444" if _r["side"] == "BID" else "#fbbf24")
                 _tcol = "#10b981" if _r["cp"] == "call" else "#ef4444"
+                _cp_kr = "콜" if _r["cp"] == "call" else "풋"
+                _exp_short = str(_r["exp"])[5:].replace("-", "/") if len(str(_r["exp"])) >= 10 else str(_r["exp"])
+                _easy_lbl = f"{_leg_tk} {_exp_short} ${_r['strike']:g} {_cp_kr}"
                 _ps = f"${_r['prem']/1e6:.2f}M" if _r["prem"] >= 1e6 else f"${_r['prem']/1e3:.1f}K"
                 _tr_html.append(
                     f"<tr style='border-bottom:1px solid #13283d;font-size:12px;text-align:center;'>"
-                    f"<td style='padding:7px;text-align:left;font-family:monospace;color:#e2e8f0;'>{_r['occ']}</td>"
+                    f"<td style='padding:7px;text-align:left;font-weight:800;color:{_tcol};white-space:nowrap;' title='{_r['occ']}'>{_easy_lbl} <span style='font-weight:400;font-size:10px;color:#64748b;'>({_r['dte']}일)</span></td>"
                     f"<td style='padding:7px;font-weight:800;color:{_scol};'>{_r['side']}</td>"
                     f"<td style='padding:7px;font-weight:700;'>${_r['strike']:g}</td>"
-                    f"<td style='padding:7px;font-weight:700;color:{_tcol};'>{_r['cp']}</td>"
+                    f"<td style='padding:7px;font-weight:700;color:{_tcol};'>{_cp_kr}</td>"
                     f"<td style='padding:7px;color:#94a3b8;'>{_r['exp']} ({_r['dte']}d)</td>"
                     f"<td style='padding:7px;color:#cbd5e1;'>${_r['bid']:.2f} - ${_r['ask']:.2f}</td>"
                     f"<td style='padding:7px;font-weight:700;color:#fff;'>${_r['trade']:.2f}</td>"
@@ -6911,8 +6914,8 @@ if nav_menu == "📰 대형 옵션 체결":
                 "<div style='font-size:12px;color:#94a3b8;margin-bottom:6px;'>선택한 흐름의 레그 · 호가 대비 체결 위치 (Fill vs Spread)</div>"
                 "<table style='width:100%;border-collapse:collapse;'>"
                 "<thead><tr style='border-bottom:1px solid #1e3a5f;color:#64748b;font-size:11px;'>"
-                "<th style='padding:6px;text-align:left;'>계약 (OCC)</th><th>Side</th><th>Strike</th><th>Type</th>"
-                "<th>Expiration</th><th>Bid - Ask</th><th>Trade Price</th><th>Fill vs Spread</th><th>Premium</th><th>Volume</th><th>OI</th>"
+                "<th style='padding:6px;text-align:left;'>계약 (한눈에)</th><th>체결</th><th>행사가</th><th>구분</th>"
+                "<th>만기</th><th>매수-매도 호가</th><th>체결가</th><th>Fill vs Spread</th><th>프리미엄</th><th>거래량</th><th>OI</th>"
                 "</tr></thead><tbody>" + "".join(_tr_html) + "</tbody></table></div>",
                 unsafe_allow_html=True,
             )
