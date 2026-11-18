@@ -11842,9 +11842,9 @@ def compute_vanna_charm_metrics(tk_in):
             oi = int(x.get("OI", 0) or 0)
             if K <= 0 or oi <= 0:
                 continue
-            dte = max(int(x.get("DTE", 7) or 7), 1)
+            dte = max(int(x.get("DTE", 7) or 7), 3)
             T = dte / 365.0
-            iv = max(float(x.get("IV(%)", 30) or 30) / 100.0, 0.05)
+            iv = max(float(x.get("IV(%)", 30) or 30) / 100.0, 0.08)
             sqrtT = math.sqrt(T)
             d1 = (math.log(spot_v / K) + (r_rate + 0.5 * iv * iv) * T) / (iv * sqrtT)
             d2 = d1 - iv * sqrtT
@@ -11866,18 +11866,17 @@ def compute_vanna_charm_metrics(tk_in):
             pass
 
     def _find_flip(s_map):
-        ks = sorted(s_map.keys())
+        ks = [k for k in sorted(s_map.keys()) if spot_v * 0.75 <= k <= spot_v * 1.25]
         if len(ks) < 2:
             return 0.0
-        cum, prev_c, prev_k = 0.0, None, None
         flips = []
-        for k in ks:
-            cum += s_map[k]
-            if prev_c is not None and ((prev_c < 0 <= cum) or (prev_c > 0 >= cum)):
-                denom = cum - prev_c
-                frac = (-prev_c / denom) if denom != 0 else 0.5
-                flips.append(round(prev_k + frac * (k - prev_k), 2))
-            prev_c, prev_k = cum, k
+        for idx_f in range(len(ks) - 1):
+            k1, k2 = ks[idx_f], ks[idx_f + 1]
+            v1, v2 = s_map[k1], s_map[k2]
+            if (v1 < 0 <= v2) or (v1 > 0 >= v2):
+                denom = v2 - v1
+                frac = (-v1 / denom) if denom != 0 else 0.5
+                flips.append(round(k1 + frac * (k2 - k1), 2))
         return min(flips, key=lambda x: abs(x - spot_v)) if flips else 0.0
 
     vanna_flip = _find_flip(strike_vanna)
@@ -11906,7 +11905,7 @@ def compute_vanna_charm_metrics(tk_in):
         "tk": tk, "ok": True, "spot": spot_v,
         "net_vanna": round(net_vanna_m, 2), "net_charm": round(net_charm_m, 2),
         "vanna_flip": vanna_flip, "charm_flip": charm_flip,
-        "v_flow": f"${v_flow:+.2f}M / 1% IV", "c_flow": f"${c_flow:+.2f}M / 일",
+        "v_flow": f"${v_flow:+.2f}M/1%", "c_flow": f"${c_flow:+.2f}M/일",
         "up_pct": up_pct, "dn_pct": dn_pct, "impact": impact, "df": df_vc,
     }
 
