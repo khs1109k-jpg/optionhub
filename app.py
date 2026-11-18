@@ -9778,20 +9778,32 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                     st.info("표시할 이상 옵션 체결이 없습니다.")
                 else:
                     _df_uoa = pd.DataFrame(_trades)
-                    _pref_cols = [c for c in ["expiration", "expiry", "type", "option_type", "cp", "strike", "volume", "open_interest", "vol_oi_ratio", "total_premium", "premium", "last_price", "last", "bid", "ask", "implied_volatility", "iv", "GEX_contrib", "DEX_contrib"] if c in _df_uoa.columns]
-                    _rest_cols = [c for c in _df_uoa.columns if c not in _pref_cols]
-                    _df_uoa_disp = _df_uoa[_pref_cols + _rest_cols].copy()
+                    def _col_rank(cname):
+                        cl = str(cname).lower()
+                        for ri, kw in enumerate(["exp", "dte", "type", "cp", "call", "put", "strike", "vol", "open_int", "oi", "prem", "last", "price", "bid", "ask", "iv", "implied", "delta", "gamma", "gex_contrib", "dex_contrib"]):
+                            if kw in cl and not cl.startswith("cex_") and cl != "t_years":
+                                return (0, ri)
+                        return (1, 99)
+                    _ord_cols = sorted(list(_df_uoa.columns), key=_col_rank)
+                    _df_uoa_disp = _df_uoa[_ord_cols].copy()
                     for _nc in _df_uoa_disp.select_dtypes(include=["float64", "float32"]).columns:
                         _df_uoa_disp[_nc] = _df_uoa_disp[_nc].round(2)
+                    def _pick_u(row_s, kws, default_v=None):
+                        for kw in kws:
+                            for k, v in row_s.items():
+                                if kw in str(k).lower() and not str(k).lower().startswith("cex_") and v is not None:
+                                    return v
+                        return default_v
                     if _uc3.button("📩 UOA 상위 10건 텔레그램 전송", use_container_width=True, key="btn_persp_uoa_tg"):
                         _lines_u = [f"🔥 [Perspicium {_p_tk} 이상 옵션 체결 TOP 10] (Spot ${_du.get('spot', '-')})", ""]
                         for _, _ur in _df_uoa.head(10).iterrows():
-                            _exp_u = str(_ur.get("expiration") or _ur.get("expiry") or "-")[:10]
-                            _cp_u = str(_ur.get("type") or _ur.get("option_type") or _ur.get("cp") or "").upper()[:1]
-                            _k_u = _ur.get("strike") or _ur.get("strike_price") or "-"
-                            _v_u = int(float(_ur.get("volume") or 0))
-                            _oi_u = int(float(_ur.get("open_interest") or 0))
-                            _pr_u = float(_ur.get("total_premium") or _ur.get("premium") or (_v_u * float(_ur.get("last_price") or _ur.get("ask") or 0) * 100.0))
+                            _exp_u = str(_pick_u(_ur, ["exp"], "-"))[:10]
+                            _cp_u = str(_pick_u(_ur, ["option_type", "type", "cp", "right"], "")) .upper()[:1]
+                            _k_u = _pick_u(_ur, ["strike"], "-")
+                            _v_u = int(float(_pick_u(_ur, ["volume"], 0) or 0))
+                            _oi_u = int(float(_pick_u(_ur, ["open_int", "oi"], 0) or 0))
+                            _lp_u = float(_pick_u(_ur, ["last", "mid", "ask"], 0) or 0)
+                            _pr_u = float(_pick_u(_ur, ["prem"], 0) or (_v_u * _lp_u * 100.0))
                             _pr_s = f"${_pr_u/1e6:.2f}M" if _pr_u >= 1e6 else (f"${_pr_u/1e3:.0f}K" if _pr_u >= 1e3 else f"${_pr_u:,.0f}")
                             _bd_u = float(_ur.get("bid") or 0); _ak_u = float(_ur.get("ask") or 0)
                             _gx_u = float(_ur.get("GEX_contrib") or 0)
