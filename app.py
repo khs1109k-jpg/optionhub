@@ -705,7 +705,7 @@ def compute_trend_reversal_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spo
     snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
     last_sn = snaps[-1] if snaps else {}
     prev_sn = snaps[-2] if len(snaps) >= 2 else {}
-    if use_live_fallback and ((not last_sn) or (not last_sn.get("상세") and float(last_sn.get("Net_GEX_M", 0) or 0) == 0)):
+    if use_live_fallback and ((not last_sn) or (float(last_sn.get("Net_GEX_M", 0) or 0) == 0 and (int(last_sn.get("Call_OI", 0) or 0) + int(last_sn.get("Put_OI", 0) or 0)) < 5000)):
         _fb_sn = _fetch_live_oi_fallback(tk)
         if _fb_sn:
             last_sn = {**last_sn, **_fb_sn}
@@ -875,6 +875,38 @@ def compute_dealer_intent(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.
     last_sn = snaps[-1] if snaps else {}
     prev_sn = snaps[-2] if len(snaps) >= 2 else {}
 
+    def _extract_levels_from_det(det_rows, sp_ref):
+        _cw, _pw, _zg, _mp = 0.0, 0.0, 0.0, 0.0
+        if not det_rows or sp_ref <= 0:
+            return _cw, _pw, _zg, _mp
+        try:
+            _df_d = pd.DataFrame(det_rows)
+            if _df_d.empty or "행사가" not in _df_d.columns:
+                return _cw, _pw, _zg, _mp
+            _df_d["행사가"] = pd.to_numeric(_df_d["행사가"], errors="coerce")
+            _df_d["OI"] = pd.to_numeric(_df_d.get("OI", 0), errors="coerce").fillna(0)
+            _df_d["GEX($M)"] = pd.to_numeric(_df_d.get("GEX($M)", 0), errors="coerce").fillna(0)
+            _df_d = _df_d.dropna(subset=["행사가"])
+            if _df_d["OI"].sum() <= 0:
+                return _cw, _pw, _zg, _mp
+            _df_zg = _df_d.groupby("행사가", as_index=False)["GEX($M)"].sum()
+            _zg = float(calc_zero_gamma(_df_zg, sp_ref) or 0)
+            _mp = float(calc_max_pain(_df_d) or 0)
+            _cp_s = _df_d["구분"].astype(str).str.upper()
+            _g_cw = _df_d[_cp_s.str.startswith("C") & (_df_d["행사가"] >= sp_ref * 0.98) & (_df_d["행사가"] <= sp_ref * 1.25)]
+            if _g_cw.empty:
+                _g_cw = _df_d[_cp_s.str.startswith("C") & (_df_d["행사가"] >= sp_ref * 0.40) & (_df_d["행사가"] <= sp_ref * 2.20)]
+            _g_pw = _df_d[_cp_s.str.startswith("P") & (_df_d["행사가"] >= sp_ref * 0.80) & (_df_d["행사가"] <= sp_ref * 1.02)]
+            if _g_pw.empty:
+                _g_pw = _df_d[_cp_s.str.startswith("P") & (_df_d["행사가"] >= sp_ref * 0.40) & (_df_d["행사가"] <= sp_ref * 2.20)]
+            if not _g_cw.empty and _g_cw["OI"].sum() > 0:
+                _cw = float(_g_cw.groupby("행사가")["OI"].sum().idxmax())
+            if not _g_pw.empty and _g_pw["OI"].sum() > 0:
+                _pw = float(_g_pw.groupby("행사가")["OI"].sum().idxmax())
+        except Exception:
+            pass
+        return _cw, _pw, _zg, _mp
+
     spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
     if spot_v <= 0:
         try:
@@ -891,28 +923,28 @@ def compute_dealer_intent(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.
     zg_v = float(zg_ov if zg_ov is not None else (last_sn.get("ZeroGamma", 0) or 0))
     mp_v = float(mp_ov if mp_ov is not None else (last_sn.get("MaxPain", 0) or 0))
 
-    if last_sn.get("상세"):
-        try:
-            _df_d = pd.DataFrame(last_sn["상세"])
-            if not _df_d.empty and spot_v > 0:
-                if zg_v <= 0 and "GEX($M)" in _df_d.columns and "행사가" in _df_d.columns:
-                    _df_zg = _df_d.groupby("행사가", as_index=False)["GEX($M)"].sum()
-                    zg_v = float(calc_zero_gamma(_df_zg, spot_v) or 0)
-                if mp_v <= 0:
-                    mp_v = float(calc_max_pain(_df_d) or 0)
-                if (cw_v <= 0 or pw_v <= 0) and "행사가" in _df_d.columns:
-                    _g_cw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("C") & (_df_d["행사가"] >= spot_v * 0.98) & (_df_d["행사가"] <= spot_v * 1.25)]
-                    if _g_cw.empty:
-                        _g_cw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("C") & (_df_d["행사가"] >= spot_v * 0.40) & (_df_d["행사가"] <= spot_v * 2.20)]
-                    _g_pw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("P") & (_df_d["행사가"] >= spot_v * 0.80) & (_df_d["행사가"] <= spot_v * 1.02)]
-                    if _g_pw.empty:
-                        _g_pw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("P") & (_df_d["행사가"] >= spot_v * 0.40) & (_df_d["행사가"] <= spot_v * 2.20)]
-                    if cw_v <= 0 and not _g_cw.empty:
-                        cw_v = float(_g_cw.groupby("행사가")["OI"].sum().idxmax())
-                    if pw_v <= 0 and not _g_pw.empty:
-                        pw_v = float(_g_pw.groupby("행사가")["OI"].sum().idxmax())
-        except Exception:
-            pass
+    if last_sn.get("상세") and (cw_v <= 0 or pw_v <= 0 or zg_v <= 0 or mp_v <= 0):
+        _ecw, _epw, _ezg, _emp = _extract_levels_from_det(last_sn["상세"], spot_v)
+        if cw_v <= 0: cw_v = _ecw
+        if pw_v <= 0: pw_v = _epw
+        if zg_v <= 0: zg_v = _ezg
+        if mp_v <= 0: mp_v = _emp
+
+    if cw_v <= 0 or pw_v <= 0 or (net_gex == 0 and net_dex == 0):
+        _fb_di = _fetch_live_oi_fallback(tk)
+        if _fb_di:
+            if spot_v <= 0 and float(_fb_di.get("Spot", 0) or 0) > 0:
+                spot_v = float(_fb_di["Spot"])
+            if net_gex == 0:
+                net_gex = float(_fb_di.get("Net_GEX_M", 0) or 0)
+            if net_dex == 0:
+                net_dex = float(_fb_di.get("Net_DEX_M", 0) or 0)
+            _fcw, _fpw, _fzg, _fmp = _extract_levels_from_det(_fb_di.get("상세", []), spot_v or float(_fb_di.get("Spot", 0) or 0))
+            if cw_v <= 0: cw_v = _fcw
+            if pw_v <= 0: pw_v = _fpw
+            if zg_v <= 0: zg_v = _fzg
+            if mp_v <= 0: mp_v = _fmp
+            last_sn = {**last_sn, **_fb_di}
 
     _call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
     _put_doi = (int(last_sn.get("Put_OI", 0) or 0) - int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
