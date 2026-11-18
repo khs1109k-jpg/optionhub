@@ -825,6 +825,172 @@ def render_trend_reversal_card(r_res):
             st.markdown("**실패 항목**")
             st.markdown("\n".join(f"- ❌ {x}" for x in r_res["failed"]) if r_res["failed"] else "- 없음")
 
+
+# =========================================================
+# 🎯 Dealer Intent Engine (세력 의도 판독기)
+# =========================================================
+def compute_dealer_intent(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.0, net_gex_ov=None, net_dex_ov=None, cw_ov=None, pw_ov=None, zg_ov=None, mp_ov=None, vol_oi_ov=None):
+    tk = str(tk_in or "").strip().upper()
+    snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+    last_sn = snaps[-1] if snaps else {}
+    prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+
+    spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
+    if spot_v <= 0:
+        try:
+            _mm_s = get_moomoo_live_snapshot(tk)
+            if _mm_s.get("px", 0) > 0:
+                spot_v = float(_mm_s["px"])
+        except Exception:
+            pass
+
+    net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
+    net_dex = float(net_dex_ov if net_dex_ov is not None else (last_sn.get("Net_DEX_M", 0) or 0))
+    cw_v = float(cw_ov if cw_ov is not None else (last_sn.get("CallWall", 0) or 0))
+    pw_v = float(pw_ov if pw_ov is not None else (last_sn.get("PutWall", 0) or 0))
+    zg_v = float(zg_ov if zg_ov is not None else (last_sn.get("ZeroGamma", 0) or 0))
+    mp_v = float(mp_ov if mp_ov is not None else (last_sn.get("MaxPain", 0) or 0))
+
+    if last_sn.get("상세"):
+        try:
+            _df_d = pd.DataFrame(last_sn["상세"])
+            if not _df_d.empty and spot_v > 0:
+                if zg_v <= 0:
+                    zg_v = float(calc_zero_gamma(_df_d, spot_v) or 0)
+                if mp_v <= 0:
+                    mp_v = float(calc_max_pain(_df_d) or 0)
+                if (cw_v <= 0 or pw_v <= 0) and "행사가" in _df_d.columns:
+                    _g_cw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("C") & (_df_d["행사가"] >= spot_v * 0.98) & (_df_d["행사가"] <= spot_v * 1.25)]
+                    _g_pw = _df_d[_df_d["구분"].astype(str).str.upper().str.startswith("P") & (_df_d["행사가"] >= spot_v * 0.80) & (_df_d["행사가"] <= spot_v * 1.02)]
+                    if cw_v <= 0 and not _g_cw.empty:
+                        cw_v = float(_g_cw.groupby("행사가")["OI"].sum().idxmax())
+                    if pw_v <= 0 and not _g_pw.empty:
+                        pw_v = float(_g_pw.groupby("행사가")["OI"].sum().idxmax())
+        except Exception:
+            pass
+
+    _call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
+    _put_doi = (int(last_sn.get("Put_OI", 0) or 0) - int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
+    _net_doi = _call_doi - _put_doi
+
+    _max_voi = float(vol_oi_ov or 0.0)
+    if last_sn.get("상세") and _max_voi <= 0:
+        try:
+            for _dx in last_sn["상세"]:
+                _d_oi = int(_dx.get("OI", 0) or 0)
+                _d_vl = int(_dx.get("거래량", 0) or 0)
+                if _d_oi >= 50:
+                    _max_voi = max(_max_voi, _d_vl / float(_d_oi))
+        except Exception:
+            pass
+
+    # 1~7 순차 판독 점수
+    _bias = 0
+    # 1. GEX
+    if net_gex > 0:
+        _bias += 2
+    elif net_gex < 0:
+        _bias -= 2
+    # 2. DEX
+    if net_dex > 0:
+        _bias += 2
+    elif net_dex < 0:
+        _bias -= 2
+    # 3. Call Wall / 4. Put Wall 위치
+    if spot_v > 0 and cw_v > spot_v and (pw_v <= 0 or spot_v >= pw_v):
+        _bias += 1
+    if spot_v > 0 and zg_v > 0:
+        _bias += (1 if spot_v >= zg_v else -1)
+    # 5. Max Pain 인력
+    if spot_v > 0 and mp_v > 0:
+        if mp_v > spot_v * 1.005:
+            _bias += 1
+        elif mp_v < spot_v * 0.995:
+            _bias -= 1
+    # 6. OI 변화
+    if _net_doi > 0:
+        _bias += 1
+    elif _net_doi < 0:
+        _bias -= 1
+    # 7. Volume/OI
+    if _max_voi >= 1.5 and _bias >= 0:
+        _bias += 1
+
+    if _bias >= 3:
+        intent = "🟢 상방 유도"
+        p_up, p_flat, p_down = 65, 25, 10
+        _mid_p = round((spot_v + cw_v) / 2.0, 1) if (spot_v > 0 and cw_v > spot_v) else (round(mp_v, 1) if mp_v > spot_v else 0)
+        _path_pts = [f"{spot_v:g}" if spot_v > 0 else "-"]
+        if _mid_p and _mid_p != round(spot_v, 1) and _mid_p != round(cw_v, 1):
+            _path_pts.append(f"{_mid_p:g}")
+        if cw_v > 0:
+            _path_pts.append(f"{cw_v:g}")
+        path_str = " → ".join(_path_pts)
+        final_target = f"${cw_v:g} Call Wall" if cw_v > 0 else (f"${mp_v:g} Max Pain" if mp_v > 0 else "상방 저항 테스트")
+        conclusion = f"현재 딜러는 {final_target} 방향으로 가격을 끌어올리는 구조. " + (f"${pw_v:g} Put Wall 붕괴 전까지 상승 우세." if pw_v > 0 else "Flip Gamma 지지 유지 시 상승 우세.")
+    elif _bias <= -2:
+        intent = "🔴 하방 압력"
+        p_up, p_flat, p_down = 15, 25, 60
+        _path_pts = [f"{spot_v:g}" if spot_v > 0 else "-"]
+        if zg_v > 0 and spot_v > zg_v:
+            _path_pts.append(f"{zg_v:g}")
+        if pw_v > 0:
+            _path_pts.append(f"{pw_v:g}")
+        path_str = " → ".join(_path_pts)
+        final_target = f"${pw_v:g} Put Wall" if pw_v > 0 else (f"${mp_v:g} Max Pain" if mp_v > 0 else "하방 지지 테스트")
+        conclusion = f"현재 딜러 헤지가 하방 변동성을 키우는 구조. " + (f"${zg_v:g} Flip Gamma 회복 전까지 보수적 대응." if zg_v > 0 else "하방 지지 확인 전까지 리스크 관리.")
+    else:
+        intent = "🟡 박스권·수렴 유도"
+        p_up, p_flat, p_down = 35, 45, 20
+        _tgt_m = mp_v if mp_v > 0 else (cw_v if cw_v > 0 else spot_v)
+        path_str = f"{spot_v:g} → {_tgt_m:g}" if (spot_v > 0 and _tgt_m > 0) else "-"
+        final_target = f"${mp_v:g} Max Pain 수렴" if mp_v > 0 else "Put~Call Wall 박스권"
+        conclusion = f"딜러가 ${pw_v:g}~${cw_v:g} 구간에서 변동성을 억제하며 {final_target} 방향으로 수렴시키는 중." if (pw_v > 0 and cw_v > 0) else "방향성 탐색 구간으로 주요 벽 돌파 여부를 확인하세요."
+
+    if net_gex > 0:
+        dealer_pos = "Positive Gamma · Dealer Buy Dip (변동성 억제)"
+    elif net_gex < 0:
+        dealer_pos = "Negative Gamma · 추격 헤지 (변동성 확대)"
+    else:
+        dealer_pos = "Neutral Gamma (OI 스냅샷 수집 권장)"
+
+    risks = []
+    if zg_v > 0:
+        risks.append(f"${zg_v:g} Flip Gamma 이탈")
+    if pw_v > 0:
+        risks.append(f"${pw_v:g} Put Wall 붕괴")
+    if not risks:
+        risks.append("OI 스냅샷 미수집 (OI 수집 탭에서 스냅샷 권장)")
+
+    return {
+        "tk": tk, "spot": spot_v, "cw": cw_v, "pw": pw_v, "zg": zg_v, "mp": mp_v,
+        "intent": intent, "path": path_str, "target": final_target,
+        "risks": risks, "dealer_pos": dealer_pos,
+        "p_up": p_up, "p_flat": p_flat, "p_down": p_down,
+        "conclusion": conclusion, "net_gex": net_gex, "net_dex": net_dex, "max_voi": round(_max_voi, 2),
+    }
+
+def render_dealer_intent_card(di):
+    with st.container(border=True):
+        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+        _m1.metric(f"🎯 {di['tk']} 현재가", f"${di['spot']:,.2f}" if di["spot"] > 0 else "-")
+        _m2.metric("Call Wall", f"${di['cw']:g}" if di["cw"] > 0 else "-")
+        _m3.metric("Put Wall", f"${di['pw']:g}" if di["pw"] > 0 else "-")
+        _m4.metric("Flip Gamma", f"${di['zg']:g}" if di["zg"] > 0 else "-")
+        _m5.metric("Max Pain", f"${di['mp']:g}" if di["mp"] > 0 else "-")
+
+        _dc1, _dc2 = st.columns(2)
+        with _dc1:
+            st.markdown(f"**Dealer Intent:** {di['intent']}")
+            st.markdown(f"**목표 경로:** `{di['path']}`")
+            st.markdown(f"**최종 목표:** `{di['target']}`")
+            st.markdown("**위험구간:** " + " · ".join(f"`{rk}`" for rk in di["risks"]))
+        with _dc2:
+            st.markdown(f"**Dealer Position:** `{di['dealer_pos']}`")
+            st.markdown(f"**예상 시나리오:** 🟢 상승 **{di['p_up']}%** · 🟡 횡보 **{di['p_flat']}%** · 🔴 하락 **{di['p_down']}%**")
+            st.progress(di["p_up"] / 100.0)
+        st.info(f"💡 **한줄 결론:** {di['conclusion']}")
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
@@ -4519,6 +4685,26 @@ if nav_menu == "📝 오늘의 종합평":
             _sel_rv_res = next(r for r in _rev_rank if r["tk"] == _sel_rv_tk)
             render_trend_reversal_card(_sel_rv_res)
 
+    with st.container(border=True):
+        _di_h1, _di_h2 = st.columns([3.0, 1.0])
+        _di_h1.subheader("🎯 Dealer Intent Engine (세력 의도 판독기)")
+        _oi_di_all = load_json_file(OI_PATH, {})
+        _di_tks = list(dict.fromkeys(["SOXL", "NVDA", "SPY", "QQQ", "TSLA", "AMD", "META", "MU"] + list(_oi_di_all.keys())))
+        _sel_di_tk = st.selectbox("🔍 세력 의도 분석 종목", _di_tks, index=0, key="home_di_sel_tk")
+        _di_res = compute_dealer_intent(_sel_di_tk, _oi_di_all, all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _di_h2.button("📩 Dealer Intent 텔레그램", use_container_width=True, key="btn_home_di_tg"):
+            _di_txt = (
+                f"🎯 *[{_di_res['tk']} Dealer Intent Engine]*\n"
+                f"현재가: ${_di_res['spot']:,.2f} | CW: ${_di_res['cw']:g} | PW: ${_di_res['pw']:g} | Flip: ${_di_res['zg']:g} | MP: ${_di_res['mp']:g}\n"
+                f"의도: {_di_res['intent']} ({_di_res['path']} → {_di_res['target']})\n"
+                f"포지션: {_di_res['dealer_pos']}\n"
+                f"시나리오: 상승 {_di_res['p_up']}% · 횡보 {_di_res['p_flat']}% · 하락 {_di_res['p_down']}%\n"
+                f"결론: {_di_res['conclusion']}"
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _di_txt)[0]:
+                st.toast("✅ Dealer Intent 텔레그램 전송 완료!")
+        render_dealer_intent_card(_di_res)
+
     @st.cache_data(ttl=300, show_spinner=False)
     def _calc_trend_reversal_7():
         import yfinance as _yf_tr
@@ -7606,6 +7792,11 @@ if nav_menu == "🎯 행사가별·동반 체결":
         spot_ov=spot_live, net_gex_ov=_det_gex, zero_gamma_ov=_det_zg, vol_oi_ov=_det_voi,
     )
     render_trend_reversal_card(_det_rev)
+    _det_di = compute_dealer_intent(
+        tk_f, oi_hist_all, all_raw_flows, load_json_file(BIG_FLOWS_PATH, []),
+        spot_ov=spot_live, net_gex_ov=_det_gex, net_dex_ov=_det_dex, zg_ov=_det_zg, vol_oi_ov=_det_voi,
+    )
+    render_dealer_intent_card(_det_di)
 
     st.markdown(f"""
     <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; background:#07111e; border:1px solid #1e3a5f; border-radius:8px; padding:10px 14px; margin-bottom:10px; font-family:monospace; font-size:13px;">
