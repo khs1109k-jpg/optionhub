@@ -835,11 +835,11 @@ def render_trend_reversal_card(r_res):
 
 
 @st.cache_data(ttl=180, show_spinner=False)
-def _fetch_live_oi_fallback(tk_in):
+def _fetch_live_oi_fallback_cached(tk_in):
     try:
-        _rows, _sp, _st = fetch_cboe_oi(tk_in)
+        _rows, _sp, _st = fetch_yahoo_oi(tk_in)
         if not _rows:
-            return {}
+            return None
         _df = pd.DataFrame(_rows)
         _call_oi = int(_df[_df["구분"] == "Call"]["OI"].sum()) if "구분" in _df.columns else 0
         _put_oi = int(_df[_df["구분"] == "Put"]["OI"].sum()) if "구분" in _df.columns else 0
@@ -854,7 +854,17 @@ def _fetch_live_oi_fallback(tk_in):
             "상세": _rows,
         }
     except Exception:
+        return None
+
+def _fetch_live_oi_fallback(tk_in):
+    _res = _fetch_live_oi_fallback_cached(str(tk_in or "").strip().upper())
+    if not _res:
+        try:
+            _fetch_live_oi_fallback_cached.clear()
+        except Exception:
+            pass
         return {}
+    return _res
 
 # =========================================================
 # 🎯 Dealer Intent Engine (세력 의도 판독기)
@@ -885,8 +895,9 @@ def compute_dealer_intent(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.
         try:
             _df_d = pd.DataFrame(last_sn["상세"])
             if not _df_d.empty and spot_v > 0:
-                if zg_v <= 0:
-                    zg_v = float(calc_zero_gamma(_df_d, spot_v) or 0)
+                if zg_v <= 0 and "GEX($M)" in _df_d.columns and "행사가" in _df_d.columns:
+                    _df_zg = _df_d.groupby("행사가", as_index=False)["GEX($M)"].sum()
+                    zg_v = float(calc_zero_gamma(_df_zg, spot_v) or 0)
                 if mp_v <= 0:
                     mp_v = float(calc_max_pain(_df_d) or 0)
                 if (cw_v <= 0 or pw_v <= 0) and "행사가" in _df_d.columns:
