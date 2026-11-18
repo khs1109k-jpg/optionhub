@@ -467,8 +467,194 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+# =========================================================
+# 🏆 Conviction Score Engine (0~100점 · GEX/DEX/OI/VolOI/Prem/Flow/DarkPool/Tech)
+# =========================================================
+def _conviction_grade_and_verdict(score):
+    s = int(round(score))
+    if s >= 90:
+        grade = "🔥🔥🔥🔥🔥 Institutional"
+    elif s >= 80:
+        grade = "🔥🔥🔥🔥 Strong Bullish"
+    elif s >= 70:
+        grade = "🔥🔥🔥 Bullish"
+    elif s >= 60:
+        grade = "🔥🔥 Neutral Bullish"
+    elif s >= 40:
+        grade = "🟡 Hold"
+    elif s >= 20:
+        grade = "🔴 Bearish"
+    else:
+        grade = "☠️ Strong Bearish"
+    verdict = "🟢 LONG" if s >= 80 else ("🟡 HOLD" if s >= 60 else "🔴 SHORT")
+    return grade, verdict
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_tech_for_conviction(tk_c, spot_c, zero_gamma_c):
+    vwap_ok, ma20_ok = False, False
+    zg_ok = bool(spot_c > 0 and zero_gamma_c and float(spot_c) > float(zero_gamma_c))
+    try:
+        import yfinance as _yf_cv
+        _h1d = _yf_cv.Ticker(tk_c).history(period="1d", interval="5m", prepost=True)
+        if _h1d is not None and not _h1d.empty and "Volume" in _h1d.columns:
+            _v_sum = float(_h1d["Volume"].sum() or 0)
+            if _v_sum > 0:
+                _vwap = float(((_h1d["High"] + _h1d["Low"] + _h1d["Close"]) / 3.0 * _h1d["Volume"]).sum() / _v_sum)
+                _sp_u = float(spot_c or _h1d["Close"].dropna().iloc[-1])
+                vwap_ok = (_sp_u > _vwap)
+        _h1m = _yf_cv.Ticker(tk_c).history(period="2mo", interval="1d")
+        if _h1m is not None and len(_h1m) >= 20:
+            _cl = _h1m["Close"].dropna()
+            _ma20 = float(_cl.tail(20).mean())
+            _sp_u = float(spot_c or _cl.iloc[-1])
+            ma20_ok = (_sp_u > _ma20)
+    except Exception:
+        pass
+    return (2 if vwap_ok else 0) + (2 if ma20_ok else 0) + (1 if zg_ok else 0)
+
+def compute_conviction_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.0, net_gex_ov=None, net_dex_ov=None, zero_gamma_ov=None, vol_oi_ov=None, prem_m_ov=None):
+    tk = str(tk_in or "").strip().upper()
+    snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+    last_sn = snaps[-1] if snaps else {}
+    prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+
+    spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
+    net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
+    net_dex = float(net_dex_ov if net_dex_ov is not None else (last_sn.get("Net_DEX_M", 0) or 0))
+    zg_v = float(zero_gamma_ov if zero_gamma_ov is not None else (last_sn.get("ZeroGamma", 0) or 0))
+    if zg_v <= 0 and last_sn.get("상세"):
+        try:
+            _df_s = pd.DataFrame(last_sn["상세"])
+            if not _df_s.empty and spot_v > 0:
+                zg_v = float(calc_zero_gamma(_df_s, spot_v) or 0)
+        except Exception:
+            pass
+
+    # 1. GEX (25점)
+    _gex_base = 25 if net_gex > 500 else (20 if net_gex > 100 else (15 if net_gex > 0 else 0))
+    _gex_pts = min(25, _gex_base + (5 if (spot_v > 0 and zg_v > 0 and spot_v > zg_v) else 0))
+
+    # 2. DEX (20점)
+    _dex_pts = 20 if net_dex > 1000 else (15 if net_dex > 500 else (10 if net_dex > 0 else 0))
+
+    # 3. OI: Call ΔOI - Put ΔOI (15점)
+    _call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
+    _put_doi = (int(last_sn.get("Put_OI", 0) or 0) - int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
+    _net_doi = _call_doi - _put_doi
+    _oi_pts = 15 if _net_doi > 10000 else (12 if _net_doi > 5000 else (8 if _net_doi > 0 else 0))
+
+    # 시트 + 대형체결 집계 (Premium, Volume/OI, Above Ask, Sweep, Dark Pool)
+    _sh_prem_m = 0.0
+    _above_ask_cnt = 0
+    _sweep_cnt = 0
+    _max_voi = float(vol_oi_ov or 0.0)
+    _bull_cnt, _bear_cnt = 0, 0
+    for _sr in (raw_flows_l or []):
+        try:
+            if str(_sr[1]).strip().upper() != tk:
+                continue
+            _pm_s = str(_sr[14] if len(_sr) > 14 else "").replace("$", "").replace(",", "").strip().upper()
+            _pm_v = float(_pm_s[:-1]) if _pm_s.endswith("M") else (float(_pm_s[:-1]) / 1000.0 if _pm_s.endswith("K") else 0.0)
+            _sh_prem_m += _pm_v
+            _typ = str(_sr[13] if len(_sr) > 13 else "").upper()
+            _sd = str(_sr[10] if len(_sr) > 10 else "").upper()
+            _cp = str(_sr[3] if len(_sr) > 3 else "").upper()
+            if "SWEEP" in _typ:
+                _sweep_cnt += 1
+            if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd:
+                _above_ask_cnt += 1
+            if ("CALL" in _cp and ("BUY" in _sd or "ASK" in _sd)) or ("PUT" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                _bull_cnt += 1
+            elif ("PUT" in _cp and ("BUY" in _sd or "ASK" in _sd)) or ("CALL" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                _bear_cnt += 1
+            _q_v = float(_sr[15] if len(_sr) > 15 else 0) if str(_sr[15] if len(_sr) > 15 else "").replace(".", "", 1).isdigit() else 0.0
+            _oi_v = float(_sr[16] if len(_sr) > 16 else 0) if str(_sr[16] if len(_sr) > 16 else "").replace(".", "", 1).isdigit() else 0.0
+            if _oi_v > 0:
+                _max_voi = max(_max_voi, _q_v / _oi_v)
+        except Exception:
+            pass
+
+    for _bf in (big_flows_l or []):
+        if str(_bf.get("tk", "")).upper() != tk:
+            continue
+        for _rec in _bf.get("records", []):
+            _sh_prem_m += float(_rec.get("prem_m", 0) or 0)
+            if "BUY" in str(_rec.get("side", "")).upper():
+                _above_ask_cnt += 1
+            if _rec.get("emoji") == "🟢":
+                _bull_cnt += 1
+            elif _rec.get("emoji") == "🔴":
+                _bear_cnt += 1
+
+    if last_sn.get("상세") and _max_voi <= 0:
+        try:
+            for _dx in last_sn["상세"]:
+                _d_oi = int(_dx.get("OI", 0) or 0)
+                _d_vl = int(_dx.get("거래량", 0) or 0)
+                if _d_oi >= 50:
+                    _max_voi = max(_max_voi, _d_vl / float(_d_oi))
+        except Exception:
+            pass
+
+    # 4. Volume/OI (10점)
+    _voi_pts = 10 if _max_voi >= 5 else (8 if _max_voi >= 3 else (5 if _max_voi >= 1 else 0))
+
+    # 5. Premium (10점)
+    _tot_prem_m = float(prem_m_ov if prem_m_ov is not None else _sh_prem_m)
+    _prem_pts = 10 if _tot_prem_m >= 50 else (8 if _tot_prem_m >= 20 else (5 if _tot_prem_m >= 5 else 0))
+
+    # 6. Flow: Above Ask Count + Sweep Count (최대 10점)
+    _flow_pts = min(10, _above_ask_cnt + _sweep_cnt)
+
+    # 7. Dark Pool (5점): Bullish=5, Neutral=2, Bearish=0
+    if _bull_cnt > _bear_cnt or (net_gex > 0 and spot_v >= zg_v > 0):
+        _dp_pts, _dp_lbl = 5, "Bullish"
+    elif _bear_cnt > _bull_cnt or (net_gex < 0 and zg_v > 0 and spot_v < zg_v):
+        _dp_pts, _dp_lbl = 0, "Bearish"
+    else:
+        _dp_pts, _dp_lbl = 2, "Neutral"
+
+    # 8. Technical (5점): VWAP(+2), 20MA(+2), Zero Gamma(+1)
+    _tech_pts = _fetch_tech_for_conviction(tk, spot_v, zg_v)
+
+    total = _gex_pts + _dex_pts + _oi_pts + _voi_pts + _prem_pts + _flow_pts + _dp_pts + _tech_pts
+    grade, verdict = _conviction_grade_and_verdict(total)
+    return {
+        "tk": tk, "score": total, "grade": grade, "verdict": verdict, "spot": spot_v,
+        "GEX": _gex_pts, "DEX": _dex_pts, "OI": _oi_pts, "VOL_OI": _voi_pts,
+        "PREMIUM": _prem_pts, "FLOW": _flow_pts, "DARKPOOL": _dp_pts, "TECH": _tech_pts,
+        "dp_lbl": _dp_lbl, "net_gex": net_gex, "net_dex": net_dex, "net_doi": _net_doi,
+        "max_voi": round(_max_voi, 2), "prem_m": round(_tot_prem_m, 2),
+    }
+
+def compute_top_conviction_ranking(oi_hist_d, raw_flows_l, big_flows_l):
+    base = ["NVDA", "TSLA", "META", "MU", "AMZN", "SOXL", "PLTR", "AMD", "AAPL", "AVGO", "SPY", "QQQ", "SMH"]
+    extra_sh = [str(r[1]).strip().upper() for r in (raw_flows_l or []) if len(r) > 1 and str(r[1]).strip()]
+    tks = list(dict.fromkeys(base + list((oi_hist_d or {}).keys()) + extra_sh))[:20]
+    ranked = [compute_conviction_score(t, oi_hist_d, raw_flows_l, big_flows_l) for t in tks]
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    return ranked
+
+def render_conviction_detail_card(c_res):
+    with st.container(border=True):
+        _c1, _c2, _c3 = st.columns([1.2, 1.4, 1.2])
+        _c1.metric(f"🏆 {c_res['tk']} Conviction Score", f"{c_res['score']}/100")
+        _c2.metric("등급", c_res["grade"])
+        _c3.metric("AI 최종판정", c_res["verdict"])
+        _d_cols = st.columns(8)
+        _items_d = [
+            ("GEX", f"{c_res['GEX']}/25"), ("DEX", f"{c_res['DEX']}/20"),
+            ("OI", f"{c_res['OI']}/15"), ("VOL/OI", f"{c_res['VOL_OI']}/10"),
+            ("PREMIUM", f"{c_res['PREMIUM']}/10"), ("FLOW", f"{c_res['FLOW']}/10"),
+            ("DARKPOOL", f"{c_res['DARKPOOL']}/5"), ("TECH", f"{c_res['TECH']}/5"),
+        ]
+        for _dc, (_kl, _kv) in zip(_d_cols, _items_d):
+            _dc.metric(_kl, _kv)
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
+    "🏆 Top Conviction Ranking",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -3327,6 +3513,148 @@ if nav_menu == "⚡ 무무 실시간 차트":
         else:
             st.caption("자금분포(flow) 데이터 수신 대기 중 (3분 주기)")
 
+    # =========================================================
+    # 📡 무무 실시간 확장팩 (1: 실시간 GEX·HIRO / 2: 분단위 자금흐름 / 3: 반도체 수급판 / 4: 대량틱)
+    # =========================================================
+    @st.cache_data(ttl=45, show_spinner=False)
+    def _fetch_mm_pro_pack(_tk_p):
+        _res_p = {"ok": False, "gex": [], "hiro": 0.0, "net_gex": 0.0, "cap_flow": [], "semi": [], "ticks": []}
+        try:
+            import socket as _sk_p, concurrent.futures as _cf_p
+            with _sk_p.create_connection(("127.0.0.1", 11111), timeout=0.25):
+                pass
+            def _w_pro():
+                from moomoo import OpenQuoteContext, SubType, PeriodType, RET_OK
+                _qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+                _out = {"ok": True, "gex": [], "hiro": 0.0, "net_gex": 0.0, "cap_flow": [], "semi": [], "ticks": []}
+                try:
+                    _sym = f"US.{_tk_p}"
+                    try:
+                        _rcf, _dfcf = _qc.get_capital_flow(_sym, period_type=PeriodType.INTRADAY)
+                        if _rcf == RET_OK and _dfcf is not None and not _dfcf.empty:
+                            for _, _cr in _dfcf.tail(90).iterrows():
+                                _out["cap_flow"].append({
+                                    "t": str(_cr.get("capital_flow_item_time", ""))[-8:-3],
+                                    "전체순유입": float(_cr.get("in_flow", 0) or 0),
+                                    "주력(대형)": float(_cr.get("main_in_flow", _cr.get("big_in_flow", 0)) or 0),
+                                })
+                    except Exception:
+                        pass
+                    try:
+                        _semi_syms = [f"US.{s}" for s in ["SOXL", "SOXS", "SMH", "NVDA", "AVGO", "AMD", "MU", "TSM", "INTC", "AMAT", "LRCX", "KLAC", "ASML", "QCOM"]]
+                        _rs, _dfs = _qc.get_market_snapshot(_semi_syms)
+                        if _rs == RET_OK and _dfs is not None and not _dfs.empty:
+                            for _, _sr in _dfs.iterrows():
+                                _lp = float(_sr.get("last_price", 0) or 0)
+                                _pc = float(_sr.get("prev_close_price", 0) or 0)
+                                _chg_p = round((_lp - _pc) / _pc * 100.0, 2) if (_lp > 0 and _pc > 0) else 0.0
+                                _bv = int(_sr.get("bid_vol", 0) or 0); _av = int(_sr.get("ask_vol", 0) or 0)
+                                _out["semi"].append({
+                                    "종목": str(_sr.get("code", "")).replace("US.", ""),
+                                    "현재가": round(_lp, 2),
+                                    "등락(%)": _chg_p,
+                                    "거래대금($M)": round(float(_sr.get("turnover", 0) or 0) / 1e6, 1),
+                                    "매수/매도호가": f"{_bv:,} / {_av:,}",
+                                })
+                    except Exception:
+                        pass
+                    try:
+                        _qc.subscribe([_sym], [SubType.TICKER], subscribe_push=False)
+                        _rt, _dft = _qc.get_rt_ticker(_sym, num=300)
+                        if _rt == RET_OK and _dft is not None and not _dft.empty:
+                            for _, _tr in _dft.iterrows():
+                                _tv = float(_tr.get("turnover", 0) or 0)
+                                if _tv >= 50000:
+                                    _out["ticks"].append({
+                                        "시각": str(_tr.get("time", ""))[-8:],
+                                        "가격": round(float(_tr.get("price", 0) or 0), 2),
+                                        "수량": int(_tr.get("volume", 0) or 0),
+                                        "금액($)": int(_tv),
+                                        "방향": str(_tr.get("ticker_direction", "")),
+                                    })
+                            _out["ticks"] = _out["ticks"][-15:][::-1]
+                    except Exception:
+                        pass
+                    try:
+                        from datetime import datetime as _dt_mp, timedelta as _td_mp
+                        _nd = _dt_mp.now()
+                        _rc, _dfc = _qc.get_option_chain(code=_sym, start=_nd.strftime("%Y-%m-%d"), end=(_nd + _td_mp(days=7)).strftime("%Y-%m-%d"))
+                        if _rc == RET_OK and _dfc is not None and not _dfc.empty:
+                            _ocodes = _dfc["code"].tolist()[:80]
+                            _rso, _dfso = _qc.get_market_snapshot(_ocodes)
+                            if _rso == RET_OK and _dfso is not None and not _dfso.empty:
+                                _sp_ref = next((x["현재가"] for x in _out["semi"] if x["종목"] == _tk_p), 0.0)
+                                for _, _or in _dfso.iterrows():
+                                    _gm = float(_or.get("option_gamma", 0) or 0)
+                                    _dl = float(_or.get("option_delta", 0) or 0)
+                                    _oi = int(_or.get("option_open_interest", 0) or 0)
+                                    _vl = int(_or.get("volume", 0) or 0)
+                                    _px = float(_or.get("last_price", 0) or 0)
+                                    _ak = float(_or.get("ask_price", 0) or 0)
+                                    _bd = float(_or.get("bid_price", 0) or 0)
+                                    _k = float(_or.get("option_strike_price", 0) or 0)
+                                    _is_c = "CALL" in str(_or.get("option_type", "")).upper()
+                                    _s_use = _sp_ref if _sp_ref > 0 else _k
+                                    _gex_m = ((1.0 if _is_c else -1.0) * _gm * _oi * 100.0 * (_s_use ** 2) * 0.01) / 1e6
+                                    _out["net_gex"] += _gex_m
+                                    _sgn_h = 1.0 if (_ak > 0 and _px >= _ak * 0.99) else (-1.0 if (_bd > 0 and _px <= _bd * 1.01) else 0.0)
+                                    _hiro_m = (_sgn_h * abs(_dl) * _vl * 100.0 * _s_use) / 1e6
+                                    _out["hiro"] += (_hiro_m if _is_c else -_hiro_m)
+                                    if _vl > 0 or _oi > 0:
+                                        _out["gex"].append({
+                                            "만기": str(_or.get("strike_time", ""))[5:10],
+                                            "계약": f"{_k:g}{'C' if _is_c else 'P'}",
+                                            "거래량": _vl, "OI": _oi,
+                                            "IV(%)": round(float(_or.get("option_implied_volatility", 0) or 0), 1),
+                                            "GEX($M)": round(_gex_m, 3),
+                                        })
+                                _out["gex"] = sorted(_out["gex"], key=lambda x: abs(x["GEX($M)"]), reverse=True)[:12]
+                    except Exception:
+                        pass
+                finally:
+                    try: _qc.close()
+                    except Exception: pass
+                return _out
+            _ex_p = _cf_p.ThreadPoolExecutor(max_workers=1)
+            try:
+                _res_p = _ex_p.submit(_w_pro).result(timeout=3.5)
+            finally:
+                _ex_p.shutdown(wait=False)
+        except Exception:
+            pass
+        return _res_p
+
+    with st.expander("📡 무무 실시간 확장팩 (실시간 GEX·HIRO · 분단위 자금흐름 · 반도체 수급판 · $50K+ 대량틱)", expanded=False):
+        _mm_pro = _fetch_mm_pro_pack(clean_tk)
+        if not _mm_pro.get("ok"):
+            st.info("무무 OpenD(11111 포트)가 켜져 있을 때 실시간 GEX·분단위 자금·반도체 수급·대량틱이 표시됩니다.")
+        else:
+            _mp1, _mp2, _mp3, _mp4 = st.tabs(["⚡ 실시간 GEX·HIRO", "📈 분단위 자금흐름", "🔥 반도체 수급판", "🐋 $50K+ 대량 틱"])
+            with _mp1:
+                _g1, _g2 = st.columns(2)
+                _g1.metric("무무 실시간 Net GEX", f"${_mm_pro['net_gex']:+.2f}M")
+                _g2.metric("무무 실시간 HIRO (추정)", f"${_mm_pro['hiro']:+.2f}M")
+                if _mm_pro["gex"]:
+                    st.dataframe(pd.DataFrame(_mm_pro["gex"]), use_container_width=True, hide_index=True)
+            with _mp2:
+                if _mm_pro["cap_flow"]:
+                    _df_cf = pd.DataFrame(_mm_pro["cap_flow"])
+                    _fig_cf = go.Figure()
+                    _fig_cf.add_trace(go.Scatter(x=_df_cf["t"], y=_df_cf["전체순유입"], mode="lines", name="전체 순유입", line=dict(color="#38bdf8", width=2)))
+                    _fig_cf.add_trace(go.Scatter(x=_df_cf["t"], y=_df_cf["주력(대형)"], mode="lines", name="주력(대형)", line=dict(color="#10b981", width=2)))
+                    _fig_cf.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=280, margin=dict(l=16, r=16, t=24, b=20))
+                    st.plotly_chart(_fig_cf, use_container_width=True, key=f"mm_capflow_{clean_tk}")
+                else:
+                    st.info("분단위 자금 흐름 데이터 수신 대기 중입니다.")
+            with _mp3:
+                if _mm_pro["semi"]:
+                    st.dataframe(pd.DataFrame(_mm_pro["semi"]).sort_values("등락(%)", ascending=False), use_container_width=True, hide_index=True)
+            with _mp4:
+                if _mm_pro["ticks"]:
+                    st.dataframe(pd.DataFrame(_mm_pro["ticks"]), use_container_width=True, hide_index=True)
+                else:
+                    st.info("최근 300틱 내 $50K+ 대량 단일 체결이 없습니다.")
+
     if live_alerts or surge_list:
         st.warning(" | ".join(live_alerts + surge_list))
 
@@ -3841,8 +4169,131 @@ def format_emoji_review(raw_txt):
 
 
 if nav_menu == "📝 오늘의 종합평":
-    st.title("📝 오늘의 종합평 (2026-11-11 장마감 기준)")
-    st.caption("InsiderFinance Evening Edge 옵션 플로우·AI 분석·뉴스·다크풀 종합 평가")
+    st.title("📝 오늘의 종합평")
+    st.caption("🏆 Top Conviction Ranking · 추세전환 7대 신호 · OI 급증 TOP10 · InsiderFinance 옵션 플로우 종합 평가")
+
+    with st.container(border=True):
+        _cv_h1, _cv_h2 = st.columns([3.0, 1.0])
+        _cv_h1.subheader("🏆 Top Conviction Ranking")
+        _conv_rank = compute_top_conviction_ranking(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _cv_h2.button("📩 Conviction 텔레그램", use_container_width=True, key="btn_home_conv_tg"):
+            _cm_txt = "🏆 *[OptionHub Top Conviction Ranking]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* {r['score']}점 | {r['grade']} | {r['verdict']}"
+                for i, r in enumerate(_conv_rank[:10], 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _cm_txt)[0]:
+                st.toast("✅ Conviction 랭킹 텔레그램 전송 완료!")
+        if _conv_rank:
+            _top5_cols = st.columns(5)
+            for _ti, (_tcol, _tr) in enumerate(zip(_top5_cols, _conv_rank[:5]), 1):
+                _tcol.metric(f"{_ti}. {_tr['tk']} ({_tr['verdict']})", f"{_tr['score']}/100", _tr['grade'])
+            _df_cv_top = pd.DataFrame([
+                {
+                    "순위": i, "종목": r["tk"], "점수": f"{r['score']}/100",
+                    "등급": r["grade"], "AI 최종판정": r["verdict"],
+                    "GEX": f"{r['GEX']}/25", "DEX": f"{r['DEX']}/20", "OI": f"{r['OI']}/15",
+                    "VOL/OI": f"{r['VOL_OI']}/10", "PREM": f"{r['PREMIUM']}/10",
+                    "FLOW": f"{r['FLOW']}/10", "DP": f"{r['DARKPOOL']}/5", "TECH": f"{r['TECH']}/5",
+                }
+                for i, r in enumerate(_conv_rank[:10], 1)
+            ])
+            st.dataframe(_df_cv_top, hide_index=True, use_container_width=True)
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _calc_trend_reversal_7():
+        import yfinance as _yf_tr
+        checks = []
+        # 1. PUT 세력이 빠졌는가?
+        _oi_h = load_json_file(OI_PATH, {})
+        _put_out = False
+        _put_note = "OI 데이터 대기"
+        _chk_tks = [t for t in ("SOXL", "SPY", "QQQ") if len(_oi_h.get(t, [])) >= 1]
+        if _chk_tks:
+            _sn_list = _oi_h[_chk_tks[0]]
+            _last_s = _sn_list[-1]
+            _p_r = float(_last_s.get("Put_Call_OI_Ratio") or 1.0)
+            if len(_sn_list) >= 2:
+                _dp = int(_last_s.get("Put_OI", 0) or 0) - int(_sn_list[-2].get("Put_OI", 0) or 0)
+                _put_out = (_dp < 0 and _p_r <= 1.0)
+                _put_note = f"{_chk_tks[0]} ΔPut {_dp:+,} · P/C {_p_r:.2f}"
+            else:
+                _put_out = (_p_r < 0.85)
+                _put_note = f"{_chk_tks[0]} P/C {_p_r:.2f}"
+        checks.append(("1. PUT 세력이 빠졌는가?", _put_out, _put_note))
+
+        def _dl_hist(_sym, _per="1y"):
+            try:
+                _h = _yf_tr.Ticker(_sym).history(period=_per)
+                return _h["Close"].dropna() if (_h is not None and not _h.empty) else pd.Series(dtype=float)
+            except Exception:
+                return pd.Series(dtype=float)
+
+        # 2. VIX 20 아래인가?
+        _vix_s = _dl_hist("^VIX", "5d")
+        _vix_v = float(_vix_s.iloc[-1]) if not _vix_s.empty else 0.0
+        checks.append(("2. VIX 20 아래인가?", (0 < _vix_v < 20.0), f"VIX {_vix_v:.2f}" if _vix_v > 0 else "-"))
+
+        # 3. 공포지수 1자리수인가?
+        _fg_v = 50
+        try:
+            _req_fg = urllib.request.Request("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers={"User-Agent": "Mozilla/5.0"})
+            _j_fg = json.loads(urllib.request.urlopen(_req_fg, timeout=4).read().decode("utf-8"))
+            _fg_v = int(round(float(_j_fg["fear_and_greed"]["score"])))
+        except Exception:
+            pass
+        checks.append(("3. 공포지수 1자리수인가?", (_fg_v < 10), f"CNN F&G {_fg_v}"))
+
+        # 4. 200MA 위인가? (SPY)
+        _spy_s = _dl_hist("SPY", "1y")
+        _spy_last = float(_spy_s.iloc[-1]) if not _spy_s.empty else 0.0
+        _spy_ma200 = float(_spy_s.tail(200).mean()) if len(_spy_s) >= 200 else 0.0
+        checks.append(("4. 200MA 위인가? (SPY)", (_spy_last > _spy_ma200 > 0), f"${_spy_last:.1f} vs MA200 ${_spy_ma200:.1f}" if _spy_ma200 > 0 else "-"))
+
+        # 5. 저금리인가? (10Y < 4.0%)
+        _tnx_s = _dl_hist("^TNX", "5d")
+        _tnx_v = float(_tnx_s.iloc[-1]) if not _tnx_s.empty else 0.0
+        checks.append(("5. 저금리인가? (10Y<4%)", (0 < _tnx_v < 4.0), f"10Y {_tnx_v:.2f}%" if _tnx_v > 0 else "-"))
+
+        # 6. 유동성이 풍부한가? (HYG > 20MA & DXY < 103)
+        _hyg_s = _dl_hist("HYG", "2mo")
+        _dxy_s = _dl_hist("DX-Y.NYB", "5d")
+        _hyg_ok = (len(_hyg_s) >= 20 and float(_hyg_s.iloc[-1]) >= float(_hyg_s.tail(20).mean()))
+        _dxy_v = float(_dxy_s.iloc[-1]) if not _dxy_s.empty else 0.0
+        _liq_ok = (_hyg_ok and (0 < _dxy_v < 103.0))
+        checks.append(("6. 유동성이 풍부한가?", _liq_ok, f"DXY {_dxy_v:.1f} · HYG {'강세' if _hyg_ok else '약세'}"))
+
+        # 7. 기술적 과매도인가? (QQQ or SOXL RSI <= 35)
+        _rsi_val = 50.0
+        for _rtk in ("SOXL", "QQQ"):
+            _rs_c = _dl_hist(_rtk, "3mo")
+            if len(_rs_c) >= 16:
+                _dlt = _rs_c.diff()
+                _up = _dlt.clip(lower=0).rolling(14).mean()
+                _dn = (-_dlt.clip(upper=0)).rolling(14).mean()
+                _rs = _up.iloc[-1] / max(float(_dn.iloc[-1]), 1e-6)
+                _rsi_val = min(_rsi_val, round(100.0 - (100.0 / (1.0 + _rs)), 1))
+        checks.append(("7. 기술적 과매도인가?", (_rsi_val <= 35.0), f"RSI(14) {_rsi_val:.1f}"))
+        return checks
+
+    with st.container(border=True):
+        _tr1, _tr2 = st.columns([3.0, 1.0])
+        _tr1.subheader("🚦 추세전환 신호 체크 (7대 지표)")
+        if _tr2.button("🔄 7대 신호 새로고침", use_container_width=True, key="btn_tr7_ref"):
+            _calc_trend_reversal_7.clear()
+            st.rerun()
+        _tr_checks = _calc_trend_reversal_7()
+        _yes_cnt = sum(1 for _, ok_v, _ in _tr_checks if ok_v)
+        _tr_df = pd.DataFrame([
+            {"항목": nm, "판정": "✅ YES" if ok_v else "❌ NO", "현재 수치": note_v}
+            for nm, ok_v, note_v in _tr_checks
+        ])
+        st.dataframe(_tr_df, hide_index=True, use_container_width=True)
+        if _yes_cnt >= 5:
+            st.success(f"🟢 추세 전환 조건 충족 ({_yes_cnt}/7 YES)")
+        elif _yes_cnt >= 3:
+            st.warning(f"🟡 추세 전환 혼조·관찰 ({_yes_cnt}/7 YES)")
+        else:
+            st.error(f"🔴 추세가 전환될 만한 항목이 부족함 ({_yes_cnt}/7 YES · 기술적 반등 주의)")
 
     with st.container(border=True):
         _hm_t1, _hm_t2 = st.columns([3, 1])
@@ -6193,6 +6644,126 @@ if nav_menu == "📰 대형 옵션 체결":
     st.title("📰 대형 옵션 체결 · 신규/증가")
     st.caption("텔레그램 큰 옵션 체결 + 구글 시트 대형 스윕($500K+)을 한눈에 표로 정리하고, 방향성·지지/저항·AI 해석을 생성해 텔레그램·캘린더로 바로 보냅니다.")
 
+    # =========================================================
+    # 🏆 만기별 최대 프리미엄 단일 계약 & Fill vs Spread 게이지 바
+    # =========================================================
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _fetch_top_contract_legs(_tk_leg):
+        import re as _re_lg
+        try:
+            _csym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(_tk_leg, _tk_leg)
+            _req = urllib.request.Request(f"https://cdn.cboe.com/api/global/delayed_quotes/options/{_csym}.json", headers={"User-Agent": "Mozilla/5.0"})
+            _raw = json.loads(urllib.request.urlopen(_req, timeout=8).read().decode("utf-8"))
+            _dd = _raw.get("data") or {}
+            _opts = _dd.get("options") or []
+            _sp = float(_dd.get("current_price") or _dd.get("close") or 0.0)
+            _today_d = pd.Timestamp.now(tz="America/New_York").date()
+            _rows = []
+            for _o in _opts:
+                _occ = str(_o.get("option") or "")
+                _m = _re_lg.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", _occ)
+                if not _m: continue
+                _ym, _cp, _kr = _m.groups()
+                _exp_s = f"20{_ym[:2]}-{_ym[2:4]}-{_ym[4:6]}"
+                _dte = max((pd.to_datetime(_exp_s).date() - _today_d).days, 0)
+                _k = int(_kr) / 1000.0
+                _vol = int(_o.get("volume") or 0)
+                _oi = int(_o.get("open_interest") or 0)
+                if _vol <= 0: continue
+                _lp = float(_o.get("last_trade_price") or 0)
+                _bd = float(_o.get("bid") or 0)
+                _ak = float(_o.get("ask") or 0)
+                _mid = (_bd + _ak) / 2.0 if (_bd > 0 and _ak > 0) else _lp
+                _prem = _vol * _mid * 100.0
+                if _prem <= 0: continue
+                if _ak > 0 and _lp >= _ak * 0.995:
+                    _side = "ASK"
+                elif _bd > 0 and _lp <= _bd * 1.005:
+                    _side = "BID"
+                else:
+                    _side = "MID"
+                _fill_pct = 50.0
+                if _ak > _bd and _lp > 0:
+                    _fill_pct = max(0.0, min(100.0, (_lp - _bd) / (_ak - _bd) * 100.0))
+                _rows.append({
+                    "occ": _occ, "tk": _tk_leg, "side": _side, "strike": _k,
+                    "cp": "call" if _cp == "C" else "put", "exp": _exp_s, "dte": _dte,
+                    "spot": _sp, "bid": _bd, "ask": _ak, "trade": _lp,
+                    "fill_pct": round(_fill_pct, 1), "prem": _prem, "vol": _vol, "oi": _oi,
+                })
+            return _sp, _rows
+        except Exception:
+            return 0.0, []
+
+    with st.expander("🏆 만기별 최대 프리미엄 단일 계약 & Fill vs Spread 게이지", expanded=True):
+        _fc1, _fc2, _fc3 = st.columns([1.2, 1.4, 1.0])
+        _leg_tk = _fc1.text_input("종목 티커", value=st.session_state.get("leg_tk_val", "NVDA"), key="leg_tk_in").strip().upper() or "NVDA"
+        st.session_state["leg_tk_val"] = _leg_tk
+        _sp_lg, _lg_rows = _fetch_top_contract_legs(_leg_tk)
+        _exps_lg = ["전체 만기"] + sorted({r["exp"] for r in _lg_rows})
+        _sel_exp_lg = _fc2.selectbox("만기일 선택", _exps_lg, index=(1 if len(_exps_lg) > 1 else 0), key=f"leg_exp_sel_{_leg_tk}")
+        if _fc3.button("🔄 계약 체인 새로고침", use_container_width=True, key="btn_leg_ref"):
+            _fetch_top_contract_legs.clear()
+            st.rerun()
+
+        _lg_filt = [r for r in _lg_rows if (_sel_exp_lg == "전체 만기" or r["exp"] == _sel_exp_lg)]
+        _lg_filt.sort(key=lambda x: x["prem"], reverse=True)
+        if _lg_filt:
+            _top1 = _lg_filt[0]
+            _p1_s = f"${_top1['prem']/1e6:.2f}M" if _top1["prem"] >= 1e6 else f"${_top1['prem']/1e3:.2f}K"
+            st.success(f"🏆 **{_leg_tk} ({_sel_exp_lg})** 단일 계약 중 가장 프리미엄이 큰 거래: **`{_top1['occ']}`** · **{_top1['side']}** · **{_p1_s}** (거래량 {_top1['vol']:,} · OI {_top1['oi']:,})")
+
+            def _spread_bar_html(pct, side_s):
+                _dot_c = "#10b981" if side_s == "ASK" else ("#ef4444" if side_s == "BID" else "#fbbf24")
+                return (
+                    f"<div style='display:flex;align-items:center;gap:6px;'>"
+                    f"<div style='position:relative;width:96px;height:6px;background:#1e293b;border-radius:3px;'>"
+                    f"<div style='position:absolute;left:{pct}%;top:-3px;width:10px;height:12px;background:{_dot_c};border-radius:2px;transform:translateX(-50%);'></div>"
+                    f"</div><span style='font-size:11px;color:{_dot_c};'>{int(pct)}%</span></div>"
+                )
+
+            _tr_html = []
+            for _r in _lg_filt[:12]:
+                _scol = "#10b981" if _r["side"] == "ASK" else ("#ef4444" if _r["side"] == "BID" else "#fbbf24")
+                _tcol = "#10b981" if _r["cp"] == "call" else "#ef4444"
+                _ps = f"${_r['prem']/1e6:.2f}M" if _r["prem"] >= 1e6 else f"${_r['prem']/1e3:.1f}K"
+                _tr_html.append(
+                    f"<tr style='border-bottom:1px solid #13283d;font-size:12px;text-align:center;'>"
+                    f"<td style='padding:7px;text-align:left;font-family:monospace;color:#e2e8f0;'>{_r['occ']}</td>"
+                    f"<td style='padding:7px;font-weight:800;color:{_scol};'>{_r['side']}</td>"
+                    f"<td style='padding:7px;font-weight:700;'>${_r['strike']:g}</td>"
+                    f"<td style='padding:7px;font-weight:700;color:{_tcol};'>{_r['cp']}</td>"
+                    f"<td style='padding:7px;color:#94a3b8;'>{_r['exp']} ({_r['dte']}d)</td>"
+                    f"<td style='padding:7px;color:#cbd5e1;'>${_r['bid']:.2f} - ${_r['ask']:.2f}</td>"
+                    f"<td style='padding:7px;font-weight:700;color:#fff;'>${_r['trade']:.2f}</td>"
+                    f"<td style='padding:7px;'>{_spread_bar_html(_r['fill_pct'], _r['side'])}</td>"
+                    f"<td style='padding:7px;font-weight:800;color:#fbbf24;'>{_ps}</td>"
+                    f"<td style='padding:7px;'>{_r['vol']:,}</td>"
+                    f"<td style='padding:7px;color:#94a3b8;'>{_r['oi']:,}</td></tr>"
+                )
+            st.markdown(
+                "<div style='overflow-x:auto;background:#07111e;border:1px solid #1e3a5f;border-radius:8px;padding:8px;'>"
+                "<div style='font-size:12px;color:#94a3b8;margin-bottom:6px;'>선택한 흐름의 레그 · 호가 대비 체결 위치 (Fill vs Spread)</div>"
+                "<table style='width:100%;border-collapse:collapse;'>"
+                "<thead><tr style='border-bottom:1px solid #1e3a5f;color:#64748b;font-size:11px;'>"
+                "<th style='padding:6px;text-align:left;'>계약 (OCC)</th><th>Side</th><th>Strike</th><th>Type</th>"
+                "<th>Expiration</th><th>Bid - Ask</th><th>Trade Price</th><th>Fill vs Spread</th><th>Premium</th><th>Volume</th><th>OI</th>"
+                "</tr></thead><tbody>" + "".join(_tr_html) + "</tbody></table></div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("📩 1위 최대 프리미엄 계약 텔레그램 전송", key="btn_leg_tg_send"):
+                _t_tok, _t_cid = load_tg_config()
+                _msg_t1 = (
+                    f"🏆 *[{_leg_tk} {_sel_exp_lg} 최대 프리미엄 단일 계약]*\n"
+                    f"• 계약: `{_top1['occ']}` ({_top1['cp'].upper()} ${_top1['strike']:g})\n"
+                    f"• 체결 위치: *{_top1['side']}* (Bid ${_top1['bid']:.2f} - Ask ${_top1['ask']:.2f} · Trade ${_top1['trade']:.2f}, Fill {_top1['fill_pct']}%)\n"
+                    f"• 규모: *{_p1_s}* | 거래량 {_top1['vol']:,} / OI {_top1['oi']:,}"
+                )
+                if send_telegram_msg(_t_tok, _t_cid, _msg_t1)[0]:
+                    st.toast("✅ 1위 계약 텔레그램 전송 완료!")
+        else:
+            st.info(f"{_leg_tk}의 당일 거래량이 있는 계약이 아직 없습니다.")
+
     _big_seed_flag = os.path.expanduser("~/.optionhub_big_seed_pltr_v1")
     saved_big_flows = load_json_file(BIG_FLOWS_PATH, [])
     if not os.path.exists(_big_seed_flag):
@@ -6667,6 +7238,16 @@ if nav_menu == "🎯 행사가별·동반 체결":
         yf_rows, yf_spot, yf_err = _fetch_flow_chain(tk_f)
     if spot_live <= 0 and yf_spot > 0:
         spot_live = float(yf_spot)
+
+    _det_gex = round(float(df_yf_f["GEX($M)"].sum()), 2) if (not df_yf_f.empty and "GEX($M)" in df_yf_f.columns) else None
+    _det_dex = round(float(df_yf_f["DEX($M)"].sum()), 2) if (not df_yf_f.empty and "DEX($M)" in df_yf_f.columns) else None
+    _det_zg = calc_zero_gamma(df_yf_f, spot_live) if not df_yf_f.empty else None
+    _det_voi = float(df_yf_f["Vol/OI"].max()) if (not df_yf_f.empty and "Vol/OI" in df_yf_f.columns) else None
+    _det_conv = compute_conviction_score(
+        tk_f, oi_hist_all, all_raw_flows, load_json_file(BIG_FLOWS_PATH, []),
+        spot_ov=spot_live, net_gex_ov=_det_gex, net_dex_ov=_det_dex, zero_gamma_ov=_det_zg, vol_oi_ov=_det_voi,
+    )
+    render_conviction_detail_card(_det_conv)
 
     st.markdown(f"""
     <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; background:#07111e; border:1px solid #1e3a5f; border-radius:8px; padding:10px 14px; margin-bottom:10px; font-family:monospace; font-size:13px;">
@@ -9324,3 +9905,39 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                     st.dataframe(pd.DataFrame(_dsec["summary"]) if isinstance(_dsec["summary"], list) else pd.DataFrame([_dsec["summary"]]), use_container_width=True, hide_index=True)
             else:
                 st.info("우측 `📊 퀀트 통계 조회` 버튼을 눌러주세요.")
+
+
+if nav_menu == "🏆 Top Conviction Ranking":
+    st.title("🏆 Top Conviction Ranking")
+    st.caption("GEX(25) · DEX(20) · OI(15) · Volume/OI(10) · Premium(10) · Flow(10) · Dark Pool(5) · Technical(5) 기반 100점 만점 기관 확신도 랭킹")
+
+    _cr_b1, _cr_b2 = st.columns([3.0, 1.0])
+    if _cr_b2.button("🔄 전체 랭킹 재계산", use_container_width=True, key="btn_conv_page_ref"):
+        _fetch_tech_for_conviction.clear()
+        st.rerun()
+
+    _all_ranked = compute_top_conviction_ranking(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+    if _all_ranked:
+        _df_rank_full = pd.DataFrame([
+            {
+                "순위": i, "종목": r["tk"], "Conviction Score": r["score"],
+                "등급": r["grade"], "AI 최종판정": r["verdict"],
+                "GEX(25)": r["GEX"], "DEX(20)": r["DEX"], "OI(15)": r["OI"],
+                "VOL/OI(10)": r["VOL_OI"], "PREM(10)": r["PREMIUM"],
+                "FLOW(10)": r["FLOW"], "DP(5)": r["DARKPOOL"], "TECH(5)": r["TECH"],
+            }
+            for i, r in enumerate(_all_ranked, 1)
+        ])
+        st.dataframe(_df_rank_full, hide_index=True, use_container_width=True)
+
+        _sel_cv_tk = st.selectbox("🔍 종목별 세부 점수 상세 보기", [r["tk"] for r in _all_ranked], key="conv_page_sel_tk")
+        _sel_cv_r = next(r for r in _all_ranked if r["tk"] == _sel_cv_tk)
+        render_conviction_detail_card(_sel_cv_r)
+
+        if st.button("📩 Top 10 Conviction Ranking 텔레그램 전송", type="primary", key="btn_conv_page_tg"):
+            _pg_txt = "🏆 *[OptionHub Top 10 Conviction Ranking]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* {r['score']}/100 | {r['grade']} | {r['verdict']}"
+                for i, r in enumerate(_all_ranked[:10], 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _pg_txt)[0]:
+                st.toast("✅ 텔레그램 전송 완료!")

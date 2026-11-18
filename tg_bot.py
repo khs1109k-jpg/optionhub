@@ -618,6 +618,14 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "⏱ 장중 옵션 변화 (OI 기록 종목 · CBOE 지연) 스캔 중...")
         send_msg(token, chat_id, build_intraday_option_changes())
 
+    elif low in ("/추세전환", "/신호체크", "/trend") or cmd == "cmd:trend":
+        send_msg(token, chat_id, "🚦 추세전환 7대 신호 체크 중...")
+        send_msg(token, chat_id, build_trend_reversal_7())
+
+    elif low in ("/대량틱", "/틱", "/ticks") or cmd == "cmd:ticks":
+        send_msg(token, chat_id, "🐋 무무 $100K+ 대량 틱·호가벽 불균형 스캔 중...")
+        send_msg(token, chat_id, build_moomoo_big_ticks_alert(manual=True))
+
     elif low in ("/강한콜풋", "/풋콜스캔", "/스캔", "/abscan") or cmd == "cmd:abscan":
         send_msg(token, chat_id, "🚦 강한 풋·콜 스캔 (A·B 등급, 만기 14일 내) 실행 중...")
         _ab_txt, _ab_png = build_strong_cp_scan()
@@ -1597,6 +1605,77 @@ def get_oi_delta_and_unwind_lines():
     return [x[1] for x in surges[:3]], [x[1] for x in unwinds[:2]]
 
 
+
+def build_trend_reversal_7():
+    checks = []
+    hist = {}
+    if os.path.exists(OI_PATH):
+        try:
+            hist = json.load(open(OI_PATH, "r", encoding="utf-8"))
+        except Exception:
+            hist = {}
+    put_ok, put_note = False, "OI 대기"
+    for tk in ("SOXL", "SPY", "QQQ"):
+        sn = hist.get(tk) or []
+        if sn:
+            last_s = sn[-1]
+            pc = float(last_s.get("Put_Call_OI_Ratio") or 1.0)
+            if len(sn) >= 2:
+                dp = int(last_s.get("Put_OI", 0) or 0) - int(sn[-2].get("Put_OI", 0) or 0)
+                put_ok = (dp < 0 and pc <= 1.0)
+                put_note = f"{tk} ΔPut {dp:+,} · P/C {pc:.2f}"
+            else:
+                put_ok = (pc < 0.85)
+                put_note = f"{tk} P/C {pc:.2f}"
+            break
+    checks.append(("1 PUT 세력이 빠졌는가?", put_ok, put_note))
+
+    vix_p, _ = _yf_last_chg("^VIX")
+    checks.append(("2 VIX 20 아래인가?", bool(vix_p and vix_p < 20.0), f"{vix_p:.2f}" if vix_p else "-"))
+
+    fg_v, _, _, _ = get_cnn_fg()
+    checks.append(("3 공포지수 1자리수인가?", (fg_v < 10), f"{fg_v}"))
+
+    spy_ma_ok, spy_note = False, "-"
+    rsi_min = 50.0
+    try:
+        import yfinance as yf
+        h_spy = yf.Ticker("SPY").history(period="1y")["Close"].dropna()
+        if len(h_spy) >= 200:
+            sp_l = float(h_spy.iloc[-1]); ma2 = float(h_spy.tail(200).mean())
+            spy_ma_ok = (sp_l > ma2)
+            spy_note = f"${sp_l:.1f}/MA200 ${ma2:.1f}"
+        h_hyg = yf.Ticker("HYG").history(period="2mo")["Close"].dropna()
+        h_dxy = yf.Ticker("DX-Y.NYB").history(period="5d")["Close"].dropna()
+        hyg_ok = (len(h_hyg) >= 20 and float(h_hyg.iloc[-1]) >= float(h_hyg.tail(20).mean()))
+        dxy_v = float(h_dxy.iloc[-1]) if not h_dxy.empty else 0.0
+        liq_ok = (hyg_ok and 0 < dxy_v < 103.0)
+        liq_note = f"DXY {dxy_v:.1f}"
+        for rtk in ("SOXL", "QQQ"):
+            hc = yf.Ticker(rtk).history(period="3mo")["Close"].dropna()
+            if len(hc) >= 16:
+                dl = hc.diff()
+                up = dl.clip(lower=0).rolling(14).mean()
+                dn = (-dl.clip(upper=0)).rolling(14).mean()
+                rs = float(up.iloc[-1]) / max(float(dn.iloc[-1]), 1e-6)
+                rsi_min = min(rsi_min, round(100.0 - (100.0 / (1.0 + rs)), 1))
+    except Exception:
+        liq_ok, liq_note = False, "-"
+
+    checks.append(("4 200MA 위인가? (SPY)", spy_ma_ok, spy_note))
+    y10_p, _ = _yf_last_chg("^TNX")
+    checks.append(("5 저금리인가? (10Y<4%)", bool(y10_p and y10_p < 4.0), f"{y10_p:.2f}%" if y10_p else "-"))
+    checks.append(("6 유동성이 풍부한가?", liq_ok, liq_note))
+    checks.append(("7 기술적 과매도인가?", (rsi_min <= 35.0), f"RSI {rsi_min:.1f}"))
+
+    yes_n = sum(1 for _, ok_v, _ in checks if ok_v)
+    verdict = "🟢 추세 전환 조건 충족" if yes_n >= 5 else ("🟡 추세 전환 혼조·관찰" if yes_n >= 3 else "🔴 추세가 전환될 만한 항목이 부족함")
+    out = ["🚦 추세전환 신호 체크"]
+    for nm, ok_v, nt in checks:
+        out.append(f"{nm} {'YES' if ok_v else 'NO'} ({nt})")
+    out.append(f"→ {verdict} ({yes_n}/7)")
+    return "\n".join(out)
+
 def build_morning_briefing():
     now_dt = datetime.utcnow() + timedelta(hours=9)
     wdays = ["월", "화", "수", "목", "금", "토", "일"]
@@ -1647,7 +1726,9 @@ def build_morning_briefing():
         lines += ["", "⚠️ OPEX · 대형 OI 청산(Unwind) 경보"] + _oi_unwinds
     lines += [
         "",
-        "최종 종목 판정은 /브리핑, 레벨은 /레벨알림 으로 볼 수 있어.",
+        "최종 종목 판정은 /브리핑, 레벨은 /레벨알림, 7대 신호는 /추세전환 으로 볼 수 있어.",
+        "",
+        build_trend_reversal_7(),
         "",
         "━━━━━━━━━━",
         f"🌅 최종분석 브리핑 ({short_dt})",
@@ -2370,6 +2451,92 @@ def auto_scan_strong_cp(token, chat_id):
     except Exception:
         pass
 
+
+_SEEN_BIG_TICKS = set()
+
+def build_moomoo_big_ticks_alert(manual=False):
+    import socket as _sk_bt
+    tks = ["SOXL", "NVDA", "TSLA", "SPY", "QQQ", "MU", "AMD"]
+    try:
+        with _sk_bt.create_connection(("127.0.0.1", 11111), timeout=0.3):
+            pass
+    except Exception:
+        return "⚠️ 무무 OpenD(11111 포트)가 꺼져 있어 대량 틱 스캔을 건너뜁니다." if manual else ""
+
+    qctx = None
+    hits = []
+    try:
+        from moomoo import OpenQuoteContext, SubType, RET_OK
+        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        syms = [f"US.{t}" for t in tks]
+        qctx.subscribe(syms, [SubType.TICKER, SubType.ORDER_BOOK], subscribe_push=False)
+        for tk in tks:
+            sym = f"US.{tk}"
+            try:
+                rt, dft = qctx.get_rt_ticker(sym, num=150)
+                if rt == RET_OK and dft is not None and not dft.empty:
+                    for _, r in dft.iterrows():
+                        tv = float(r.get("turnover", 0) or 0)
+                        if tv >= 100_000:
+                            tm = str(r.get("time", ""))[-8:]
+                            px = float(r.get("price", 0) or 0)
+                            td = str(r.get("ticker_direction", "")).upper()
+                            k_id = f"{tk}|{tm}|{px}|{int(tv)}"
+                            if (not manual) and (k_id in _SEEN_BIG_TICKS):
+                                continue
+                            _SEEN_BIG_TICKS.add(k_id)
+                            if len(_SEEN_BIG_TICKS) > 500:
+                                _SEEN_BIG_TICKS.clear()
+                            emo = "🟢매수긁기" if "BUY" in td else ("🔴매도투매" if "SELL" in td else "⚪체결")
+                            hits.append(f"• {tk} {emo} ${px:,.2f} · {_fmt_prem_short(tv)} ({tm})")
+            except Exception:
+                pass
+            try:
+                rb, dfb = qctx.get_order_book(sym, num=10)
+                if rb == RET_OK and isinstance(dfb, dict):
+                    bids = dfb.get("Bid") or []; asks = dfb.get("Ask") or []
+                    bt = sum(float(x[1]) for x in bids[:10] if len(x) >= 2)
+                    at = sum(float(x[1]) for x in asks[:10] if len(x) >= 2)
+                    if bt > 0 and at > 0:
+                        if bt / at >= 2.5:
+                            hits.append(f"• 🧱 {tk} 매수벽 {bt/at:.1f}배 우위 (Bid {int(bt):,} vs Ask {int(at):,})")
+                        elif at / bt >= 2.5:
+                            hits.append(f"• 🧱 {tk} 매도벽 {at/bt:.1f}배 우위 (Ask {int(at):,} vs Bid {int(bt):,})")
+            except Exception:
+                pass
+    except Exception as _ebt:
+        return f"대량 틱 스캔 오류: {_ebt}" if manual else ""
+    finally:
+        if qctx:
+            try: qctx.close()
+            except Exception: pass
+
+    if not hits:
+        return "🐋 무무 $100K+ 대량 틱·호가벽 특이사항 없음" if manual else ""
+    return "🐋 *[무무 실시간 $100K+ 대량 틱 · 호가벽 경보]*\n\n" + "\n".join(hits[:15])
+
+_LAST_BIGTICK_TS = 0.0
+
+def auto_scan_moomoo_big_ticks(token, chat_id):
+    global _LAST_BIGTICK_TS
+    try:
+        from datetime import datetime, timezone, timedelta
+        kst = datetime.now(timezone(timedelta(hours=9)))
+        hm = kst.hour * 100 + kst.minute
+        wd = kst.weekday()
+        in_session = ((wd in (0, 1, 2, 3, 4) and hm >= 2330) or (wd in (1, 2, 3, 4, 5) and hm <= 600))
+        if not in_session:
+            return
+        now_ts = time.time()
+        if now_ts - _LAST_BIGTICK_TS < 120:
+            return
+        _LAST_BIGTICK_TS = now_ts
+        msg = build_moomoo_big_ticks_alert(manual=False)
+        if msg:
+            send_msg(token, chat_id, msg)
+    except Exception:
+        pass
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -2390,6 +2557,7 @@ def main():
                 _th_bg.Thread(target=auto_scan_big_flows_summary, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_moomoo_cp_dominance, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_strong_cp, args=(token, my_chat_id), daemon=True).start()
+                _th_bg.Thread(target=auto_scan_moomoo_big_ticks, args=(token, my_chat_id), daemon=True).start()
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
