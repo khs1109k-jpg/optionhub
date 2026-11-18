@@ -4542,10 +4542,22 @@ if nav_menu == "⚡ 무무 실시간 차트":
                         _nd = _dt_mp.now()
                         _rc, _dfc = _qc.get_option_chain(code=_sym, start=_nd.strftime("%Y-%m-%d"), end=(_nd + _td_mp(days=7)).strftime("%Y-%m-%d"))
                         if _rc == RET_OK and _dfc is not None and not _dfc.empty:
+                            _sp_ref = next((x["현재가"] for x in _out["semi"] if x["종목"] == _tk_p), 0.0)
+                            if _sp_ref <= 0:
+                                try:
+                                    _rsu, _dfsu = _qc.get_market_snapshot([_sym])
+                                    if _rsu == RET_OK and _dfsu is not None and not _dfsu.empty:
+                                        _sp_ref = float(_dfsu.iloc[0].get("last_price", 0) or _dfsu.iloc[0].get("prev_close_price", 0) or 0)
+                                except Exception:
+                                    pass
+                            if _sp_ref > 0 and "strike_price" in _dfc.columns:
+                                _sk_m = pd.to_numeric(_dfc["strike_price"], errors="coerce").fillna(0)
+                                _dfc_n = _dfc[(_sk_m >= _sp_ref * 0.78) & (_sk_m <= _sp_ref * 1.22)]
+                                if not _dfc_n.empty:
+                                    _dfc = _dfc_n
                             _ocodes = _dfc["code"].tolist()[:80]
                             _rso, _dfso = _qc.get_market_snapshot(_ocodes)
                             if _rso == RET_OK and _dfso is not None and not _dfso.empty:
-                                _sp_ref = next((x["현재가"] for x in _out["semi"] if x["종목"] == _tk_p), 0.0)
                                 for _, _or in _dfso.iterrows():
                                     _gm = float(_or.get("option_gamma", 0) or 0)
                                     _dl = float(_or.get("option_delta", 0) or 0)
