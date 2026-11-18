@@ -1289,12 +1289,101 @@ def compute_ai_watchlist(oi_hist_d, raw_flows_l, big_flows_l, fill_live_walls=Fa
                     it["stop"] = it["pw"] if (it["pw"] > 0 and (it["spot"] <= 0 or it["pw"] < it["spot"])) else (round(it["spot"] * 0.96, 2) if it["spot"] > 0 else 0.0)
     return top10
 
+
+# =========================================================
+# 🚨 AI Alert Center (6대 실시간 알림 감시 + 히스토리 + AI 요약 + 텔레그램)
+# =========================================================
+AI_ALERTS_PATH = os.path.expanduser("~/.optionhub_ai_alerts.json")
+
+def evaluate_ai_alerts(oi_hist_d, raw_flows_l, big_flows_l, auto_tg=True, tg_tok="", tg_cid=""):
+    now_kst = pd.Timestamp.now(tz="Asia/Seoul")
+    today_s = now_kst.strftime("%Y-%m-%d")
+    time_s = now_kst.strftime("%Y-%m-%d %H:%M:%S")
+    hour_key = now_kst.strftime("%Y%m%d%H")
+
+    hist = load_json_file(AI_ALERTS_PATH, [])
+    if not isinstance(hist, list):
+        hist = []
+    seen_ids = {a.get("id") for a in hist if isinstance(a, dict)}
+
+    sm_map = {r["tk"]: r for r in compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)}
+    base = ["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "PLTR", "AMZN", "AAPL", "AVGO", "SPY", "QQQ", "SMH"]
+    extra_sh = [str(r[1]).strip().upper() for r in (raw_flows_l or []) if len(r) > 1 and str(r[1]).strip()]
+    tks = list(dict.fromkeys(base + list((oi_hist_d or {}).keys()) + extra_sh))[:20]
+
+    new_alerts = []
+    for tk in tks:
+        c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+        r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+        snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+        last_sn = snaps[-1] if snaps else {}
+        prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+
+        spot_v = float(c_res.get("spot", 0) or last_sn.get("Spot", 0) or 0)
+        cw_v = float(last_sn.get("CallWall", 0) or 0)
+        zg_v = float(last_sn.get("ZeroGamma", 0) or 0)
+        tot_prev = (int(prev_sn.get("Call_OI", 0) or 0) + int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
+        tot_now = (int(last_sn.get("Call_OI", 0) or 0) + int(last_sn.get("Put_OI", 0) or 0)) if last_sn else 0
+        oi_chg_pct = round((tot_now - tot_prev) / tot_prev * 100.0, 1) if tot_prev > 0 else 0.0
+        sm_r = sm_map.get(tk, {})
+
+        reasons = []
+        if c_res["net_gex"] > 0: reasons.append("GEX Positive")
+        if c_res["net_dex"] > 0: reasons.append("DEX Positive")
+        if c_res["net_doi"] > 0: reasons.append("Call OI Expansion")
+        if sm_r.get("ask_cnt", 0) > 0: reasons.append("Above Ask Dominant")
+        tgt_s = f"목표 {spot_v:g} → {cw_v:g}" if (spot_v > 0 and cw_v > spot_v) else (f"Call Wall ${cw_v:g}" if cw_v > 0 else "")
+        ai_tail = (" | ".join(reasons[:4]) if reasons else "옵션 수급 포착") + (f" | {tgt_s}" if tgt_s else "") + f" | 최종 {c_res['verdict']}"
+
+        def _add_al(sev, typ, title, detail):
+            aid = f"{hour_key}|{typ}|{tk}"
+            if aid in seen_ids:
+                return
+            seen_ids.add(aid)
+            al = {
+                "id": aid, "date": today_s, "time": time_s,
+                "severity": sev, "type": typ, "ticker": tk,
+                "title": title, "detail": detail, "summary": ai_tail,
+            }
+            new_alerts.append(al)
+
+        # 1. Conviction Alert (>= 85)
+        if c_res["score"] >= 85:
+            _add_al("🔴 Critical", "HIGH CONVICTION", f"🚨 HIGH CONVICTION · {tk} (Score {c_res['score']})", f"Score {c_res['score']} | {c_res['grade']}")
+        # 2. Trend Reversal Alert (>= 8)
+        if r_res["score"] >= 8:
+            _add_al("🔴 Critical", "TREND REVERSAL", f"🚨 TREND REVERSAL · {tk} ({r_res['score']}/10)", f"Score {r_res['score']}/10 | 추세전환 감지")
+        # 3. Gamma Flip Alert (현재가 > Flip Gamma, +3% 이내 돌파)
+        if spot_v > 0 and zg_v > 0 and zg_v < spot_v <= zg_v * 1.03:
+            _add_al("🟠 High", "GAMMA FLIP", f"🚨 GAMMA FLIP · {tk} (Price ${spot_v:g} > Flip ${zg_v:g})", f"Positive Gamma 진입 (${zg_v:g} 돌파)")
+        # 4. Smart Money Alert (Premium > $10M + Above Ask + Sweep + OI 증가)
+        if sm_r.get("prem_m", 0) >= 10.0 and sm_r.get("ask_cnt", 0) >= 1 and sm_r.get("sweep_cnt", 0) >= 1 and sm_r.get("call_doi", 0) >= 0:
+            _add_al("🔴 Critical", "SMART MONEY", f"🚨 SMART MONEY · {tk} (Premium ${sm_r['prem_m']:.1f}M)", f"BTO Call 추정 · Sweep {sm_r['sweep_cnt']}건")
+        # 5. OI Explosion Alert (OI 증가율 30% 이상)
+        if oi_chg_pct >= 30.0:
+            _add_al("🟠 High", "OI EXPLOSION", f"🚨 OI EXPLOSION · {tk} (+{oi_chg_pct:.1f}%)", f"전일 대비 OI +{oi_chg_pct:.1f}% 폭증")
+        # 6. Dark Pool Alert (Dark Pool Bullish)
+        if c_res.get("dp_lbl") == "Bullish" and c_res.get("DARKPOOL", 0) >= 5:
+            _add_al("🟡 Medium", "DARKPOOL ACCUMULATION", f"🚨 DARKPOOL ACCUMULATION · {tk}", "Accumulation detected (매수 우위)")
+
+    if new_alerts:
+        hist = (new_alerts + hist)[:200]
+        save_json_file(AI_ALERTS_PATH, hist)
+        if auto_tg and tg_tok and tg_cid:
+            _tg_lines = ["🚨 *[OptionHub AI Alert Center]*\n"] + [
+                f"{a['severity']} *{a['title']}*\n   {a['detail']}\n   ↳ {a['summary']}"
+                for a in new_alerts[:8]
+            ]
+            send_telegram_msg(tg_tok, tg_cid, "\n".join(_tg_lines))
+    return hist, new_alerts
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
     "🏦 Smart Money Tracker",
     "🏆 AI Watchlist",
     "📊 Backtest Center",
+    "🚨 AI Alert Center",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -4935,6 +5024,15 @@ def format_emoji_review(raw_txt):
 if nav_menu == "📝 오늘의 종합평":
     st.title("📝 오늘의 종합평")
     st.caption("🏆 Top Conviction Ranking · 추세전환 7대 신호 · OI 급증 TOP10 · InsiderFinance 옵션 플로우 종합 평가")
+
+    _al_hist_h, _al_new_h = evaluate_ai_alerts(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), auto_tg=True, tg_tok=tg_token, tg_cid=tg_chat_id)
+    _today_al_s = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    _today_als = [a for a in _al_hist_h if a.get("date") == _today_al_s]
+    if _today_als:
+        _cnt_cr = sum(1 for a in _today_als if "Critical" in a.get("severity", ""))
+        _cnt_hi = sum(1 for a in _today_als if "High" in a.get("severity", ""))
+        _cnt_md = sum(1 for a in _today_als if "Medium" in a.get("severity", ""))
+        st.warning(f"🚨 **오늘의 AI Alert:** 🔴 Critical **{_cnt_cr}** · 🟠 High **{_cnt_hi}** · 🟡 Medium **{_cnt_md}**  |  최신: **{_today_als[0]['title']}** ({_today_als[0]['summary']})")
 
     with st.container(border=True):
         _cv_h1, _cv_h2 = st.columns([3.0, 1.0])
@@ -11169,3 +11267,54 @@ if nav_menu == "📊 Backtest Center":
                 st.toast("✅ 백테스트 요약 텔레그램 전송 완료!")
     else:
         st.warning("선택한 조건에 해당하는 최근 1년 거래 표본이 없습니다. 기준 점수나 종목을 조정해 보세요.")
+
+
+if nav_menu == "🚨 AI Alert Center":
+    st.title("🚨 AI Alert Center (실시간 6대 경보 & 알림 대시보드)")
+    st.caption("Conviction 85+ · Trend Reversal 8+ · Gamma Flip · Smart Money($10M+) · OI Explosion(+30%) · Dark Pool 감시")
+
+    _ac1, _ac2, _ac3 = st.columns([1.4, 1.4, 1.2])
+    _auto_tg_al = _ac1.checkbox("📩 조건 충족 시 텔레그램 자동 전송", value=True, key="al_auto_tg_chk")
+    _sev_filt = _ac2.selectbox("중요도 필터", ["전체", "🔴 Critical", "🟠 High", "🟡 Medium"], key="al_sev_filt")
+    _scan_now = _ac3.button("🔍 지금 즉시 6대 알림 스캔", type="primary", use_container_width=True, key="btn_al_scan_now")
+
+    _al_hist, _al_new = evaluate_ai_alerts(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), auto_tg=_auto_tg_al, tg_tok=tg_token, tg_cid=tg_chat_id)
+    if _scan_now:
+        st.toast(f"✅ 스캔 완료! 신규 알림 {len(_al_new)}건")
+
+    _today_s_al = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    _today_list = [a for a in _al_hist if a.get("date") == _today_s_al]
+    _c_cr = sum(1 for a in _today_list if "Critical" in a.get("severity", ""))
+    _c_hi = sum(1 for a in _today_list if "High" in a.get("severity", ""))
+    _c_md = sum(1 for a in _today_list if "Medium" in a.get("severity", ""))
+
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    _m1.metric("🔴 Critical (오늘)", f"{_c_cr}건")
+    _m2.metric("🟠 High (오늘)", f"{_c_hi}건")
+    _m3.metric("🟡 Medium (오늘)", f"{_c_md}건")
+    _m4.metric("📋 최근 저장 히스토리", f"{min(50, len(_al_hist))} / 50건")
+
+    _show_als = [a for a in _al_hist[:50] if (_sev_filt == "전체" or a.get("severity") == _sev_filt)]
+    if _show_als:
+        st.dataframe(pd.DataFrame([
+            {
+                "발생시각": a.get("time", "")[-8:],
+                "중요도": a.get("severity", ""),
+                "유형": a.get("type", ""),
+                "종목": a.get("ticker", ""),
+                "알림 내용": a.get("title", ""),
+                "AI 요약": a.get("summary", ""),
+            }
+            for a in _show_als
+        ]), hide_index=True, use_container_width=True)
+
+        _top_a = _show_als[0]
+        with st.container(border=True):
+            st.markdown(f"### {_top_a['severity']} {_top_a['title']}")
+            st.markdown(f"**상세:** {_top_a['detail']}")
+            st.info(f"🤖 **AI 요약:** {_top_a['summary']}")
+            if st.button("📩 이 알림 텔레그램으로 다시 보내기", key="btn_al_resend_tg"):
+                if send_telegram_msg(tg_token, tg_chat_id, f"{_top_a['severity']} *{_top_a['title']}*\n{_top_a['detail']}\n↳ {_top_a['summary']}")[0]:
+                    st.toast("✅ 텔레그램 재전송 완료!")
+    else:
+        st.info("아직 조건을 충족한 알림이 없습니다. 상단 '지금 즉시 6대 알림 스캔'을 누르거나 장중 데이터가 들어오면 자동 기록됩니다.")
