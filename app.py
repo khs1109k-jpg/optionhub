@@ -1386,6 +1386,7 @@ MENU_ITEMS = [
     "🚨 AI Alert Center",
     "⏰ Telegram Scheduler",
     "🎯 Portfolio Trigger",
+    "📋 AI Trade Plan",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -5163,6 +5164,22 @@ if nav_menu == "📝 오늘의 종합평":
                 }
                 for i, r in enumerate(_wl_top10, 1)
             ]), hide_index=True, use_container_width=True)
+
+    with st.container(border=True):
+        _htp1, _htp2 = st.columns([3.0, 1.0])
+        _htp1.subheader("📋 AI Trade Plan Center")
+        _sel_htp_tk = st.selectbox("🔍 매매계획 종목", ["NVDA", "SOXL", "TSLA", "META", "AMD", "MU", "SPY", "QQQ"], index=0, key="home_tp_sel_tk")
+        _htp_res = compute_ai_trade_plan(_sel_htp_tk, load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _htp2.button("📩 Trade Plan 텔레그램", use_container_width=True, key="btn_home_tp_tg"):
+            _htp_msg = (
+                f"📋 *[{_htp_res['tk']} AI Trade Plan]*\n"
+                f"현재가: ${_htp_res['spot']:,.2f} | Conv {_htp_res['conv']} | Trend {_htp_res['trend']}\n"
+                f"판정: *{_htp_res['dir']}* | 진입 {_htp_res['entry']} | 손절 {_htp_res['stop']} | 목표 {_htp_res['t1']}→{_htp_res['t2']}\n"
+                f"결론: {_htp_res['conclusion']}"
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _htp_msg)[0]:
+                st.toast("✅ AI Trade Plan 텔레그램 전송 완료!")
+        render_ai_trade_plan_card(_htp_res, key_prefix="home")
 
     @st.cache_data(ttl=300, show_spinner=False)
     def _calc_trend_reversal_7():
@@ -11558,3 +11575,118 @@ if nav_menu == "🎯 Portfolio Trigger":
             )
             if send_telegram_msg(tg_token, tg_chat_id, _pt_summary)[0]:
                 st.toast("✅ 포트폴리오 현황 텔레그램 전송 완료!")
+
+
+def compute_ai_trade_plan(tk_in, oi_hist_d, raw_flows_l, big_flows_l):
+    tk = str(tk_in or "").strip().upper()
+    c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+    r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l, use_live_fallback=True)
+    di_res = compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
+    sm_list = compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)
+    sm_r = next((x for x in sm_list if x["tk"] == tk), {"score": 0, "tags_str": "-"})
+    al_hist = load_json_file(AI_ALERTS_PATH, [])
+    tk_alerts = [a for a in (al_hist if isinstance(al_hist, list) else []) if a.get("ticker") == tk][:3]
+
+    spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
+    cw_v = float(di_res.get("cw", 0) or 0)
+    pw_v = float(di_res.get("pw", 0) or 0)
+    zg_v = float(di_res.get("zg", 0) or 0)
+    mp_v = float(di_res.get("mp", 0) or 0)
+    net_gex = float(di_res.get("net_gex", 0) or c_res.get("net_gex", 0) or 0)
+
+    if (c_res["score"] >= 70 or r_res["score"] >= 7) and "하방" not in di_res["intent"]:
+        plan_dir = "🟢 LONG"
+    elif (c_res["score"] < 45 and "하방" in di_res["intent"]) or r_res["score"] <= 3:
+        plan_dir = "🔴 SHORT"
+    else:
+        plan_dir = "🟡 HOLD"
+
+    if spot_v > 0:
+        if plan_dir == "🔴 SHORT":
+            entry_lo = round(spot_v * 0.99, 2)
+            entry_hi = round(spot_v * 1.015, 2)
+            stop_px = round(cw_v, 2) if cw_v > spot_v else (round(zg_v * 1.01, 2) if zg_v > spot_v else round(spot_v * 1.04, 2))
+            t1_px = round(pw_v, 2) if 0 < pw_v < spot_v else round(spot_v * 0.94, 2)
+            t2_px = round(t1_px * 0.93, 2)
+        else:
+            _sup = max([x for x in (zg_v, pw_v) if 0 < x < spot_v] or [spot_v * 0.985])
+            entry_lo = round(max(_sup, spot_v * 0.98), 2)
+            entry_hi = round(spot_v * 1.01, 2)
+            stop_px = round(pw_v, 2) if 0 < pw_v < spot_v else (round(zg_v * 0.99, 2) if 0 < zg_v < spot_v else round(spot_v * 0.95, 2))
+            t1_px = round(cw_v, 2) if cw_v > spot_v else (round(mp_v, 2) if mp_v > spot_v else round(spot_v * 1.06, 2))
+            t2_px = round(t1_px * 1.08, 2)
+    else:
+        entry_lo, entry_hi, stop_px, t1_px, t2_px = 0, 0, 0, 0, 0
+
+    _, vix_now, _ = _fetch_vix_reversal_state()
+    risk_lbl = "낮음" if (net_gex > 0 and (vix_now == 0 or vix_now < 20)) else ("높음" if (net_gex < 0 or vix_now >= 25) else "중간")
+    win_rate = min(85, 42 + int(r_res["score"] * 3) + (6 if sm_r.get("score", 0) >= 60 else 0) + (4 if net_gex > 0 else 0))
+
+    checklist = [
+        (net_gex > 0, "GEX Positive"),
+        (spot_v > 0 and zg_v > 0 and spot_v > zg_v, "Above Flip Gamma"),
+        (c_res.get("net_doi", 0) > 0 or c_res.get("OI", 0) >= 8, "Call OI Expansion"),
+        (sm_r.get("score", 0) >= 60, "Smart Money"),
+        (c_res.get("dp_lbl") == "Bullish", "Dark Pool"),
+    ]
+    if plan_dir == "🔴 SHORT":
+        conclusion = f"현재는 SHORT 우세. ${stop_px:g} 돌파 전까지 ${t1_px:g}~${t2_px:g} 하방 시나리오 유지." if spot_v > 0 else "하방 압력 구간. 보수적 대응."
+    elif plan_dir == "🟢 LONG":
+        conclusion = f"현재는 LONG 우세. ${stop_px:g} 이탈 전까지 ${t1_px:g}~${t2_px:g} 시나리오 유지." if spot_v > 0 else "상승 추세 우세."
+    else:
+        conclusion = f"현재는 HOLD(중립) 구간. ${stop_px:g} 지지 여부 및 ${t1_px:g} 돌파 확인 후 진입 권장." if spot_v > 0 else "방향성 확인 후 진입 권장."
+
+    return {
+        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10",
+        "intent": di_res["intent"], "sm_detected": sm_r.get("score", 0) >= 60, "sm_score": sm_r.get("score", 0),
+        "alerts": tk_alerts, "dir": plan_dir,
+        "entry": f"${entry_lo:g}~${entry_hi:g}" if spot_v > 0 else "-",
+        "stop": f"${stop_px:g}" if stop_px > 0 else "-",
+        "t1": f"${t1_px:g}" if t1_px > 0 else "-",
+        "t2": f"${t2_px:g}" if t2_px > 0 else "-",
+        "risk": risk_lbl, "win_rate": f"{win_rate}%",
+        "checklist": checklist, "conclusion": conclusion,
+    }
+
+def render_ai_trade_plan_card(tp, key_prefix="tp"):
+    with st.container(border=True):
+        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+        _m1.metric(f"📋 {tp['tk']} 현재가", f"${tp['spot']:,.2f}" if tp["spot"] > 0 else "-")
+        _m2.metric("Conviction", f"{tp['conv']}/100")
+        _m3.metric("Trend", tp["trend"])
+        _m4.metric("Dealer Intent", tp["intent"])
+        _m5.metric("Smart Money", f"Detected ({tp['sm_score']})" if tp["sm_detected"] else f"대기 ({tp['sm_score']})")
+
+        _p1, _p2, _p3, _p4, _p5, _p6, _p7 = st.columns(7)
+        _p1.metric("AI Trade Plan", tp["dir"])
+        _p2.metric("매수/진입구간", tp["entry"])
+        _p3.metric("손절", tp["stop"])
+        _p4.metric("1차 목표", tp["t1"])
+        _p5.metric("2차 목표", tp["t2"])
+        _p6.metric("리스크", tp["risk"])
+        _p7.metric("예상 승률", tp["win_rate"])
+
+        _chk_str = "  ·  ".join(f"{'✅' if ok else '❌'} {lbl}" for ok, lbl in tp["checklist"])
+        st.markdown(f"**체크리스트:** {_chk_str}")
+        if tp["alerts"]:
+            st.caption("🚨 최근 AI Alert: " + " | ".join(a.get("title", "") for a in tp["alerts"]))
+        st.info(f"💡 **한줄결론:** {tp['conclusion']}")
+
+
+if nav_menu == "📋 AI Trade Plan":
+    st.title("📋 AI Trade Plan Center (5대 엔진 통합 매매계획)")
+    st.caption("Conviction · Trend Reversal · Dealer Intent · Smart Money · AI Alert를 종합해 진입가·손절·목표가를 자동 산출합니다.")
+    _tp_tks = ["NVDA", "SOXL", "TSLA", "META", "AMD", "MU", "SPY", "QQQ", "AAPL", "AMZN"]
+    _sel_tp_tk = st.selectbox("🔍 매매계획 생성 종목", _tp_tks, index=0, key="tp_page_sel_tk")
+    _tp_res = compute_ai_trade_plan(_sel_tp_tk, load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+    render_ai_trade_plan_card(_tp_res, key_prefix="page")
+    if st.button("📩 AI Trade Plan 텔레그램 전송", type="primary", key="btn_tp_page_tg"):
+        _tp_msg = (
+            f"📋 *[{_tp_res['tk']} AI Trade Plan]*\n"
+            f"현재가: ${_tp_res['spot']:,.2f} | Conv {_tp_res['conv']} | Trend {_tp_res['trend']} | {_tp_res['intent']}\n"
+            f"판정: *{_tp_res['dir']}* | 진입 {_tp_res['entry']} | 손절 {_tp_res['stop']}\n"
+            f"목표: 1차 {_tp_res['t1']} → 2차 {_tp_res['t2']} (리스크 {_tp_res['risk']} · 승률 {_tp_res['win_rate']})\n"
+            f"결론: {_tp_res['conclusion']}"
+        )
+        if send_telegram_msg(tg_token, tg_chat_id, _tp_msg)[0]:
+            st.toast("✅ AI Trade Plan 텔레그램 전송 완료!")
