@@ -1600,32 +1600,59 @@ if nav_menu == "⚡ 무무 실시간 차트":
     hist_rows = []
     if con is not None:
         try:
-            for k_a, d_a in con.execute("SELECT kind, data FROM aux WHERE sym=?", (sel_syn,)).fetchall():
+            _aux_rows = con.execute("SELECT kind, sym, data FROM aux WHERE sym IN (?, ?, '')", (sel_syn, clean_tk)).fetchall()
+            _aux_prio = {}
+            for k_a, s_a, d_a in _aux_rows:
                 try:
-                    aux_map[k_a] = json.loads(d_a)
+                    _parsed_a = json.loads(d_a)
+                    _pr = 2 if s_a == sel_syn else (1 if s_a == clean_tk else 0)
+                    if k_a not in _aux_prio or _pr >= _aux_prio[k_a]:
+                        _aux_prio[k_a] = _pr
+                        aux_map[k_a] = _parsed_a
                 except Exception:
                     pass
+            if isinstance(aux_map.get("book"), dict) and isinstance(aux_map["book"].get("items"), list):
+                for _bit in aux_map["book"]["items"]:
+                    _bsym = str(_bit.get("sym", "")).upper().replace("US.", "")
+                    if _bsym == clean_tk:
+                        aux_map["book"] = {
+                            "Bid": _bit.get("Bid") or _bit.get("bids") or [],
+                            "Ask": _bit.get("Ask") or _bit.get("asks") or [],
+                        }
+                        break
             bars_data = aux_map.get("bars")
             if isinstance(bars_data, dict):
                 bars_data = bars_data.get("bars") or bars_data.get("data") or bars_data.get("items")
-            if isinstance(bars_data, list) and bars_data and isinstance(bars_data[0], dict):
-                for b in bars_data:
-                    t_raw = b.get("time_key") or b.get("time") or b.get("ts") or b.get("t")
-                    if isinstance(t_raw, str):
-                        _pts = pd.Timestamp(t_raw)
-                        if _pts.tzinfo is None:
-                            _pts = _pts.tz_localize("America/New_York")
-                        ts_sec = int(_pts.timestamp())
-                    else:
-                        ts_sec = int(float(t_raw))
-                    moomoo_bars.append({
-                        "time": ts_sec,
-                        "open": float(b.get("open", b.get("o", 0))),
-                        "high": float(b.get("high", b.get("h", 0))),
-                        "low": float(b.get("low", b.get("l", 0))),
-                        "close": float(b.get("close", b.get("c", 0))),
-                        "volume": float(b.get("volume", b.get("vol", b.get("v", 0))) or 0),
-                    })
+            if isinstance(bars_data, list) and bars_data:
+                if isinstance(bars_data[0], dict):
+                    for b in bars_data:
+                        t_raw = b.get("time_key") or b.get("time") or b.get("ts") or b.get("t")
+                        if isinstance(t_raw, str):
+                            _pts = pd.Timestamp(t_raw)
+                            if _pts.tzinfo is None:
+                                _pts = _pts.tz_localize("America/New_York")
+                            ts_sec = int(_pts.timestamp())
+                        else:
+                            ts_sec = int(float(t_raw))
+                        moomoo_bars.append({
+                            "time": ts_sec,
+                            "open": float(b.get("open", b.get("o", 0))),
+                            "high": float(b.get("high", b.get("h", 0))),
+                            "low": float(b.get("low", b.get("l", 0))),
+                            "close": float(b.get("close", b.get("c", 0))),
+                            "volume": float(b.get("volume", b.get("vol", b.get("v", 0))) or 0),
+                        })
+                elif isinstance(bars_data[0], (list, tuple)):
+                    for b in bars_data:
+                        if len(b) >= 5:
+                            moomoo_bars.append({
+                                "time": int(float(b[0])),
+                                "open": float(b[1]),
+                                "high": float(b[2]),
+                                "low": float(b[3]),
+                                "close": float(b[4]),
+                                "volume": float(b[5] if len(b) > 5 else 0) or 0.0,
+                            })
             hist_rows = con.execute("SELECT ts, px, vol FROM quote_hist WHERE sym=? ORDER BY ts ASC", (sel_syn,)).fetchall()
         except Exception:
             pass
@@ -3369,7 +3396,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
     _bk_tmp = aux_map.get("book") or {}
     _fl_tmp = aux_map.get("flow") or {}
     _need_bk = not (_bk_tmp.get("Bid") or _bk_tmp.get("bids") or _bk_tmp.get("Ask") or _bk_tmp.get("asks"))
-    _need_fl = not (isinstance(_fl_tmp, dict) and any(float(_fl_tmp.get(k, 0) or 0) != 0 for k in ("inB", "outB", "inM", "outM", "inS", "outS")))
+    _need_fl = not (isinstance(_fl_tmp, dict) and (bool(_fl_tmp.get("rows")) or any(float(_fl_tmp.get(k, 0) or 0) != 0 for k in ("inB", "outB", "inM", "outM", "inS", "outS"))))
     _mm_diag_msgs = []
     if (_need_bk or _need_fl) and clean_tk:
         try:
@@ -3490,7 +3517,29 @@ if nav_menu == "⚡ 무무 실시간 차트":
         fl = aux_map.get("flow") or {}
         flow_hist_all = load_json_file(FLOW_HIST_PATH, {})
         tk_fh = flow_hist_all.get(clean_tk, [])
-        if isinstance(fl, dict) and fl:
+        if isinstance(fl, dict) and isinstance(fl.get("rows"), list) and fl["rows"]:
+            _fl_pts = []
+            for _fr in fl["rows"]:
+                if isinstance(_fr, (list, tuple)) and len(_fr) >= 6:
+                    _ts_f = int(float(_fr[0]))
+                    _in_tot = float(_fr[1] or 0)
+                    _big_v = float(_fr[2] or 0) + float(_fr[3] or 0)
+                    _mid_v = float(_fr[4] or 0)
+                    _sml_v = float(_fr[5] or 0)
+                    if _in_tot == 0 and _big_v == 0 and _mid_v == 0 and _sml_v == 0:
+                        continue
+                    try:
+                        _t_lbl = pd.Timestamp(_ts_f, unit="s", tz="UTC").tz_convert("Asia/Seoul").strftime("%H:%M")
+                    except Exception:
+                        _t_lbl = str(_ts_f)[-5:]
+                    _fl_pts.append({"t": _t_lbl, "대형": round(_big_v, 1), "중형": round(_mid_v, 1), "소형": round(_sml_v, 1), "전체": round(_in_tot, 1)})
+            if _fl_pts:
+                tk_fh = _fl_pts[-120:]
+                _last_fp = _fl_pts[-1]
+                st.markdown(f"**전체 순유입:** `${_last_fp['전체']:+,.0f}` · **대형(주력):** `${_last_fp['대형']:+,.0f}` · **중형:** `${_last_fp['중형']:+,.0f}` · **소형:** `${_last_fp['소형']:+,.0f}`")
+            else:
+                st.markdown("**대형 순유입:** `0` · **중형:** `0` · **소형:** `0` (장 시작 대기)")
+        elif isinstance(fl, dict) and fl:
             net_big = float(fl.get("inB", 0) or 0) - float(fl.get("outB", 0) or 0)
             net_mid = float(fl.get("inM", 0) or 0) - float(fl.get("outM", 0) or 0)
             net_sml = float(fl.get("inS", fl.get("inSm", 0)) or 0) - float(fl.get("outS", fl.get("outSm", 0)) or 0)
@@ -3622,12 +3671,87 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 _ex_p.shutdown(wait=False)
         except Exception:
             pass
+        if not _res_p.get("ok"):
+            try:
+                import sqlite3 as _sq_pr
+                _db_pr = os.environ.get("MOOMOO_DB", os.path.expanduser("~/moomoo-hub/moomoo.db"))
+                if os.path.exists(_db_pr):
+                    _cp = _sq_pr.connect(f"file:{_db_pr}?mode=ro", uri=True, timeout=2)
+                    _r_fl = _cp.execute("SELECT data FROM aux WHERE kind='flow' AND sym IN (?, ?) ORDER BY ts DESC LIMIT 1", (_tk_p, f"US.{_tk_p}")).fetchone()
+                    if _r_fl and _r_fl[0]:
+                        _jfl = json.loads(_r_fl[0])
+                        for _fr in (_jfl.get("rows") or [])[-90:]:
+                            if isinstance(_fr, (list, tuple)) and len(_fr) >= 6:
+                                _in_t = float(_fr[1] or 0)
+                                _bg_t = float(_fr[2] or 0) + float(_fr[3] or 0)
+                                if _in_t == 0 and _bg_t == 0:
+                                    continue
+                                try:
+                                    _tl = pd.Timestamp(int(float(_fr[0])), unit="s", tz="UTC").tz_convert("Asia/Seoul").strftime("%H:%M")
+                                except Exception:
+                                    _tl = str(_fr[0])[-5:]
+                                _res_p["cap_flow"].append({"t": _tl, "전체순유입": _in_t, "주력(대형)": _bg_t})
+                    _semi_list = ["SOXL", "SOXS", "SMH", "NVDA", "AVGO", "AMD", "MU", "TSM", "INTC", "AMAT", "LRCX", "KLAC", "ASML", "QCOM"]
+                    _q_ph = ",".join("?" for _ in _semi_list)
+                    _q_syms = [f"US.{s}" for s in _semi_list] + _semi_list
+                    _r_qs = _cp.execute(f"SELECT sym, data FROM quotes WHERE sym IN ({','.join('?' for _ in _q_syms)})", _q_syms).fetchall()
+                    _seen_s = set()
+                    for _qs_s, _qs_d in _r_qs:
+                        _sc = str(_qs_s).replace("US.", "")
+                        if _sc in _seen_s or not _qs_d:
+                            continue
+                        _seen_s.add(_sc)
+                        _qd = json.loads(_qs_d)
+                        _lp = 0.0
+                        for _ek in ("overnight_price", "after_price", "pre_price", "ext_price", "last_price", "px", "price"):
+                            _vv = float(_qd.get(_ek) or 0)
+                            if _vv > 0:
+                                _lp = _vv; break
+                        _pc = float(_qd.get("prev_close_price", _qd.get("prev_close", 0)) or 0)
+                        _chg_p = round((_lp - _pc) / _pc * 100.0, 2) if (_lp > 0 and _pc > 0) else 0.0
+                        _bv = int(_qd.get("bid_vol", 0) or 0); _av = int(_qd.get("ask_vol", 0) or 0)
+                        _res_p["semi"].append({
+                            "종목": _sc,
+                            "현재가": round(_lp, 2),
+                            "등락(%)": _chg_p,
+                            "거래대금($M)": round(float(_qd.get("turnover", 0) or 0) / 1e6, 1),
+                            "매수/매도호가": f"{_bv:,} / {_av:,}",
+                        })
+                    _r_ot = _cp.execute("SELECT data FROM aux WHERE kind='optticks' AND sym IN (?, ?, '') ORDER BY ts DESC LIMIT 1", (_tk_p, f"US.{_tk_p}")).fetchone()
+                    if _r_ot and _r_ot[0]:
+                        _jot = json.loads(_r_ot[0])
+                        for _it in (_jot.get("items") or _jot.get("rows") or [])[:15]:
+                            if isinstance(_it, dict):
+                                _res_p["ticks"].append(_it)
+                    _cp.close()
+                    if _res_p["cap_flow"] or _res_p["semi"] or _res_p["ticks"]:
+                        _res_p["ok"] = True
+            except Exception:
+                pass
+        if not _res_p.get("gex") and _tk_p in oi_hist_m and oi_hist_m[_tk_p]:
+            try:
+                _det_o = oi_hist_m[_tk_p][-1].get("상세", [])
+                for _xo in sorted(_det_o, key=lambda x: abs(float(x.get("GEX($M)", 0) or 0)), reverse=True)[:12]:
+                    _gm_o = float(_xo.get("GEX($M)", 0) or 0)
+                    _res_p["net_gex"] += _gm_o
+                    _res_p["gex"].append({
+                        "만기": str(_xo.get("만기", "-"))[-5:],
+                        "계약": f"{_xo.get('행사가', '-')}{str(_xo.get('구분', 'C'))[0].upper()}",
+                        "거래량": int(_xo.get("거래량", 0) or 0),
+                        "OI": int(_xo.get("OI", 0) or 0),
+                        "IV(%)": round(float(_xo.get("IV(%)", 0) or 0), 1),
+                        "GEX($M)": round(_gm_o, 3),
+                    })
+                if _res_p["gex"]:
+                    _res_p["ok"] = True
+            except Exception:
+                pass
         return _res_p
 
     with st.expander("📡 무무 실시간 확장팩 (실시간 GEX·HIRO · 분단위 자금흐름 · 반도체 수급판 · $50K+ 대량틱)", expanded=False):
         _mm_pro = _fetch_mm_pro_pack(clean_tk)
         if not _mm_pro.get("ok"):
-            st.info("무무 OpenD(11111 포트)가 켜져 있을 때 실시간 GEX·분단위 자금·반도체 수급·대량틱이 표시됩니다.")
+            st.info("무무 허브(moomoo.db) 또는 OpenD(11111 포트) 데이터가 수신되면 실시간 GEX·분단위 자금·반도체 수급·대량틱이 표시됩니다.")
         else:
             _mp1, _mp2, _mp3, _mp4 = st.tabs(["⚡ 실시간 GEX·HIRO", "📈 분단위 자금흐름", "🔥 반도체 수급판", "🐋 $50K+ 대량 틱"])
             with _mp1:
@@ -6485,10 +6609,40 @@ def get_moomoo_live_snapshot(tk):
                     v = float(qd.get(ek) or 0)
                     if v > 0:
                         out["px"] = round(v, 2); out["ok"] = True; break
+            _con2 = sqlite3.connect(f"file:{db_p}?mode=ro", uri=True, timeout=2)
+            _r_bk = _con2.execute("SELECT data FROM aux WHERE kind='book' AND sym IN (?, ?, '') ORDER BY ts DESC LIMIT 1", (sym, clean)).fetchone()
+            if _r_bk and _r_bk[0]:
+                _jbk = json.loads(_r_bk[0])
+                if isinstance(_jbk.get("items"), list):
+                    for _bi in _jbk["items"]:
+                        if str(_bi.get("sym", "")).upper().replace("US.", "") == clean:
+                            _jbk = _bi; break
+                _bs = _jbk.get("Bid") or _jbk.get("bids") or []
+                _as = _jbk.get("Ask") or _jbk.get("asks") or []
+                if _bs:
+                    _tb = max(_bs, key=lambda x: float(x[1]))
+                    out["bid_wall"] = (round(float(_tb[0]), 2), int(float(_tb[1])))
+                if _as:
+                    _ta = max(_as, key=lambda x: float(x[1]))
+                    out["ask_wall"] = (round(float(_ta[0]), 2), int(float(_ta[1])))
+                if _bs or _as:
+                    out["ok"] = True
+            _r_fl2 = _con2.execute("SELECT data FROM aux WHERE kind='flow' AND sym IN (?, ?) ORDER BY ts DESC LIMIT 1", (sym, clean)).fetchone()
+            if _r_fl2 and _r_fl2[0]:
+                _jfl2 = json.loads(_r_fl2[0])
+                _rows2 = [r for r in (_jfl2.get("rows") or []) if isinstance(r, (list, tuple)) and len(r) >= 6 and any(float(x or 0) != 0 for x in r[1:6])]
+                if _rows2:
+                    _lr2 = _rows2[-1]
+                    out["big_net"] = round(float(_lr2[2] or 0) + float(_lr2[3] or 0), 0)
+                    out["ok"] = True
+            _con2.close()
     except Exception:
         pass
     qctx = None
     try:
+        import socket as _sk_snap
+        with _sk_snap.create_connection(("127.0.0.1", 11111), timeout=0.2):
+            pass
         from moomoo import OpenQuoteContext, SubType, RET_OK
         qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
         qctx.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
