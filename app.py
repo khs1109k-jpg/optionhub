@@ -1466,6 +1466,179 @@ def evaluate_ai_alerts(oi_hist_d, raw_flows_l, big_flows_l, auto_tg=True, tg_tok
             send_telegram_msg(tg_tok, tg_cid, "\n".join(_tg_lines))
     return hist, new_alerts
 
+
+def compute_protocol_probability(tk_in, oi_hist_d, raw_flows_l, big_flows_l, c_res=None, r_res=None, di_res=None):
+    tk = str(tk_in or "").strip().upper()
+    c_res = c_res or compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+    r_res = r_res or compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l, use_live_fallback=True)
+    di_res = di_res or compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
+
+    spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
+    cw_v = float(di_res.get("cw", 0) or 0)
+    pw_v = float(di_res.get("pw", 0) or 0)
+    zg_v = float(di_res.get("zg", 0) or 0)
+    net_gex = float(di_res.get("net_gex", 0) or c_res.get("net_gex", 0) or 0)
+
+    raw_l = max(8.0, min(75.0, c_res["score"] * 0.42 + r_res["score"] * 3.8 + di_res["p_up"] * 0.20))
+    raw_s = max(8.0, min(75.0, (100 - c_res["score"]) * 0.42 + (10 - r_res["score"]) * 3.8 + di_res["p_down"] * 0.20))
+    raw_h = max(10.0, 100.0 - raw_l - raw_s) if (raw_l + raw_s) < 90.0 else 15.0
+    tot = raw_l + raw_s + raw_h
+    p_long = int(round(raw_l / tot * 100))
+    p_short = int(round(raw_s / tot * 100))
+    p_hold = max(5, 100 - p_long - p_short)
+    if p_long + p_short + p_hold != 100:
+        p_long += 100 - (p_long + p_short + p_hold)
+
+    conf_l, _ = compute_signal_confidence("LONG", c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
+    conf_s, _ = compute_signal_confidence("SHORT", c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
+    conf_h, _ = compute_signal_confidence("HOLD", c_res["score"], net_gex, c_res["net_dex"], False, False, False, c_res["prem_m"], False)
+
+    exp_l = round(((cw_v - spot_v) / spot_v * 100.0), 1) if (spot_v > 0 and cw_v > spot_v) else 6.0
+    exp_s = round(((spot_v - pw_v) / spot_v * 100.0), 1) if (spot_v > 0 and 0 < pw_v < spot_v) else 8.0
+    exp_l = max(2.5, min(25.0, exp_l))
+    exp_s = max(2.5, min(25.0, exp_s))
+
+    risk_l = "낮음" if (net_gex > 0 and spot_v >= zg_v > 0) else ("높음" if net_gex < 0 else "중간")
+    risk_s = "낮음" if (net_gex < 0 and (zg_v <= 0 or spot_v < zg_v)) else ("높음" if net_gex > 100 else "중간")
+    risk_h = "낮음" if abs(net_gex) < 50 else "중간"
+
+    if p_short >= p_long and p_short >= p_hold:
+        best_proto = "🔴 SHORT"
+    elif p_long >= p_short and p_long >= p_hold:
+        best_proto = "🟢 LONG"
+    else:
+        best_proto = "🟡 HOLD"
+
+    reasons = []
+    if net_gex < 0: reasons.append("Negative Gamma")
+    elif net_gex > 0: reasons.append("Positive Gamma")
+    else: reasons.append("GEX 부족")
+    if spot_v > 0 and zg_v > 0:
+        reasons.append(f"{zg_v:g} Flip {'돌파' if spot_v >= zg_v else '하회'}")
+    if "SHORT" in best_proto and pw_v > 0:
+        reasons.append(f"{pw_v:g} Put Wall")
+    elif "LONG" in best_proto and cw_v > 0:
+        reasons.append(f"{cw_v:g} Call Wall")
+    if c_res.get("net_doi", 0) > 0:
+        reasons.append("Call OI 증가")
+    elif c_res.get("net_doi", 0) < 0:
+        reasons.append("Put OI 증가")
+    if net_gex <= 0 and "GEX 부족" not in reasons:
+        reasons.append("GEX 부족")
+
+    return {
+        "long": {"prob": p_long, "conf": conf_l, "exp": f"+{exp_l:.1f}%", "risk": risk_l},
+        "short": {"prob": p_short, "conf": conf_s, "exp": f"+{exp_s:.1f}%", "risk": risk_s},
+        "hold": {"prob": p_hold, "conf": conf_h, "exp": "±1.5%", "risk": risk_h},
+        "best": best_proto,
+        "reasons": reasons[:5],
+    }
+
+def compute_ai_trade_plan(tk_in, oi_hist_d, raw_flows_l, big_flows_l):
+    tk = str(tk_in or "").strip().upper()
+    c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+    r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l, use_live_fallback=True)
+    di_res = compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
+    sm_list = compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)
+    sm_r = next((x for x in sm_list if x["tk"] == tk), {"score": 0, "tags_str": "-"})
+    al_hist = load_json_file(AI_ALERTS_PATH, [])
+    tk_alerts = [a for a in (al_hist if isinstance(al_hist, list) else []) if a.get("ticker") == tk][:3]
+
+    spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
+    cw_v = float(di_res.get("cw", 0) or 0)
+    pw_v = float(di_res.get("pw", 0) or 0)
+    zg_v = float(di_res.get("zg", 0) or 0)
+    mp_v = float(di_res.get("mp", 0) or 0)
+    net_gex = float(di_res.get("net_gex", 0) or c_res.get("net_gex", 0) or 0)
+
+    if (c_res["score"] >= 70 or r_res["score"] >= 7) and "하방" not in di_res["intent"]:
+        plan_dir = "🟢 LONG"
+    elif (c_res["score"] < 45 and "하방" in di_res["intent"]) or r_res["score"] <= 3:
+        plan_dir = "🔴 SHORT"
+    else:
+        plan_dir = "🟡 HOLD"
+
+    if spot_v > 0:
+        if plan_dir == "🔴 SHORT":
+            entry_lo = round(spot_v * 0.99, 2)
+            entry_hi = round(spot_v * 1.015, 2)
+            stop_px = round(cw_v, 2) if cw_v > spot_v else (round(zg_v * 1.01, 2) if zg_v > spot_v else round(spot_v * 1.04, 2))
+            t1_px = round(pw_v, 2) if 0 < pw_v < spot_v else round(spot_v * 0.94, 2)
+            t2_px = round(t1_px * 0.93, 2)
+        else:
+            _sup = max([x for x in (zg_v, pw_v) if 0 < x < spot_v] or [spot_v * 0.985])
+            entry_lo = round(max(_sup, spot_v * 0.98), 2)
+            entry_hi = round(spot_v * 1.01, 2)
+            stop_px = round(pw_v, 2) if 0 < pw_v < spot_v else (round(zg_v * 0.99, 2) if 0 < zg_v < spot_v else round(spot_v * 0.95, 2))
+            t1_px = round(cw_v, 2) if cw_v > spot_v else (round(mp_v, 2) if mp_v > spot_v else round(spot_v * 1.06, 2))
+            t2_px = round(t1_px * 1.08, 2)
+    else:
+        entry_lo, entry_hi, stop_px, t1_px, t2_px = 0, 0, 0, 0, 0
+
+    _, vix_now, _ = _fetch_vix_reversal_state()
+    risk_lbl = "낮음" if (net_gex > 0 and (vix_now == 0 or vix_now < 20)) else ("높음" if (net_gex < 0 or vix_now >= 25) else "중간")
+    win_rate = min(85, 42 + int(r_res["score"] * 3) + (6 if sm_r.get("score", 0) >= 60 else 0) + (4 if net_gex > 0 else 0))
+
+    checklist = [
+        (net_gex > 0, "GEX Positive"),
+        (spot_v > 0 and zg_v > 0 and spot_v > zg_v, "Above Flip Gamma"),
+        (c_res.get("net_doi", 0) > 0 or c_res.get("OI", 0) >= 8, "Call OI Expansion"),
+        (sm_r.get("score", 0) >= 60, "Smart Money"),
+        (c_res.get("dp_lbl") == "Bullish", "Dark Pool"),
+    ]
+    if plan_dir == "🔴 SHORT":
+        conclusion = f"현재는 SHORT 우세. ${stop_px:g} 돌파 전까지 ${t1_px:g}~${t2_px:g} 하방 시나리오 유지." if spot_v > 0 else "하방 압력 구간. 보수적 대응."
+    elif plan_dir == "🟢 LONG":
+        conclusion = f"현재는 LONG 우세. ${stop_px:g} 이탈 전까지 ${t1_px:g}~${t2_px:g} 시나리오 유지." if spot_v > 0 else "상승 추세 우세."
+    else:
+        conclusion = f"현재는 HOLD(중립) 구간. ${stop_px:g} 지지 여부 및 ${t1_px:g} 돌파 확인 후 진입 권장." if spot_v > 0 else "방향성 확인 후 진입 권장."
+
+    _tp_conf, _tp_rsn = compute_signal_confidence(plan_dir, c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
+    _proto = compute_protocol_probability(tk, oi_hist_d, raw_flows_l, big_flows_l, c_res=c_res, r_res=r_res, di_res=di_res)
+    return {
+        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10", "conf": _tp_conf, "conf_reasons": _tp_rsn, "proto": _proto,
+        "intent": di_res["intent"], "sm_detected": sm_r.get("score", 0) >= 60, "sm_score": sm_r.get("score", 0),
+        "alerts": tk_alerts, "dir": plan_dir,
+        "entry": f"${entry_lo:g}~${entry_hi:g}" if spot_v > 0 else "-",
+        "stop": f"${stop_px:g}" if stop_px > 0 else "-",
+        "t1": f"${t1_px:g}" if t1_px > 0 else "-",
+        "t2": f"${t2_px:g}" if t2_px > 0 else "-",
+        "risk": risk_lbl, "win_rate": f"{win_rate}%",
+        "checklist": checklist, "conclusion": conclusion,
+    }
+
+def render_ai_trade_plan_card(tp, key_prefix="tp"):
+    with st.container(border=True):
+        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+        _m1.metric(f"📋 {tp['tk']} 현재가", f"${tp['spot']:,.2f}" if tp["spot"] > 0 else "-")
+        _m2.metric("Conviction", f"{tp['conv']}/100")
+        _m3.metric("Trend", tp["trend"])
+        _m4.metric("Dealer Intent", tp["intent"])
+        _m5.metric("Smart Money", f"Detected ({tp['sm_score']})" if tp["sm_detected"] else f"대기 ({tp['sm_score']})")
+
+        _p1, _p2, _p3, _p4, _p5, _p6, _p7 = st.columns(7)
+        _p1.metric("AI Trade Plan", f"{tp['dir']} ({tp.get('conf', 75)}%)")
+        _p2.metric("매수/진입구간", tp["entry"])
+        _p3.metric("손절", tp["stop"])
+        _p4.metric("1차 목표", tp["t1"])
+        _p5.metric("2차 목표", tp["t2"])
+        _p6.metric("리스크", tp["risk"])
+        _p7.metric("예상 승률", tp["win_rate"])
+
+        _chk_str = "  ·  ".join(f"{'✅' if ok else '❌'} {lbl}" for ok, lbl in tp["checklist"])
+        st.markdown(f"**체크리스트:** {_chk_str}")
+        if tp["alerts"]:
+            st.caption("🚨 최근 AI Alert: " + " | ".join(a.get("title", "") for a in tp["alerts"]))
+        st.info(f"💡 **한줄결론:** {tp['conclusion']}")
+        _pr = tp.get("proto")
+        if _pr:
+            st.markdown("---")
+            st.markdown(f"**🎲 Protocol Probability Engine · 가장 유리한 프로토콜: {_pr['best']}** (`{' · '.join(_pr['reasons'])}`)")
+            _pc1, _pc2, _pc3 = st.columns(3)
+            _pc1.metric("🟢 LONG", f"확률 {_pr['long']['prob']}%", f"신뢰도 {_pr['long']['conf']}% · 기대수익 {_pr['long']['exp']} · 리스크 {_pr['long']['risk']}")
+            _pc2.metric("🔴 SHORT", f"확률 {_pr['short']['prob']}%", f"신뢰도 {_pr['short']['conf']}% · 기대수익 {_pr['short']['exp']} · 리스크 {_pr['short']['risk']}")
+            _pc3.metric("🟡 HOLD", f"확률 {_pr['hold']['prob']}%", f"신뢰도 {_pr['hold']['conf']}% · 기대수익 {_pr['hold']['exp']} · 리스크 {_pr['hold']['risk']}")
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
@@ -11771,177 +11944,6 @@ if nav_menu == "🎯 Portfolio Trigger":
                 st.toast("✅ 포트폴리오 현황 텔레그램 전송 완료!")
 
 
-def compute_protocol_probability(tk_in, oi_hist_d, raw_flows_l, big_flows_l, c_res=None, r_res=None, di_res=None):
-    tk = str(tk_in or "").strip().upper()
-    c_res = c_res or compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
-    r_res = r_res or compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l, use_live_fallback=True)
-    di_res = di_res or compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
-
-    spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
-    cw_v = float(di_res.get("cw", 0) or 0)
-    pw_v = float(di_res.get("pw", 0) or 0)
-    zg_v = float(di_res.get("zg", 0) or 0)
-    net_gex = float(di_res.get("net_gex", 0) or c_res.get("net_gex", 0) or 0)
-
-    raw_l = max(8.0, min(75.0, c_res["score"] * 0.42 + r_res["score"] * 3.8 + di_res["p_up"] * 0.20))
-    raw_s = max(8.0, min(75.0, (100 - c_res["score"]) * 0.42 + (10 - r_res["score"]) * 3.8 + di_res["p_down"] * 0.20))
-    raw_h = max(10.0, 100.0 - raw_l - raw_s) if (raw_l + raw_s) < 90.0 else 15.0
-    tot = raw_l + raw_s + raw_h
-    p_long = int(round(raw_l / tot * 100))
-    p_short = int(round(raw_s / tot * 100))
-    p_hold = max(5, 100 - p_long - p_short)
-    if p_long + p_short + p_hold != 100:
-        p_long += 100 - (p_long + p_short + p_hold)
-
-    conf_l, _ = compute_signal_confidence("LONG", c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
-    conf_s, _ = compute_signal_confidence("SHORT", c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
-    conf_h, _ = compute_signal_confidence("HOLD", c_res["score"], net_gex, c_res["net_dex"], False, False, False, c_res["prem_m"], False)
-
-    exp_l = round(((cw_v - spot_v) / spot_v * 100.0), 1) if (spot_v > 0 and cw_v > spot_v) else 6.0
-    exp_s = round(((spot_v - pw_v) / spot_v * 100.0), 1) if (spot_v > 0 and 0 < pw_v < spot_v) else 8.0
-    exp_l = max(2.5, min(25.0, exp_l))
-    exp_s = max(2.5, min(25.0, exp_s))
-
-    risk_l = "낮음" if (net_gex > 0 and spot_v >= zg_v > 0) else ("높음" if net_gex < 0 else "중간")
-    risk_s = "낮음" if (net_gex < 0 and (zg_v <= 0 or spot_v < zg_v)) else ("높음" if net_gex > 100 else "중간")
-    risk_h = "낮음" if abs(net_gex) < 50 else "중간"
-
-    if p_short >= p_long and p_short >= p_hold:
-        best_proto = "🔴 SHORT"
-    elif p_long >= p_short and p_long >= p_hold:
-        best_proto = "🟢 LONG"
-    else:
-        best_proto = "🟡 HOLD"
-
-    reasons = []
-    if net_gex < 0: reasons.append("Negative Gamma")
-    elif net_gex > 0: reasons.append("Positive Gamma")
-    else: reasons.append("GEX 부족")
-    if spot_v > 0 and zg_v > 0:
-        reasons.append(f"{zg_v:g} Flip {'돌파' if spot_v >= zg_v else '하회'}")
-    if "SHORT" in best_proto and pw_v > 0:
-        reasons.append(f"{pw_v:g} Put Wall")
-    elif "LONG" in best_proto and cw_v > 0:
-        reasons.append(f"{cw_v:g} Call Wall")
-    if c_res.get("net_doi", 0) > 0:
-        reasons.append("Call OI 증가")
-    elif c_res.get("net_doi", 0) < 0:
-        reasons.append("Put OI 증가")
-    if net_gex <= 0 and "GEX 부족" not in reasons:
-        reasons.append("GEX 부족")
-
-    return {
-        "long": {"prob": p_long, "conf": conf_l, "exp": f"+{exp_l:.1f}%", "risk": risk_l},
-        "short": {"prob": p_short, "conf": conf_s, "exp": f"+{exp_s:.1f}%", "risk": risk_s},
-        "hold": {"prob": p_hold, "conf": conf_h, "exp": "±1.5%", "risk": risk_h},
-        "best": best_proto,
-        "reasons": reasons[:5],
-    }
-
-def compute_ai_trade_plan(tk_in, oi_hist_d, raw_flows_l, big_flows_l):
-    tk = str(tk_in or "").strip().upper()
-    c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
-    r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l, use_live_fallback=True)
-    di_res = compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
-    sm_list = compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)
-    sm_r = next((x for x in sm_list if x["tk"] == tk), {"score": 0, "tags_str": "-"})
-    al_hist = load_json_file(AI_ALERTS_PATH, [])
-    tk_alerts = [a for a in (al_hist if isinstance(al_hist, list) else []) if a.get("ticker") == tk][:3]
-
-    spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
-    cw_v = float(di_res.get("cw", 0) or 0)
-    pw_v = float(di_res.get("pw", 0) or 0)
-    zg_v = float(di_res.get("zg", 0) or 0)
-    mp_v = float(di_res.get("mp", 0) or 0)
-    net_gex = float(di_res.get("net_gex", 0) or c_res.get("net_gex", 0) or 0)
-
-    if (c_res["score"] >= 70 or r_res["score"] >= 7) and "하방" not in di_res["intent"]:
-        plan_dir = "🟢 LONG"
-    elif (c_res["score"] < 45 and "하방" in di_res["intent"]) or r_res["score"] <= 3:
-        plan_dir = "🔴 SHORT"
-    else:
-        plan_dir = "🟡 HOLD"
-
-    if spot_v > 0:
-        if plan_dir == "🔴 SHORT":
-            entry_lo = round(spot_v * 0.99, 2)
-            entry_hi = round(spot_v * 1.015, 2)
-            stop_px = round(cw_v, 2) if cw_v > spot_v else (round(zg_v * 1.01, 2) if zg_v > spot_v else round(spot_v * 1.04, 2))
-            t1_px = round(pw_v, 2) if 0 < pw_v < spot_v else round(spot_v * 0.94, 2)
-            t2_px = round(t1_px * 0.93, 2)
-        else:
-            _sup = max([x for x in (zg_v, pw_v) if 0 < x < spot_v] or [spot_v * 0.985])
-            entry_lo = round(max(_sup, spot_v * 0.98), 2)
-            entry_hi = round(spot_v * 1.01, 2)
-            stop_px = round(pw_v, 2) if 0 < pw_v < spot_v else (round(zg_v * 0.99, 2) if 0 < zg_v < spot_v else round(spot_v * 0.95, 2))
-            t1_px = round(cw_v, 2) if cw_v > spot_v else (round(mp_v, 2) if mp_v > spot_v else round(spot_v * 1.06, 2))
-            t2_px = round(t1_px * 1.08, 2)
-    else:
-        entry_lo, entry_hi, stop_px, t1_px, t2_px = 0, 0, 0, 0, 0
-
-    _, vix_now, _ = _fetch_vix_reversal_state()
-    risk_lbl = "낮음" if (net_gex > 0 and (vix_now == 0 or vix_now < 20)) else ("높음" if (net_gex < 0 or vix_now >= 25) else "중간")
-    win_rate = min(85, 42 + int(r_res["score"] * 3) + (6 if sm_r.get("score", 0) >= 60 else 0) + (4 if net_gex > 0 else 0))
-
-    checklist = [
-        (net_gex > 0, "GEX Positive"),
-        (spot_v > 0 and zg_v > 0 and spot_v > zg_v, "Above Flip Gamma"),
-        (c_res.get("net_doi", 0) > 0 or c_res.get("OI", 0) >= 8, "Call OI Expansion"),
-        (sm_r.get("score", 0) >= 60, "Smart Money"),
-        (c_res.get("dp_lbl") == "Bullish", "Dark Pool"),
-    ]
-    if plan_dir == "🔴 SHORT":
-        conclusion = f"현재는 SHORT 우세. ${stop_px:g} 돌파 전까지 ${t1_px:g}~${t2_px:g} 하방 시나리오 유지." if spot_v > 0 else "하방 압력 구간. 보수적 대응."
-    elif plan_dir == "🟢 LONG":
-        conclusion = f"현재는 LONG 우세. ${stop_px:g} 이탈 전까지 ${t1_px:g}~${t2_px:g} 시나리오 유지." if spot_v > 0 else "상승 추세 우세."
-    else:
-        conclusion = f"현재는 HOLD(중립) 구간. ${stop_px:g} 지지 여부 및 ${t1_px:g} 돌파 확인 후 진입 권장." if spot_v > 0 else "방향성 확인 후 진입 권장."
-
-    _tp_conf, _tp_rsn = compute_signal_confidence(plan_dir, c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
-    _proto = compute_protocol_probability(tk, oi_hist_d, raw_flows_l, big_flows_l, c_res=c_res, r_res=r_res, di_res=di_res)
-    return {
-        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10", "conf": _tp_conf, "conf_reasons": _tp_rsn, "proto": _proto,
-        "intent": di_res["intent"], "sm_detected": sm_r.get("score", 0) >= 60, "sm_score": sm_r.get("score", 0),
-        "alerts": tk_alerts, "dir": plan_dir,
-        "entry": f"${entry_lo:g}~${entry_hi:g}" if spot_v > 0 else "-",
-        "stop": f"${stop_px:g}" if stop_px > 0 else "-",
-        "t1": f"${t1_px:g}" if t1_px > 0 else "-",
-        "t2": f"${t2_px:g}" if t2_px > 0 else "-",
-        "risk": risk_lbl, "win_rate": f"{win_rate}%",
-        "checklist": checklist, "conclusion": conclusion,
-    }
-
-def render_ai_trade_plan_card(tp, key_prefix="tp"):
-    with st.container(border=True):
-        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
-        _m1.metric(f"📋 {tp['tk']} 현재가", f"${tp['spot']:,.2f}" if tp["spot"] > 0 else "-")
-        _m2.metric("Conviction", f"{tp['conv']}/100")
-        _m3.metric("Trend", tp["trend"])
-        _m4.metric("Dealer Intent", tp["intent"])
-        _m5.metric("Smart Money", f"Detected ({tp['sm_score']})" if tp["sm_detected"] else f"대기 ({tp['sm_score']})")
-
-        _p1, _p2, _p3, _p4, _p5, _p6, _p7 = st.columns(7)
-        _p1.metric("AI Trade Plan", f"{tp['dir']} ({tp.get('conf', 75)}%)")
-        _p2.metric("매수/진입구간", tp["entry"])
-        _p3.metric("손절", tp["stop"])
-        _p4.metric("1차 목표", tp["t1"])
-        _p5.metric("2차 목표", tp["t2"])
-        _p6.metric("리스크", tp["risk"])
-        _p7.metric("예상 승률", tp["win_rate"])
-
-        _chk_str = "  ·  ".join(f"{'✅' if ok else '❌'} {lbl}" for ok, lbl in tp["checklist"])
-        st.markdown(f"**체크리스트:** {_chk_str}")
-        if tp["alerts"]:
-            st.caption("🚨 최근 AI Alert: " + " | ".join(a.get("title", "") for a in tp["alerts"]))
-        st.info(f"💡 **한줄결론:** {tp['conclusion']}")
-        _pr = tp.get("proto")
-        if _pr:
-            st.markdown("---")
-            st.markdown(f"**🎲 Protocol Probability Engine · 가장 유리한 프로토콜: {_pr['best']}** (`{' · '.join(_pr['reasons'])}`)")
-            _pc1, _pc2, _pc3 = st.columns(3)
-            _pc1.metric("🟢 LONG", f"확률 {_pr['long']['prob']}%", f"신뢰도 {_pr['long']['conf']}% · 기대수익 {_pr['long']['exp']} · 리스크 {_pr['long']['risk']}")
-            _pc2.metric("🔴 SHORT", f"확률 {_pr['short']['prob']}%", f"신뢰도 {_pr['short']['conf']}% · 기대수익 {_pr['short']['exp']} · 리스크 {_pr['short']['risk']}")
-            _pc3.metric("🟡 HOLD", f"확률 {_pr['hold']['prob']}%", f"신뢰도 {_pr['hold']['conf']}% · 기대수익 {_pr['hold']['exp']} · 리스크 {_pr['hold']['risk']}")
 
 
 if nav_menu == "📋 AI Trade Plan":
