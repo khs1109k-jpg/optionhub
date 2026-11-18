@@ -9709,14 +9709,15 @@ def _perspicium_get(path, params_items, api_key):
         _url = f"https://perspicium.com/api/v0{path}"
         _r = requests.get(
             _url,
-            headers={"Authorization": f"ApiKey {api_key}", "Accept": "application/json", "User-Agent": "OptionHub/1.0"},
+            headers={"Authorization": f"ApiKey {api_key}", "Accept": "application/json", "Accept-Encoding": "gzip, deflate", "User-Agent": "OptionHub/1.0"},
             params=list(params_items or ()),
             timeout=(4, 15),
         )
         try:
-            _j = _r.json()
-        except Exception:
-            return False, None, f"Perspicium 서버 점검/비JSON 응답 (HTTP {_r.status_code})"
+            _txt_p = re.sub(r"\b(NaN|Infinity|-Infinity)\b", "null", _r.text or "")
+            _j = json.loads(_txt_p)
+        except Exception as _ej:
+            return False, None, f"비JSON 응답 (HTTP {_r.status_code}): {repr((_r.text or '')[:120])} ({_ej})"
         if not _r.ok or not _j.get("success"):
             _err = _j.get("error") or {}
             return False, None, f"{_err.get('code', _r.status_code)}: {_err.get('message', '요청 실패')}"
