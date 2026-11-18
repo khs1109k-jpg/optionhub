@@ -9709,7 +9709,7 @@ def _perspicium_get(path, params_items, api_key):
         _url = f"https://perspicium.com/api/v0{path}"
         _r = requests.get(
             _url,
-            headers={"Authorization": f"ApiKey {api_key}", "User-Agent": "OptionHub/1.0"},
+            headers={"Authorization": f"ApiKey {api_key}", "Accept": "application/json", "User-Agent": "OptionHub/1.0"},
             params=list(params_items or ()),
             timeout=(4, 15),
         )
@@ -9857,19 +9857,43 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                 if not _ok_mm:
                     st.warning(f"Market Memory 조회 실패: {_emm}")
                 else:
+                    def _ext_px_arr(_raw_p):
+                        if isinstance(_raw_p, dict):
+                            for _dk in ("prices", "values", "close", "series", "data"):
+                                if _dk in _raw_p:
+                                    _raw_p = _raw_p[_dk]; break
+                            else:
+                                _raw_p = list(_raw_p.values())
+                        if not isinstance(_raw_p, list):
+                            return []
+                        _out_p = []
+                        for _el in _raw_p:
+                            if isinstance(_el, (int, float)):
+                                _out_p.append(float(_el))
+                            elif isinstance(_el, dict):
+                                _v_f = None
+                                for _vk in ("close", "price", "value", "adj_close", "y"):
+                                    if _vk in _el and isinstance(_el[_vk], (int, float)):
+                                        _v_f = float(_el[_vk]); break
+                                if _v_f is None:
+                                    _v_f = next((float(vv) for vv in _el.values() if isinstance(vv, (int, float))), None)
+                                if _v_f is not None:
+                                    _out_p.append(_v_f)
+                        return _out_p
+
                     _matches = (_dmm or {}).get("matches") or []
-                    _kern = (_dmm or {}).get("kernel_prices") or []
+                    _kern = _ext_px_arr((_dmm or {}).get("kernel_prices"))
                     if _kern and _matches:
                         import plotly.graph_objects as _go_mm
                         _fg_mm = _go_mm.Figure()
-                        _k0 = float(_kern[0]) or 1.0
-                        _fg_mm.add_trace(_go_mm.Scatter(y=[round((float(x)/_k0 - 1)*100, 2) for x in _kern], mode="lines", name="현재 패턴(%)", line=dict(color="#38bdf8", width=3)))
+                        _k0 = _kern[0] or 1.0
+                        _fg_mm.add_trace(_go_mm.Scatter(y=[round((x/_k0 - 1)*100, 2) for x in _kern], mode="lines", name="현재 패턴(%)", line=dict(color="#38bdf8", width=3)))
                         for _mi, _mt in enumerate(_matches[:5], 1):
-                            _mp_arr = (_mt.get("match_prices") or []) + (_mt.get("trailing_prices") or [])
+                            _mp_arr = _ext_px_arr(_mt.get("match_prices")) + _ext_px_arr(_mt.get("trailing_prices"))
                             if _mp_arr:
-                                _m0 = float(_mp_arr[0]) or 1.0
+                                _m0 = _mp_arr[0] or 1.0
                                 _lbl_m = f"#{_mi} ({_mt.get('start_date', '')}~{_mt.get('end_date', '')}, {float(_mt.get('score',0)):.3f})"
-                                _fg_mm.add_trace(_go_mm.Scatter(y=[round((float(x)/_m0 - 1)*100, 2) for x in _mp_arr], mode="lines", name=_lbl_m, opacity=0.75))
+                                _fg_mm.add_trace(_go_mm.Scatter(y=[round((x/_m0 - 1)*100, 2) for x in _mp_arr], mode="lines", name=_lbl_m, opacity=0.75))
                         _fg_mm.add_vline(x=len(_kern)-1, line_color="#fbbf24", line_dash="dash", annotation_text="현재 시점 이후 →")
                         _fg_mm.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=400, yaxis_title="수익률(%)", margin=dict(l=16, r=16, t=35, b=20))
                         st.plotly_chart(_fg_mm, use_container_width=True, key="persp_mm_chart")
