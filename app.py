@@ -4324,7 +4324,9 @@ if nav_menu == "📝 오늘의 종합평":
                 {
                     "순위": i, "종목": r["tk"], "점수": f"{r['score']}/100",
                     "등급": r["grade"], "AI 최종판정": r["verdict"],
-                    "GEX": f"{r['GEX']}/25", "DEX": f"{r['DEX']}/20", "OI": f"{r['OI']}/15",
+                    "Net GEX($M)": f"${r['net_gex']:+,.1f}M" if r.get("net_gex", 0) != 0 else "-",
+                    "Net DEX($M)": f"${r['net_dex']:+,.1f}M" if r.get("net_dex", 0) != 0 else "-",
+                    "GEX점수": f"{r['GEX']}/25", "DEX점수": f"{r['DEX']}/20", "OI점수": f"{r['OI']}/15",
                     "VOL/OI": f"{r['VOL_OI']}/10", "PREM": f"{r['PREMIUM']}/10",
                     "FLOW": f"{r['FLOW']}/10", "DP": f"{r['DARKPOOL']}/5", "TECH": f"{r['TECH']}/5",
                 }
@@ -10173,7 +10175,9 @@ if nav_menu == "🏆 Top Conviction Ranking":
             {
                 "순위": i, "종목": r["tk"], "Conviction Score": r["score"],
                 "등급": r["grade"], "AI 최종판정": r["verdict"],
-                "GEX(25)": r["GEX"], "DEX(20)": r["DEX"], "OI(15)": r["OI"],
+                "Net GEX($M)": f"${r['net_gex']:+,.1f}M" if r.get("net_gex", 0) != 0 else "-",
+                "Net DEX($M)": f"${r['net_dex']:+,.1f}M" if r.get("net_dex", 0) != 0 else "-",
+                "GEX점수(25)": r["GEX"], "DEX점수(20)": r["DEX"], "OI점수(15)": r["OI"],
                 "VOL/OI(10)": r["VOL_OI"], "PREM(10)": r["PREMIUM"],
                 "FLOW(10)": r["FLOW"], "DP(5)": r["DARKPOOL"], "TECH(5)": r["TECH"],
             }
