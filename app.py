@@ -1091,9 +1091,112 @@ def render_dealer_intent_card(di):
             st.progress(di["p_up"] / 100.0)
         st.info(f"💡 **한줄 결론:** {di['conclusion']}")
 
+
+# =========================================================
+# 🏦 Smart Money Tracker (기관 매집 자동 탐지 엔진)
+# =========================================================
+def compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l):
+    from datetime import date as _dt_sm
+    today_d = _dt_sm.today()
+    base = ["NVDA", "TSLA", "META", "MU", "AMD", "AMZN", "AAPL", "AVGO", "SOXL", "PLTR", "SPY", "QQQ", "SMH"]
+    extra_sh = [str(r[1]).strip().upper() for r in (raw_flows_l or []) if len(r) > 1 and str(r[1]).strip()]
+    tks = list(dict.fromkeys(base + list((oi_hist_d or {}).keys()) + extra_sh))[:30]
+    results = []
+    for tk in tks:
+        snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+        last_sn = snaps[-1] if snaps else {}
+        prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+        call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
+        net_gex = float(last_sn.get("Net_GEX_M", 0) or 0)
+
+        ask_cnt, sweep_cnt, bull_cnt, bear_cnt = 0, 0, 0, 0
+        prem_m_tot, max_dte = 0.0, 0
+        for _sr in (raw_flows_l or []):
+            try:
+                if str(_sr[1]).strip().upper() != tk:
+                    continue
+                _pm_s = str(_sr[14] if len(_sr) > 14 else "").replace("$", "").replace(",", "").strip().upper()
+                _pm_v = float(_pm_s[:-1]) if _pm_s.endswith("M") else (float(_pm_s[:-1]) / 1000.0 if _pm_s.endswith("K") else 0.0)
+                _cp = str(_sr[3] if len(_sr) > 3 else "").upper()
+                _typ = str(_sr[13] if len(_sr) > 13 else "").upper()
+                _sd = str(_sr[10] if len(_sr) > 10 else "").upper()
+                if "CALL" in _cp or ("PUT" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                    prem_m_tot += _pm_v
+                if "SWEEP" in _typ:
+                    sweep_cnt += 1
+                if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd:
+                    ask_cnt += 1
+                if ("CALL" in _cp and ("BUY" in _sd or "ASK" in _sd)) or ("PUT" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                    bull_cnt += 1
+                elif ("PUT" in _cp and ("BUY" in _sd or "ASK" in _sd)) or ("CALL" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                    bear_cnt += 1
+                try:
+                    _exp_d = pd.to_datetime(str(_sr[5] if len(_sr) > 5 else "")).date()
+                    _dte = max(0, (_exp_d - today_d).days)
+                    max_dte = max(max_dte, _dte)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        for _bf in (big_flows_l or []):
+            if str(_bf.get("tk", "")).upper() != tk:
+                continue
+            for _rec in _bf.get("records", []):
+                prem_m_tot += float(_rec.get("prem_m", 0) or 0)
+                if "BUY" in str(_rec.get("side", "")).upper():
+                    ask_cnt += 1
+                if _rec.get("emoji") == "🟢":
+                    bull_cnt += 1
+                elif _rec.get("emoji") == "🔴":
+                    bear_cnt += 1
+                try:
+                    _exp_d2 = pd.to_datetime(str(_rec.get("exp", ""))).date()
+                    max_dte = max(max_dte, max(0, (_exp_d2 - today_d).days))
+                except Exception:
+                    pass
+
+        # 6대 조건 점수 (총 100점)
+        pts_call_oi = 18 if call_doi > 5000 else (14 if call_doi > 0 else (10 if (int(last_sn.get("Call_OI", 0) or 0) > int(last_sn.get("Put_OI", 0) or 0) and int(last_sn.get("Call_OI", 0) or 0) > 0) else (8 if bull_cnt > bear_cnt else 0)))
+        pts_ask = 18 if ask_cnt >= 3 else (12 if ask_cnt >= 1 else 0)
+        pts_sweep = 16 if sweep_cnt >= 2 else (11 if sweep_cnt == 1 else 0)
+        pts_prem = 18 if prem_m_tot >= 20 else (15 if prem_m_tot >= 5 else (7 if prem_m_tot >= 1 else 0))
+        pts_dte = 15 if max_dte >= 30 else (8 if max_dte >= 14 else 0)
+        dp_bull = (bull_cnt > bear_cnt) or (net_gex > 0)
+        pts_dp = 15 if (bull_cnt > bear_cnt and net_gex >= 0) else (10 if dp_bull else 0)
+
+        score = pts_call_oi + pts_ask + pts_sweep + pts_prem + pts_dte + pts_dp
+        tags = []
+        if pts_call_oi >= 10: tags.append("Call OI↑")
+        if pts_ask > 0: tags.append(f"Above Ask({ask_cnt})")
+        if pts_sweep > 0: tags.append(f"Sweep({sweep_cnt})")
+        if prem_m_tot >= 5.0: tags.append(f"Prem ${prem_m_tot:.1f}M")
+        if max_dte >= 30: tags.append(f"DTE {max_dte}d")
+        if pts_dp >= 10: tags.append("Dark Pool")
+
+        cw_v = float(last_sn.get("CallWall", 0) or 0)
+        if score >= 80:
+            interp = f"기관의 장기(DTE {max_dte}d) 공격적 콜 매집·스윕 집중" + (f" → ${cw_v:g} Call Wall 돌파 시도" if cw_v > 0 else " → 강한 상방 추세 주도")
+        elif score >= 60:
+            interp = f"Above Ask·대형 프리미엄(${prem_m_tot:.1f}M) 유입 포착 → 점진적 상방 매집 구간"
+        elif score >= 40:
+            interp = "일부 매집 신호 존재하나 다크풀·스윕 추가 확인 필요 (관망/선별 접근)"
+        else:
+            interp = "기관 매집 신호 약함 · 보수적 대응 구간"
+
+        results.append({
+            "tk": tk, "score": score, "tags": tags, "tags_str": " · ".join(tags) if tags else "-",
+            "prem_m": round(prem_m_tot, 2), "max_dte": max_dte,
+            "ask_cnt": ask_cnt, "sweep_cnt": sweep_cnt, "call_doi": call_doi, "dp_bull": dp_bull,
+            "interp": interp,
+        })
+    results.sort(key=lambda x: (x["score"], x["prem_m"]), reverse=True)
+    return results
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
+    "🏦 Smart Money Tracker",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -4806,6 +4909,31 @@ if nav_menu == "📝 오늘의 종합평":
             if send_telegram_msg(tg_token, tg_chat_id, _di_txt)[0]:
                 st.toast("✅ Dealer Intent 텔레그램 전송 완료!")
         render_dealer_intent_card(_di_res)
+
+    with st.container(border=True):
+        _sm_h1, _sm_h2 = st.columns([3.0, 1.0])
+        _sm_h1.subheader("🔥 오늘의 기관 매집 (Smart Money Tracker)")
+        _sm_list = compute_smart_money_tracker(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _sm_h2.button("📩 Smart Money 텔레그램", use_container_width=True, key="btn_home_sm_tg"):
+            _sm_txt = "🔥 *[오늘의 기관 매집 TOP 5]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* | 매집점수 {r['score']} | {r['tags_str']}\n   ↳ {r['interp']}"
+                for i, r in enumerate(_sm_list[:5], 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _sm_txt)[0]:
+                st.toast("✅ Smart Money 랭킹 텔레그램 전송 완료!")
+        if _sm_list:
+            _sm_top3 = st.columns(3)
+            for _si, (_scol, _sr) in enumerate(zip(_sm_top3, _sm_list[:3]), 1):
+                _scol.metric(f"{_si}. {_sr['tk']}", f"매집점수 {_sr['score']}", f"${_sr['prem_m']:.1f}M · DTE {_sr['max_dte']}d")
+            _df_sm_home = pd.DataFrame([
+                {
+                    "순위": i, "종목": r["tk"], "매집점수": r["score"],
+                    "충족 조건": r["tags_str"], "프리미엄($M)": f"${r['prem_m']:.1f}M",
+                    "최대 DTE": f"{r['max_dte']}d", "세력 의도 자동 해석": r["interp"],
+                }
+                for i, r in enumerate(_sm_list[:10], 1)
+            ])
+            st.dataframe(_df_sm_home, hide_index=True, use_container_width=True)
 
     @st.cache_data(ttl=300, show_spinner=False)
     def _calc_trend_reversal_7():
@@ -10697,3 +10825,42 @@ if nav_menu == "🏆 Top Conviction Ranking":
             st.dataframe(_df_rev_full, hide_index=True, use_container_width=True)
             _sel_rv_p_tk = st.selectbox("🔍 추세전환 체크리스트 상세 보기", [r["tk"] for r in _all_rev], key="rev_page_sel_tk")
             render_trend_reversal_card(next(r for r in _all_rev if r["tk"] == _sel_rv_p_tk))
+
+
+if nav_menu == "🏦 Smart Money Tracker":
+    st.title("🏦 Smart Money Tracker (기관 매집 자동 탐지)")
+    st.caption("Call OI 증가 · Above Ask · Sweep · Premium > $5M · DTE 30일+ · Dark Pool 동반 6대 지표 기반 기관 매집 탐지")
+    _sm_all = compute_smart_money_tracker(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+    _fc1, _fc2, _fc3, _fc4 = st.columns(4)
+    _f_prem5 = _fc1.checkbox("Premium ≥ $5M만", value=False, key="sm_f_prem5")
+    _f_dte30 = _fc2.checkbox("DTE 30일 이상만", value=False, key="sm_f_dte30")
+    _f_sweep = _fc3.checkbox("Sweep 포착만", value=False, key="sm_f_sweep")
+    _f_ask = _fc4.checkbox("Above Ask만", value=False, key="sm_f_ask")
+    _sm_filt = [
+        r for r in _sm_all
+        if (not _f_prem5 or r["prem_m"] >= 5.0)
+        and (not _f_dte30 or r["max_dte"] >= 30)
+        and (not _f_sweep or r["sweep_cnt"] >= 1)
+        and (not _f_ask or r["ask_cnt"] >= 1)
+    ]
+    if _sm_filt:
+        _sm_c3 = st.columns(3)
+        for _si, (_sc, _sr) in enumerate(zip(_sm_c3, _sm_filt[:3]), 1):
+            _sc.metric(f"🔥 {_si}. {_sr['tk']}", f"매집점수 {_sr['score']}", f"${_sr['prem_m']:.1f}M · DTE {_sr['max_dte']}d")
+        st.dataframe(pd.DataFrame([
+            {
+                "순위": i, "종목": r["tk"], "매집점수": r["score"],
+                "충족 조건": r["tags_str"], "프리미엄($M)": f"${r['prem_m']:.1f}M",
+                "최대 DTE": f"{r['max_dte']}d", "세력 의도 자동 해석": r["interp"],
+            }
+            for i, r in enumerate(_sm_filt, 1)
+        ]), hide_index=True, use_container_width=True)
+        if st.button("📩 Smart Money TOP 5 텔레그램 전송", type="primary", key="btn_sm_page_tg"):
+            _sm_p_txt = "🔥 *[오늘의 기관 매집 TOP 5]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* | 매집점수 {r['score']} | {r['tags_str']}\n   ↳ {r['interp']}"
+                for i, r in enumerate(_sm_filt[:5], 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _sm_p_txt)[0]:
+                st.toast("✅ 텔레그램 전송 완료!")
+    else:
+        st.info("선택한 필터 조건을 모두 만족하는 종목이 없습니다. 필터를 완화해 보세요.")
