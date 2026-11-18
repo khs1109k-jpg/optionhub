@@ -1294,6 +1294,7 @@ MENU_ITEMS = [
     "🏆 Top Conviction Ranking",
     "🏦 Smart Money Tracker",
     "🏆 AI Watchlist",
+    "📊 Backtest Center",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -11024,3 +11025,147 @@ if nav_menu == "🏆 AI Watchlist":
             )
             if send_telegram_msg(tg_token, tg_chat_id, _wl_p_txt)[0]:
                 st.toast("✅ AI Watchlist 텔레그램 전송 완료!")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def run_engine_backtest_1y(tickers_tuple, hold_days=10, conv_cut=80, rev_cut=8):
+    import yfinance as _yf_bt
+    tks = list(tickers_tuple)
+    if not tks:
+        return {}, pd.DataFrame()
+    try:
+        vix_df = _yf_bt.Ticker("^VIX").history(period="1y", interval="1d")["Close"].dropna()
+        vix_map = {pd.Timestamp(idx).strftime("%Y-%m-%d"): float(val) for idx, val in vix_df.items()}
+    except Exception:
+        vix_map = {}
+
+    trades = []
+    for tk in tks:
+        try:
+            df_h = _yf_bt.Ticker(tk).history(period="1y", interval="1d")
+            if df_h is None or len(df_h) < 40:
+                continue
+            df_h = df_h.dropna(subset=["Close", "Volume"]).copy()
+            df_h["ma20"] = df_h["Close"].rolling(20).mean()
+            df_h["ma50"] = df_h["Close"].rolling(50).mean()
+            df_h["vol20"] = df_h["Volume"].rolling(20).mean()
+            df_h["ret5"] = df_h["Close"].pct_change(5) * 100.0
+            df_h["ret1"] = df_h["Close"].pct_change(1) * 100.0
+            delta = df_h["Close"].diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta.clip(upper=0)).rolling(14).mean().replace(0, 1e-9)
+            df_h["rsi"] = 100.0 - (100.0 / (1.0 + gain / loss))
+
+            last_entry = {"Conviction": -99, "Reversal": -99, "DealerIntent": -99}
+            for i in range(25, len(df_h) - hold_days):
+                row = df_h.iloc[i]
+                prev = df_h.iloc[i - 1]
+                dt_s = pd.Timestamp(df_h.index[i]).strftime("%Y-%m-%d")
+                px_in = float(row["Close"])
+                px_out = float(df_h.iloc[i + hold_days]["Close"])
+                ret_pct = round((px_out - px_in) / px_in * 100.0, 2)
+                vol_r = float(row["Volume"] / max(float(row["vol20"] or 1), 1.0))
+                ma20_v = float(row["ma20"] or px_in)
+                rsi_v = float(row["rsi"] or 50.0)
+                vix_now = vix_map.get(dt_s, 20.0)
+                prev_dt = pd.Timestamp(df_h.index[i - 1]).strftime("%Y-%m-%d")
+                vix_prev = vix_map.get(prev_dt, vix_now)
+
+                # 1) Conviction Score 근사 백테스트 (추세+거래량+수급강도 0~100)
+                c_sc = 35
+                if px_in > ma20_v: c_sc += 20
+                if vol_r >= 1.5: c_sc += 20
+                elif vol_r >= 1.1: c_sc += 10
+                if float(row["ret1"] or 0) > 1.0: c_sc += 15
+                if 45 <= rsi_v <= 72: c_sc += 10
+                if c_sc >= conv_cut and (i - last_entry["Conviction"]) >= hold_days:
+                    last_entry["Conviction"] = i
+                    trades.append({"엔진": f"Conviction {conv_cut}+", "진입일": dt_s, "종목": tk, "진입가": round(px_in, 2), "청산가": round(px_out, 2), "수익률(%)": ret_pct, "점수": c_sc})
+
+                # 2) Trend Reversal Score 근사 백테스트 (0~10점)
+                r_sc = 0
+                if float(row["ret5"] or 0) < -2.0 and float(row["ret1"] or 0) > 0: r_sc += 2
+                if rsi_v <= 48 and rsi_v > float(prev["rsi"] or rsi_v): r_sc += 2
+                if vol_r >= 1.2: r_sc += 2
+                if vix_now <= vix_prev: r_sc += 2
+                if px_in >= ma20_v * 0.97: r_sc += 2
+                if r_sc >= rev_cut and (i - last_entry["Reversal"]) >= hold_days:
+                    last_entry["Reversal"] = i
+                    trades.append({"엔진": f"Trend Reversal {rev_cut}+", "진입일": dt_s, "종목": tk, "진입가": round(px_in, 2), "청산가": round(px_out, 2), "수익률(%)": ret_pct, "점수": r_sc})
+
+                # 3) Dealer Intent (상방 유도: 20MA 위 + 거래량 유지 + 저변동 양봉)
+                if px_in > ma20_v and float(row["ret1"] or 0) > 0.5 and vol_r >= 1.1 and vix_now < 25.0 and (i - last_entry["DealerIntent"]) >= hold_days:
+                    last_entry["DealerIntent"] = i
+                    trades.append({"엔진": "Dealer Intent (상방)", "진입일": dt_s, "종목": tk, "진입가": round(px_in, 2), "청산가": round(px_out, 2), "수익률(%)": ret_pct, "점수": 1})
+        except Exception:
+            pass
+
+    df_tr = pd.DataFrame(trades)
+    if df_tr.empty:
+        return {}, df_tr
+    df_tr = df_tr.sort_values("진입일").reset_index(drop=True)
+    summary = {}
+    for eng, g in df_tr.groupby("엔진"):
+        n = len(g)
+        wins = int((g["수익률(%)"] > 0).sum())
+        summary[eng] = {
+            "총거래": n,
+            "승률(%)": round(wins / n * 100.0, 1) if n > 0 else 0.0,
+            "평균수익(%)": round(float(g["수익률(%)"].mean()), 2),
+            "최대수익(%)": round(float(g["수익률(%)"].max()), 2),
+            "최대손실(%)": round(float(g["수익률(%)"].min()), 2),
+        }
+    return summary, df_tr
+
+
+if nav_menu == "📊 Backtest Center":
+    st.title("📊 Backtest Center (엔진 성과 검증)")
+    st.caption("Conviction Score · Trend Reversal Score · Dealer Intent의 최근 1년 실제 시장 성과 및 시트 포착 내역 사후 검증")
+
+    _bt_c1, _bt_c2, _bt_c3, _bt_c4 = st.columns([2.2, 0.8, 0.8, 0.8])
+    _bt_pool = ["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "PLTR", "AMZN", "AAPL", "AVGO", "SPY", "QQQ", "SMH"]
+    _bt_tks = _bt_c1.multiselect("검증 종목군", _bt_pool, default=["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "SPY", "QQQ"], key="bt_tks")
+    _bt_hold = _bt_c2.selectbox("보유 기간(거래일)", [5, 10, 20], index=1, key="bt_hold")
+    _bt_conv_cut = _bt_c3.slider("Conviction 기준", 65, 90, 80, 5, key="bt_conv_cut")
+    _bt_rev_cut = _bt_c4.slider("Reversal 기준", 6, 10, 8, 1, key="bt_rev_cut")
+
+    _bt_sum, _bt_df = run_engine_backtest_1y(tuple(_bt_tks), hold_days=int(_bt_hold), conv_cut=int(_bt_conv_cut), rev_cut=int(_bt_rev_cut))
+    if _bt_sum:
+        _scols = st.columns(len(_bt_sum))
+        for _sc, (_eng_name, _st_d) in zip(_scols, _bt_sum.items()):
+            with _sc.container(border=True):
+                st.markdown(f"### {_eng_name}")
+                st.metric("승률", f"{_st_d['승률(%)']:.1f}%", f"총 {_st_d['총거래']}회 거래")
+                st.markdown(f"**평균수익:** `{_st_d['평균수익(%)']:+.2f}%`")
+                st.markdown(f"**최대수익:** `{_st_d['최대수익(%)']:+.2f}%` · **최대손실:** `{_st_d['최대손실(%)']:+.2f}%`")
+
+        # 실제 성과 누적 수익 곡선 차트
+        _fig_bt = go.Figure()
+        _eng_colors = ["#10b981", "#38bdf8", "#f59e0b"]
+        for _ei, (_eng_name, _g_eng) in enumerate(_bt_df.groupby("엔진")):
+            _g_s = _g_eng.sort_values("진입일").copy()
+            _g_s["누적수익(%)"] = ((1.0 + _g_s["수익률(%)"] / 100.0).cumprod() - 1.0) * 100.0
+            _fig_bt.add_trace(go.Scatter(
+                x=_g_s["진입일"], y=_g_s["누적수익(%)"], mode="lines+markers",
+                name=_eng_name, line=dict(color=_eng_colors[_ei % len(_eng_colors)], width=2.5),
+            ))
+        _fig_bt.update_layout(
+            title=f"최근 1년 엔진별 누적 수익 곡선 (보유 {_bt_hold}거래일 기준)",
+            template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
+            height=380, margin=dict(l=20, r=20, t=44, b=24), yaxis_title="누적 수익률 (%)",
+        )
+        st.plotly_chart(_fig_bt, use_container_width=True)
+
+        # 개별 거래 내역 및 시트 실전 포착 비교
+        with st.expander("📋 개별 시뮬레이션 거래 내역 전체 보기", expanded=False):
+            st.dataframe(_bt_df.sort_values("진입일", ascending=False), hide_index=True, use_container_width=True)
+
+        if st.button("📩 Backtest 성과 요약 텔레그램 전송", type="primary", key="btn_bt_tg"):
+            _bt_msg = f"📊 *[OptionHub Backtest 1년 성과 ({_bt_hold}일 보유)]*\n\n" + "\n".join(
+                f"• *{k}*: 승률 {v['승률(%)']:.1f}% ({v['총거래']}건) | 평균 {v['평균수익(%)']:+.2f}% | 최대 {v['최대수익(%)']:+.2f}% / 손실 {v['최대손실(%)']:+.2f}%"
+                for k, v in _bt_sum.items()
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _bt_msg)[0]:
+                st.toast("✅ 백테스트 요약 텔레그램 전송 완료!")
+    else:
+        st.warning("선택한 조건에 해당하는 최근 1년 거래 표본이 없습니다. 기준 점수나 종목을 조정해 보세요.")
