@@ -189,6 +189,68 @@ def fetch_cboe_oi(ticker):
         return [], 0.0, str(_e)
 
 
+@st.cache_data(ttl=240, show_spinner=False)
+def _fetch_cboe_all_prem_bars(ticker, spot_ref=0.0):
+    import urllib.request, re as _re_cb2
+    try:
+        tk_u = str(ticker or "").strip().upper()
+        cboe_sym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(tk_u, tk_u)
+        url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{cboe_sym}.json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8"))
+        data_d = raw.get("data") or {}
+        opts = data_d.get("options") or []
+        if not opts:
+            return []
+        sp = float(spot_ref or data_d.get("current_price") or data_d.get("close") or 0.0)
+        by_k = {}
+        for o in opts:
+            occ = str(o.get("option") or "")
+            m = _re_cb2.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", occ)
+            if not m:
+                continue
+            _, cp_ch, k_raw = m.groups()
+            K = int(k_raw) / 1000.0
+            if sp > 0 and not (0.55 * sp <= K <= 1.45 * sp):
+                continue
+            vol = int(o.get("volume") or 0)
+            oi = int(o.get("open_interest") or 0)
+            bp = float(o.get("bid") or 0)
+            ap = float(o.get("ask") or 0)
+            lp = float(o.get("last_trade_price") or 0)
+            px = ((bp + ap) / 2.0) if (bp > 0 and ap > 0) else lp
+            prem_m = (vol * px * 100.0) / 1e6
+            if prem_m <= 0 and oi <= 0:
+                continue
+            ent = by_k.setdefault(K, {"c_m": 0.0, "p_m": 0.0, "c_oi": 0, "p_oi": 0})
+            if cp_ch == "C":
+                ent["c_m"] += prem_m
+                ent["c_oi"] += oi
+            else:
+                ent["p_m"] += prem_m
+                ent["p_oi"] += oi
+        if not by_k:
+            return []
+        mx_cp = max([v["c_m"] + v["p_m"] for v in by_k.values()] + [1e-6])
+        out = []
+        for K in sorted(by_k.keys()):
+            v = by_k[K]
+            if v["c_m"] + v["p_m"] <= 0:
+                continue
+            out.append({
+                "p": float(K),
+                "c": round(v["c_m"] / mx_cp, 3),
+                "put": round(v["p_m"] / mx_cp, 3),
+                "c_m": round(v["c_m"], 4),
+                "p_m": round(v["p_m"], 4),
+                "c_oi": v["c_oi"],
+                "p_oi": v["p_oi"],
+                "net_g": 0.0,
+            })
+        return out
+    except Exception:
+        return []
+
 def fetch_yahoo_oi(ticker):
     """1순위 Cboe 공개 API(24시간 OCC OI) -> 실패 시 yfinance 폴백"""
     _cb_rows, _cb_sp, _cb_st = fetch_cboe_oi(ticker)
@@ -2203,6 +2265,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
                     p_oi = int(df_dm[(df_dm["행사가"] == k) & (df_dm["구분"] == "Put")]["OI"].sum()) if "OI" in df_dm.columns else 0
                     net_g_k = float(df_dm[df_dm["행사가"] == k]["GEX($M)"].sum()) if "GEX($M)" in df_dm.columns else 0.0
                     opt_bars.append({"p": float(k), "c": round(cv / mx_cp, 3), "put": round(pv / mx_cp, 3), "c_m": round(cv, 4), "p_m": round(pv, 4), "c_oi": c_oi, "p_oi": p_oi, "net_g": round(net_g_k, 2)})
+    _cboe_all_bars = _fetch_cboe_all_prem_bars(opt_tk, float(cur.get("px", 0) or 0))
+    if _cboe_all_bars:
+        _g_map_ob = {round(float(x.get("p", 0)), 4): float(x.get("net_g", 0)) for x in opt_bars}
+        for _cb in _cboe_all_bars:
+            _cb["net_g"] = _g_map_ob.get(round(float(_cb["p"]), 4), 0.0)
+        opt_bars = _cboe_all_bars
     _snap_dt_str = str(oi_hist_m.get(_opt_src_tk, [{}])[-1].get("수집시각", ""))[:10] if (_opt_src_tk in oi_hist_m and oi_hist_m[_opt_src_tk]) else ""
     _today_k_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     if (not opt_bars) or (_snap_dt_str != _today_k_str) or (cw_lv is not None and pw_lv is not None and cw_lv == pw_lv):
