@@ -117,12 +117,104 @@ def _fetch_cboe_chain_rows(tk: str, max_exps: int = 6):
     return 0.0, []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_moomoo_chain_rows(tk: str, max_exps: int = 6):
+    try:
+        import socket as _sk_mg, concurrent.futures as _cf_mg
+        with _sk_mg.create_connection(("127.0.0.1", 11111), timeout=0.25):
+            pass
+        def _mm_ch_w():
+            from moomoo import OpenQuoteContext, RET_OK
+            qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+            try:
+                sym = f"US.{tk}"
+                spot_mm = 0.0
+                try:
+                    rs_u, dfs_u = qc.get_market_snapshot([sym])
+                    if rs_u == RET_OK and dfs_u is not None and not dfs_u.empty:
+                        sr = dfs_u.iloc[0]
+                        for sk in ("overnight_price", "after_price", "pre_price", "last_price", "cur_price"):
+                            v = float(sr.get(sk) or 0)
+                            if v > 0:
+                                spot_mm = round(v, 2); break
+                except Exception:
+                    pass
+                today_d = dt.date.today()
+                end_d = (today_d + dt.timedelta(days=max(14, max_exps * 5))).isoformat()
+                rc, dfc = qc.get_option_chain(code=sym, start=today_d.isoformat(), end=end_d)
+                if rc != RET_OK or dfc is None or dfc.empty:
+                    return 0.0, []
+                if "strike_time" in dfc.columns:
+                    exps_u = sorted(dfc["strike_time"].astype(str).str[:10].unique().tolist())[:max_exps]
+                    dfc = dfc[dfc["strike_time"].astype(str).str[:10].isin(exps_u)]
+                if spot_mm > 0 and "strike_price" in dfc.columns:
+                    sp_s = pd.to_numeric(dfc["strike_price"], errors="coerce").fillna(0)
+                    dfc = dfc[(sp_s >= spot_mm * 0.65) & (sp_s <= spot_mm * 1.35)]
+                codes = dfc["code"].tolist()[:180]
+                rows_mm = []
+                for i in range(0, len(codes), 100):
+                    rso, dfso = qc.get_market_snapshot(codes[i:i+100])
+                    if rso != RET_OK or dfso is None or dfso.empty:
+                        continue
+                    for _, o in dfso.iterrows():
+                        strike = float(o.get("option_strike_price") or 0)
+                        if strike <= 0: continue
+                        exp_str = str(o.get("strike_time") or "")[:10]
+                        dte = max((dt.date.fromisoformat(exp_str) - today_d).days, 0) if len(exp_str) == 10 else 1
+                        t_years = max(dte, 0.5) / 365.0
+                        cp_code = "C" if "CALL" in str(o.get("option_type") or "").upper() else "P"
+                        oi = float(o.get("option_open_interest") or 0)
+                        vol = float(o.get("volume") or 0)
+                        if oi <= 0 and vol <= 0: continue
+                        iv = float(o.get("option_implied_volatility") or 0) / 100.0
+                        if iv <= 0.01: iv = 0.35
+                        s_ref = spot_mm if spot_mm > 0 else strike
+                        delta = float(o.get("option_delta") or 0)
+                        gamma = float(o.get("option_gamma") or 0)
+                        if gamma == 0:
+                            delta, gamma = _bs_delta_gamma(s_ref, strike, t_years, iv, cp_code)
+                        lp = float(o.get("last_price") or 0)
+                        bd = float(o.get("bid_price") or 0); ak = float(o.get("ask_price") or 0)
+                        mid = (bd + ak) / 2.0 if (bd > 0 and ak > 0) else lp
+                        prem = vol * mid * 100.0
+                        gex = (1.0 if cp_code == "C" else -1.0) * gamma * oi * 100.0 * (s_ref ** 2) * 0.01
+                        dex = delta * oi * 100.0 * s_ref
+                        rows_mm.append({
+                            "exp": exp_str, "dte": int(dte), "cp": cp_code, "strike": strike,
+                            "oi": oi, "vol": vol, "iv": iv, "delta": delta, "gamma": gamma,
+                            "gex": gex, "dex": dex, "prem": prem, "mid": mid,
+                        })
+                if rows_mm and sum(r["oi"] for r in rows_mm) >= 100:
+                    return spot_mm, rows_mm
+                return 0.0, []
+            finally:
+                try: qc.close()
+                except Exception: pass
+        _ex_m = _cf_mg.ThreadPoolExecutor(max_workers=1)
+        try:
+            return _ex_m.submit(_mm_ch_w).result(timeout=3.5)
+        finally:
+            _ex_m.shutdown(wait=False)
+    except Exception:
+        return 0.0, []
+
+
 def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 0.0):
     import yfinance as yf
 
     tk = (ticker or "SPY").strip().upper()
-    _cb_spot, _cb_rows = _fetch_cboe_chain_rows(tk, max_exps=max_exps)
-    if _cb_rows:
+    _src_used = "Cboe 지연시세"
+    _mm_spot, _mm_rows = _fetch_moomoo_chain_rows(tk, max_exps=max_exps)
+    if _mm_rows:
+        spot, rows = (_mm_spot if _mm_spot > 0 else float(spot_override or 0)), _mm_rows
+        _src_used = "무무 OpenD 실시간"
+    else:
+        _cb_spot, _cb_rows = _fetch_cboe_chain_rows(tk, max_exps=max_exps)
+        if _cb_rows:
+            spot, rows = _cb_spot, _cb_rows
+        else:
+            spot, rows = 0.0, []
+    if rows:
         spot, rows = _cb_spot, _cb_rows
         if spot_override and float(spot_override) > 0 and abs(float(spot_override) - spot) > 1e-4:
             spot = float(spot_override)
@@ -391,6 +483,7 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 
         "ok": True,
         "ticker": tk,
         "spot": spot,
+        "data_source": _src_used if "rows" in locals() and rows else "Yahoo Finance",
         "exps": sel_exps,
         "by_k": by_k_sorted,
         "by_dte": by_dte,
@@ -527,7 +620,7 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
 
     max_exps = c2.slider("분석 만기 개수 (가까운 순)", 2, 10, 6, key="ai_gex_max_exps")
     if c3.button("🔄 실시간 새로고침", use_container_width=True, key="btn_ai_gex_refresh"):
-        _fetch_cboe_chain_rows.clear()
+        _fetch_moomoo_chain_rows.clear(); _fetch_cboe_chain_rows.clear()
         st.rerun()
 
     qcols = st.columns(len(quick_tks))
@@ -546,8 +639,11 @@ def render_ai_gex_dashboard(run_ai_fn=None, send_tg_fn=None, tg_token="", tg_cha
         return
 
     spot = _mm_gex["px"] if _mm_gex["px"] > 0 else res["spot"]
+    _ds_lbl = res.get("data_source", "Cboe")
     if _mm_gex["summary"]:
-        st.caption(f"📡 무무 실시간 연동: {_mm_gex['summary']}")
+        st.caption(f"📡 옵션 체인: **{_ds_lbl}** | 무무 실시간: {_mm_gex['summary']}")
+    else:
+        st.caption(f"📡 옵션 체인 소스: **{_ds_lbl}**")
     cw = res["call_wall"]
     pw = res["put_wall"]
     flip = res["gex_flip"]
