@@ -1478,6 +1478,7 @@ MENU_ITEMS = [
     "📋 AI Trade Plan",
     "📡 OI Change Radar",
     "🌊 Vanna & Charm",
+    "🌑 Dark Pool Classification",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -12177,3 +12178,228 @@ if nav_menu == "🌊 Vanna & Charm":
                 st.toast("✅ Vanna & Charm 브리핑 텔레그램 전송 완료!")
     else:
         st.warning("옵션 체인 데이터를 불러오는 중입니다. 잠시 후 새로고침해 주세요.")
+
+
+DARKPOOL_PRINTS_PATH = os.path.expanduser("~/.optionhub_darkpool_prints.json")
+
+_DP_SECTOR_MAP = {
+    "NVDA": "반도체", "AMD": "반도체", "AVGO": "반도체", "MRVL": "반도체", "MU": "반도체", "TSM": "반도체", "INTC": "반도체", "SMH": "반도체", "SOXL": "반도체", "SOXS": "반도체", "KLAC": "반도체", "LRCX": "반도체", "AMAT": "반도체", "QCOM": "반도체",
+    "AAPL": "AI·빅테크", "MSFT": "AI·빅테크", "META": "AI·빅테크", "AMZN": "AI·빅테크", "GOOGL": "AI·빅테크", "PLTR": "AI·빅테크", "TSLA": "AI·빅테크", "QQQ": "AI·빅테크", "SPY": "AI·빅테크",
+    "WMT": "필수소비재", "COST": "필수소비재", "KO": "필수소비재", "PEP": "필수소비재", "PG": "필수소비재",
+    "LLY": "헬스케어", "UNH": "헬스케어", "JNJ": "헬스케어", "EXEL": "헬스케어", "MRK": "헬스케어",
+    "JPM": "금융·에너지", "GS": "금융·에너지", "XOM": "금융·에너지", "CVX": "금융·에너지",
+}
+_DP_MEGA_CAPS = {"AAPL", "MSFT", "NVDA", "AMD", "AVGO", "META", "AMZN", "GOOGL", "TSLA", "SPY", "QQQ"}
+
+def parse_darkpool_text(raw_txt):
+    import re as _re_dp
+    rows = []
+    for line in str(raw_txt or "").splitlines():
+        ln = line.strip()
+        if not ln:
+            continue
+        m_tk = _re_dp.search(r"\b([A-Z]{1,5})\b", ln.upper())
+        if not m_tk:
+            continue
+        tk = m_tk.group(1)
+        if tk in ("USD", "ETF", "MOC", "VWAP", "ASK", "BID", "DARK", "POOL"):
+            continue
+        m_tm = _re_dp.search(r"\b(\d{1,2}:\d{2})\b", ln)
+        tm_s = m_tm.group(1) if m_tm else "16:00"
+        amt_m = 0.0
+        m_b = _re_dp.search(r"\$?([\d,.]+)\s*[bB]\b", ln)
+        m_m = _re_dp.search(r"\$?([\d,.]+)\s*[mM]\b", ln)
+        m_uk = _re_dp.search(r"([\d,.]+)\s*억", ln)
+        if m_b:
+            amt_m = float(m_b.group(1).replace(",", "")) * 1000.0
+        elif m_m:
+            amt_m = float(m_m.group(1).replace(",", ""))
+        elif m_uk:
+            amt_m = float(m_uk.group(1).replace(",", "")) * 100.0  # 1억 달러 = 100M
+        else:
+            m_num = _re_dp.search(r"([\d.]+)", ln.replace(tk, "").replace(tm_s, ""))
+            if m_num:
+                amt_m = float(m_num.group(1))
+        m_vol_r = _re_dp.search(r"([\d.]+)\s*%", ln)
+        vol_r = float(m_vol_r.group(1)) if m_vol_r else 0.0
+        is_reg = ("정규" in ln) or ("09:30" <= tm_s <= "15:59")
+        is_after = ("애프터" in ln) or (tm_s >= "16:02")
+        rows.append({
+            "time": tm_s, "tk": tk, "amt_m": round(amt_m, 2),
+            "vol_ratio": vol_r, "is_reg": is_reg, "is_after": is_after,
+            "sector": _DP_SECTOR_MAP.get(tk, "기타"),
+        })
+    return rows
+
+def classify_darkpool_prints(prints, oi_hist_d, raw_flows_l):
+    if not prints:
+        return [], {}, "다크풀 체결 데이터를 입력하거나 샘플을 불러와 주세요."
+
+    time_buckets = {}
+    for p in prints:
+        t_k = p["time"]
+        time_buckets.setdefault(t_k, set()).add(p["tk"])
+
+    moc_tks = set()
+    for t_k, tset in time_buckets.items():
+        if t_k in ("16:00", "16:01"):
+            moc_tks |= tset
+
+    basket_times = {t_k for t_k, tset in time_buckets.items() if len(tset) >= 3 and t_k not in ("16:00", "16:01")}
+
+    flow_ctx = {}
+    for _sr in (raw_flows_l or []):
+        try:
+            _tk = str(_sr[1]).strip().upper()
+            _cp = str(_sr[3]).upper()
+            _sd = str(_sr[10] if len(_sr) > 10 else "").upper()
+            _typ = str(_sr[13] if len(_sr) > 13 else "").upper()
+            _fc = flow_ctx.setdefault(_tk, {"ask": 0, "put_buy": 0, "call_buy": 0})
+            if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd:
+                _fc["ask"] += 1
+            if "CALL" in _cp and ("BUY" in _sd or "ASK" in _sd):
+                _fc["call_buy"] += 1
+            elif "PUT" in _cp and ("BUY" in _sd or "ASK" in _sd):
+                _fc["put_buy"] += 1
+        except Exception:
+            pass
+
+    by_tk = {}
+    for p in prints:
+        by_tk.setdefault(p["tk"], []).append(p)
+
+    out_rows = []
+    sector_m = {}
+    for tk, plist in by_tk.items():
+        tot_m = sum(x["amt_m"] for x in plist)
+        sec = plist[0]["sector"]
+        sector_m[sec] = sector_m.get(sec, 0.0) + tot_m
+
+        has_reg = any(x["is_reg"] for x in plist)
+        has_moc = any(x["time"] in ("16:00", "16:01") for x in plist)
+        has_basket = any(x["time"] in basket_times or x["time"] in ("17:54", "18:41") for x in plist)
+        only_after = all(x["is_after"] for x in plist) and len(plist) == 1
+        repeat_cnt = len(plist)
+
+        snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+        last_sn = snaps[-1] if snaps else {}
+        prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+        call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
+        put_doi = (int(last_sn.get("Put_OI", 0) or 0) - int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
+        fc = flow_ctx.get(tk, {"ask": 0, "put_buy": 0, "call_buy": 0})
+
+        reasons = []
+        if has_moc and len(moc_tks & _DP_MEGA_CAPS) >= 3 and tk in _DP_MEGA_CAPS:
+            cls_lbl = "🟡 ETF 리밸런싱"
+            conf = 84 + min(10, len(moc_tks & _DP_MEGA_CAPS))
+            reasons = ["✅ 16:00~16:01 종가 크로스", f"✅ 대형주 {len(moc_tks)}종목 동시 체결", "✅ 바스켓 리밸런싱 패턴"]
+        elif has_basket:
+            cls_lbl = "🔵 인덱스 바스켓"
+            conf = 80
+            reasons = ["✅ 동일 시간대 다수 종목 동시 체결", "✅ 17:54/18:41 바스켓 패턴"]
+        elif (put_doi > call_doi and put_doi > 0) or (fc["put_buy"] > fc["call_buy"] and fc["put_buy"] >= 2):
+            cls_lbl = "🛡️ 헤지"
+            conf = 76
+            reasons = ["✅ Put 증가 + 다크풀 유입", "✅ 하방 방어 헤지 동반"]
+        elif has_reg and (fc["ask"] > 0 or repeat_cnt >= 2 or call_doi > 0):
+            cls_lbl = "🟢 기관 매집"
+            conf = 74 + (6 if repeat_cnt >= 2 else 0) + (5 if fc["ask"] > 0 else 0) + (5 if call_doi > 0 else 0)
+            if has_reg: reasons.append("✅ 정규장 체결 존재")
+            if repeat_cnt >= 2: reasons.append(f"✅ 반복 체결 ({repeat_cnt}회)")
+            if fc["ask"] > 0: reasons.append("✅ Above Ask 동반")
+            if call_doi > 0: reasons.append("✅ Call OI 증가")
+            if sec != "기타": reasons.append(f"✅ {sec} 섹터 집중")
+        elif only_after:
+            cls_lbl = "🟠 차익실현 / 단발"
+            conf = 44
+            reasons = ["⚠️ 애프터 단발 체결 (신뢰도 낮음)"]
+        else:
+            cls_lbl = "🟠 차익실현 / 관망"
+            conf = 58
+            reasons = ["⚠️ 정규장·반복 신호 부족"]
+
+        amt_str = f"${tot_m/1000.0:.2f}B" if tot_m >= 1000 else f"${tot_m:.1f}M"
+        out_rows.append({
+            "종목": tk, "섹터": sec, "다크풀": amt_str, "amt_m": tot_m,
+            "분류": cls_lbl, "신뢰도": f"{min(96, conf)}%", "conf_num": min(96, conf),
+            "근거": " · ".join(reasons[:4]),
+            "체결시각": ", ".join(sorted({x["time"] for x in plist})),
+        })
+
+    out_rows.sort(key=lambda r: r["amt_m"], reverse=True)
+    top_secs = sorted(sector_m.items(), key=lambda kv: kv[1], reverse=True)
+    etf_cnt = sum(1 for r in out_rows if "ETF 리밸런싱" in r["분류"])
+    acc_cnt = sum(1 for r in out_rows if "기관 매집" in r["분류"])
+    semi_tks = [r["종목"] for r in out_rows if r["섹터"] == "반도체"]
+    top_sec_nm = top_secs[0][0] if top_secs else "대형주"
+    if etf_cnt >= 3:
+        narrative = f"오늘 기관은 **{top_sec_nm}**({', '.join(semi_tks[:4]) if semi_tks else '대형주'}) 중심 동시 체결이 집중됐으며, 개별 종목 공격적 매집보다 **ETF·인덱스 리밸런싱** 성격이 우세합니다."
+    elif acc_cnt >= 2:
+        narrative = f"오늘 기관은 **{top_sec_nm}** 섹터를 중심으로 정규장 반복 체결·Above Ask가 동반된 **개별 종목 기관 매집** 비중이 높습니다."
+    else:
+        narrative = f"현재 다크풀은 **{top_sec_nm}** 중심으로 유입되고 있으며, 리밸런싱·헤지·단발 물량이 혼재된 구간입니다."
+    return out_rows, dict(top_secs), narrative
+
+
+if nav_menu == "🌑 Dark Pool Classification":
+    st.title("🌑 Dark Pool Classification Engine (기관 의도 해석)")
+    st.caption("단순 다크풀 금액 집계를 넘어 1. 기관 매집 · 2. ETF 리밸런싱 · 3. 인덱스 바스켓 · 4. 헤지 · 5. 차익실현으로 자동 분류합니다.")
+
+    _dp_default = (
+        "16:00 AAPL 18.2억\n"
+        "16:00 MSFT 16.5억\n"
+        "14:25 AMD 16.4억 정규장\n"
+        "15:10 AMD 3.2억 정규장\n"
+        "16:01 NVDA 16.1억\n"
+        "16:00 AVGO 9.5억\n"
+        "17:54 META 6.2억\n"
+        "17:54 AMZN 5.4억\n"
+        "17:54 TSLA 4.8억"
+    )
+    _saved_dp_txt = load_json_file(DARKPOOL_PRINTS_PATH, {"text": _dp_default}).get("text", _dp_default)
+    _dp_inp = st.text_area("다크풀 체결 내역 붙여넣기 (시간 · 종목 · 금액[억/M/B] · 정규장/애프터)", value=_saved_dp_txt, height=145, key="dp_raw_inp")
+    _dp_b1, _dp_b2 = st.columns([1.2, 2.8])
+    if _dp_b1.button("💾 저장 및 분류 실행", type="primary", use_container_width=True, key="btn_dp_run"):
+        save_json_file(DARKPOOL_PRINTS_PATH, {"text": _dp_inp})
+        st.toast("✅ 다크풀 데이터 저장 및 재분류 완료!")
+
+    _dp_prints = parse_darkpool_text(_dp_inp)
+    _dp_rows, _dp_secs, _dp_narr = classify_darkpool_prints(_dp_prints, load_json_file(OI_PATH, {}), all_raw_flows)
+
+    if _dp_rows:
+        st.info(f"🧠 **Institutional Narrative:** {_dp_narr}")
+
+        _dc1, _dc2 = st.columns([1.6, 1.0])
+        with _dc1:
+            st.subheader("🏷️ 종목별 기관 의도 분류")
+            st.dataframe(pd.DataFrame([
+                {
+                    "종목": r["종목"], "섹터": r["섹터"], "다크풀": r["다크풀"],
+                    "분류": r["분류"], "신뢰도": r["신뢰도"], "체결시각": r["체결시각"], "근거": r["근거"],
+                }
+                for r in _dp_rows
+            ]), hide_index=True, use_container_width=True)
+        with _dc2:
+            st.subheader("🔄 Sector Rotation")
+            _sec_df = pd.DataFrame([
+                {"섹터": k, "금액": (f"+${v/1000.0:.2f}B" if v >= 1000 else f"+${v:.0f}M"), "amt_m": v}
+                for k, v in _dp_secs.items()
+            ])
+            st.dataframe(_sec_df[["섹터", "금액"]], hide_index=True, use_container_width=True)
+            _fig_dp = go.Figure(go.Bar(
+                x=_sec_df["amt_m"], y=_sec_df["섹터"], orientation="h",
+                marker_color="#38bdf8", text=_sec_df["금액"], textposition="auto",
+            ))
+            _fig_dp.update_layout(
+                template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
+                height=240, margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(autorange="reversed"),
+            )
+            st.plotly_chart(_fig_dp, use_container_width=True)
+
+        if st.button("📩 Dark Pool 해석 리포트 텔레그램 전송", key="btn_dp_tg"):
+            _dp_tg = "🌑 *[Dark Pool Classification Engine]*\n" + _dp_narr.replace("**", "") + "\n\n" + "\n".join(
+                f"• *{r['종목']}* ({r['다크풀']}) → {r['분류']} ({r['신뢰도']}) | {r['근거']}"
+                for r in _dp_rows[:8]
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _dp_tg)[0]:
+                st.toast("✅ Dark Pool 해석 리포트 텔레그램 전송 완료!")
