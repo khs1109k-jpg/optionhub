@@ -661,6 +661,170 @@ def render_conviction_detail_card(c_res):
         for _dc, (_kl, _kv) in zip(_d_cols, _items_d):
             _dc.metric(_kl, _kv)
 
+
+# =========================================================
+# 🔥 Trend Reversal Score Engine (0~10점 · 10대 추세전환 체크리스트)
+# =========================================================
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_vix_reversal_state():
+    try:
+        import yfinance as _yf_vx
+        _vh = _yf_vx.Ticker("^VIX").history(period="5d", interval="1d")["Close"].dropna()
+        if len(_vh) >= 2:
+            _v_now = float(_vh.iloc[-1])
+            _v_prev = float(_vh.iloc[-2])
+            return (_v_now < _v_prev), round(_v_now, 2), round(_v_now - _v_prev, 2)
+        elif len(_vh) == 1:
+            _v_now = float(_vh.iloc[-1])
+            return (_v_now < 20.0), round(_v_now, 2), 0.0
+    except Exception:
+        pass
+    return False, 0.0, 0.0
+
+def _reversal_grade_and_verdict(score):
+    s = int(score)
+    if s >= 9:
+        grade = "🔥 Strong Bullish Reversal"
+    elif s >= 7:
+        grade = "🟢 Trend Reversal"
+    elif s >= 5:
+        grade = "🟡 Transition"
+    elif s >= 3:
+        grade = "🟠 Weak Bearish"
+    else:
+        grade = "🔴 Strong Bearish"
+    verdict = "🟢 LONG" if s >= 8 else ("🟡 HOLD" if s >= 5 else "🔴 SHORT")
+    return grade, verdict
+
+def compute_trend_reversal_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.0, net_gex_ov=None, zero_gamma_ov=None, vol_oi_ov=None):
+    tk = str(tk_in or "").strip().upper()
+    snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+    last_sn = snaps[-1] if snaps else {}
+    prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+
+    spot_v = float(spot_ov or last_sn.get("Spot", 0) or 0)
+    net_gex = float(net_gex_ov if net_gex_ov is not None else (last_sn.get("Net_GEX_M", 0) or 0))
+    zg_v = float(zero_gamma_ov if zero_gamma_ov is not None else (last_sn.get("ZeroGamma", 0) or 0))
+    if zg_v <= 0 and last_sn.get("상세"):
+        try:
+            _df_s = pd.DataFrame(last_sn["상세"])
+            if not _df_s.empty and spot_v > 0:
+                zg_v = float(calc_zero_gamma(_df_s, spot_v) or 0)
+        except Exception:
+            pass
+
+    _call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
+    _put_doi = (int(last_sn.get("Put_OI", 0) or 0) - int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
+
+    _above_ask_cnt, _below_bid_cnt, _sweep_cnt = 0, 0, 0
+    _bull_cnt, _bear_cnt = 0, 0
+    _call_prem_m, _put_prem_m = 0.0, 0.0
+    _max_voi = float(vol_oi_ov or 0.0)
+
+    for _sr in (raw_flows_l or []):
+        try:
+            if str(_sr[1]).strip().upper() != tk:
+                continue
+            _pm_s = str(_sr[14] if len(_sr) > 14 else "").replace("$", "").replace(",", "").strip().upper()
+            _pm_v = float(_pm_s[:-1]) if _pm_s.endswith("M") else (float(_pm_s[:-1]) / 1000.0 if _pm_s.endswith("K") else 0.0)
+            _typ = str(_sr[13] if len(_sr) > 13 else "").upper()
+            _sd = str(_sr[10] if len(_sr) > 10 else "").upper()
+            _cp = str(_sr[3] if len(_sr) > 3 else "").upper()
+            if "CALL" in _cp:
+                _call_prem_m += _pm_v
+            elif "PUT" in _cp:
+                _put_prem_m += _pm_v
+            if "SWEEP" in _typ:
+                _sweep_cnt += 1
+            if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd:
+                _above_ask_cnt += 1
+            elif "BID" in _sd or "BELOW" in _typ or "SELL" in _sd:
+                _below_bid_cnt += 1
+            if ("CALL" in _cp and ("BUY" in _sd or "ASK" in _sd)) or ("PUT" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                _bull_cnt += 1
+            elif ("PUT" in _cp and ("BUY" in _sd or "ASK" in _sd)) or ("CALL" in _cp and ("SELL" in _sd or "BID" in _sd)):
+                _bear_cnt += 1
+            _q_v = float(_sr[15] if len(_sr) > 15 else 0) if str(_sr[15] if len(_sr) > 15 else "").replace(".", "", 1).isdigit() else 0.0
+            _oi_v = float(_sr[16] if len(_sr) > 16 else 0) if str(_sr[16] if len(_sr) > 16 else "").replace(".", "", 1).isdigit() else 0.0
+            if _oi_v > 0:
+                _max_voi = max(_max_voi, _q_v / _oi_v)
+        except Exception:
+            pass
+
+    for _bf in (big_flows_l or []):
+        if str(_bf.get("tk", "")).upper() != tk:
+            continue
+        for _rec in _bf.get("records", []):
+            _pm_b = float(_rec.get("prem_m", 0) or 0)
+            _cp_b = str(_rec.get("cp", "")).upper()
+            if "C" in _cp_b:
+                _call_prem_m += _pm_b
+            elif "P" in _cp_b:
+                _put_prem_m += _pm_b
+            if "BUY" in str(_rec.get("side", "")).upper():
+                _above_ask_cnt += 1
+            if _rec.get("emoji") == "🟢":
+                _bull_cnt += 1
+            elif _rec.get("emoji") == "🔴":
+                _bear_cnt += 1
+
+    if last_sn.get("상세") and _max_voi <= 0:
+        try:
+            for _dx in last_sn["상세"]:
+                _d_oi = int(_dx.get("OI", 0) or 0)
+                _d_vl = int(_dx.get("거래량", 0) or 0)
+                if _d_oi >= 50:
+                    _max_voi = max(_max_voi, _d_vl / float(_d_oi))
+        except Exception:
+            pass
+
+    _vix_down, _vix_now, _vix_chg = _fetch_vix_reversal_state()
+
+    _checks = [
+        (net_gex > 0, "Net GEX Positive", "Net GEX 음수/부재"),
+        (spot_v > 0 and zg_v > 0 and spot_v > zg_v, "Above Flip Gamma", "Flip Gamma 하회/미확인"),
+        ((_call_doi > _put_doi) if prev_sn else (int(last_sn.get("Call_OI", 0) or 0) > int(last_sn.get("Put_OI", 0) or 0)), "Call OI Expansion", "Call OI 증가 부족"),
+        ((_put_doi < 0) if prev_sn else False, "Put OI Decrease", "Put OI 감소 미확인"),
+        (_max_voi >= 1.5, "Volume/OI Expansion", "Volume/OI 증가 부족"),
+        (_vix_down, f"VIX 하락 ({_vix_now:.1f})", f"VIX 아직 높음 ({_vix_now:.1f})"),
+        (_above_ask_cnt >= 2 or (_above_ask_cnt > _below_bid_cnt and _above_ask_cnt > 0), "Above Ask Dominant", "Above Ask 부족"),
+        (_sweep_cnt >= 1, "Sweep Increase", "Sweep 포착 부족"),
+        (_bull_cnt > _bear_cnt or (net_gex > 0 and spot_v > zg_v > 0), "Dark Pool Bullish", "Dark Pool 중립/약세"),
+        (_call_prem_m > _put_prem_m and _call_prem_m > 0, "Call Premium 우세", "Premium 부족"),
+    ]
+    _passed = [lbl_ok for ok, lbl_ok, _ in _checks if ok]
+    _failed = [lbl_no for ok, _, lbl_no in _checks if not ok]
+    _score = len(_passed)
+    _grade, _verdict = _reversal_grade_and_verdict(_score)
+    return {
+        "tk": tk, "score": _score, "grade": _grade, "verdict": _verdict,
+        "passed": _passed, "failed": _failed,
+        "net_gex": net_gex, "spot": spot_v, "zg": zg_v,
+        "call_prem_m": round(_call_prem_m, 2), "put_prem_m": round(_put_prem_m, 2),
+    }
+
+def compute_top_reversal_ranking(oi_hist_d, raw_flows_l, big_flows_l):
+    base = ["NVDA", "TSLA", "AMD", "META", "MU", "SOXL", "PLTR", "AMZN", "AAPL", "AVGO", "SPY", "QQQ", "SMH"]
+    extra_sh = [str(r[1]).strip().upper() for r in (raw_flows_l or []) if len(r) > 1 and str(r[1]).strip()]
+    tks = list(dict.fromkeys(base + list((oi_hist_d or {}).keys()) + extra_sh))[:20]
+    ranked = [compute_trend_reversal_score(t, oi_hist_d, raw_flows_l, big_flows_l) for t in tks]
+    ranked.sort(key=lambda x: (x["score"], x["call_prem_m"]), reverse=True)
+    return ranked
+
+def render_trend_reversal_card(r_res):
+    with st.container(border=True):
+        _r1, _r2, _r3 = st.columns([1.2, 1.4, 1.2])
+        _r1.metric(f"🔥 {r_res['tk']} Trend Reversal Score", f"{r_res['score']} / 10")
+        _r2.metric("결과 등급", r_res["grade"])
+        _r3.metric("AI 최종판정", r_res["verdict"])
+        _pc1, _pc2 = st.columns(2)
+        with _pc1:
+            st.markdown("**통과 항목**")
+            st.markdown("\n".join(f"- ✅ {x}" for x in r_res["passed"]) if r_res["passed"] else "- 없음")
+        with _pc2:
+            st.markdown("**실패 항목**")
+            st.markdown("\n".join(f"- ❌ {x}" for x in r_res["failed"]) if r_res["failed"] else "- 없음")
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
@@ -4334,6 +4498,27 @@ if nav_menu == "📝 오늘의 종합평":
             ])
             st.dataframe(_df_cv_top, hide_index=True, use_container_width=True)
 
+    with st.container(border=True):
+        _rv_h1, _rv_h2 = st.columns([3.0, 1.0])
+        _rv_h1.subheader("🔥 Trend Reversal Score Engine & 🏆 Top Reversal Ranking")
+        _rev_rank = compute_top_reversal_ranking(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _rv_h2.button("📩 Reversal 텔레그램", use_container_width=True, key="btn_home_rev_tg"):
+            _rm_txt = "🔥 *[OptionHub Top Reversal Ranking]*\n\n" + "\n".join(
+                f"{i}. *{r['tk']}* {r['score']}/10 | {r['grade']} | {r['verdict']}"
+                for i, r in enumerate(_rev_rank[:10], 1)
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _rm_txt)[0]:
+                st.toast("✅ Reversal 랭킹 텔레그램 전송 완료!")
+        if _rev_rank:
+            _rv_top5_cols = st.columns(5)
+            for _ri, (_rcol, _rr) in enumerate(zip(_rv_top5_cols, _rev_rank[:5]), 1):
+                _rcol.metric(f"{_ri}. {_rr['tk']} ({_rr['verdict']})", f"{_rr['score']}/10", _rr["grade"])
+            _rv_tks = [r["tk"] for r in _rev_rank]
+            _rv_def = _rv_tks.index("SOXL") if "SOXL" in _rv_tks else 0
+            _sel_rv_tk = st.selectbox("🔍 Trend Reversal 상세 체크리스트 종목", _rv_tks, index=_rv_def, key="home_rev_sel_tk")
+            _sel_rv_res = next(r for r in _rev_rank if r["tk"] == _sel_rv_tk)
+            render_trend_reversal_card(_sel_rv_res)
+
     @st.cache_data(ttl=300, show_spinner=False)
     def _calc_trend_reversal_7():
         import yfinance as _yf_tr
@@ -7416,6 +7601,11 @@ if nav_menu == "🎯 행사가별·동반 체결":
         spot_ov=spot_live, net_gex_ov=_det_gex, net_dex_ov=_det_dex, zero_gamma_ov=_det_zg, vol_oi_ov=_det_voi,
     )
     render_conviction_detail_card(_det_conv)
+    _det_rev = compute_trend_reversal_score(
+        tk_f, oi_hist_all, all_raw_flows, load_json_file(BIG_FLOWS_PATH, []),
+        spot_ov=spot_live, net_gex_ov=_det_gex, zero_gamma_ov=_det_zg, vol_oi_ov=_det_voi,
+    )
+    render_trend_reversal_card(_det_rev)
 
     st.markdown(f"""
     <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; background:#07111e; border:1px solid #1e3a5f; border-radius:8px; padding:10px 14px; margin-bottom:10px; font-family:monospace; font-size:13px;">
@@ -10199,3 +10389,18 @@ if nav_menu == "🏆 Top Conviction Ranking":
             )
             if send_telegram_msg(tg_token, tg_chat_id, _pg_txt)[0]:
                 st.toast("✅ 텔레그램 전송 완료!")
+
+        st.subheader("🏆 Top Reversal Ranking (추세전환 10대 지표)")
+        _all_rev = compute_top_reversal_ranking(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _all_rev:
+            _df_rev_full = pd.DataFrame([
+                {
+                    "순위": i, "종목": r["tk"], "Trend Reversal Score": f"{r['score']}/10",
+                    "등급": r["grade"], "AI 최종판정": r["verdict"],
+                    "통과": len(r["passed"]), "실패": len(r["failed"]),
+                }
+                for i, r in enumerate(_all_rev, 1)
+            ])
+            st.dataframe(_df_rev_full, hide_index=True, use_container_width=True)
+            _sel_rv_p_tk = st.selectbox("🔍 추세전환 체크리스트 상세 보기", [r["tk"] for r in _all_rev], key="rev_page_sel_tk")
+            render_trend_reversal_card(next(r for r in _all_rev if r["tk"] == _sel_rv_p_tk))
