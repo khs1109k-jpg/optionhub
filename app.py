@@ -1385,6 +1385,7 @@ MENU_ITEMS = [
     "📊 Backtest Center",
     "🚨 AI Alert Center",
     "⏰ Telegram Scheduler",
+    "🎯 Portfolio Trigger",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -11420,3 +11421,140 @@ if nav_menu == "⏰ Telegram Scheduler":
         st.dataframe(pd.DataFrame(_sch_logs[:50]), hide_index=True, use_container_width=True)
     else:
         st.info("아직 발송 이력이 없습니다. '📤 즉시 발송'으로 테스트해 보세요.")
+
+
+PORTFOLIO_TRIG_CFG_PATH = os.path.expanduser("~/.optionhub_portfolio_triggers.json")
+
+def evaluate_portfolio_triggers(tks_list, oi_hist_d, raw_flows_l, big_flows_l, auto_tg=True, tg_tok="", tg_cid=""):
+    now_kst = pd.Timestamp.now(tz="Asia/Seoul")
+    today_s = now_kst.strftime("%Y-%m-%d")
+    time_s = now_kst.strftime("%Y-%m-%d %H:%M:%S")
+    hour_key = now_kst.strftime("%Y%m%d%H")
+
+    hist = load_json_file(AI_ALERTS_PATH, [])
+    if not isinstance(hist, list):
+        hist = []
+    seen_ids = {a.get("id") for a in hist if isinstance(a, dict)}
+
+    sm_map = {r["tk"]: r for r in compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)}
+    rows = []
+    new_trigs = []
+    for tk in tks_list:
+        tk = str(tk or "").strip().upper()
+        if not tk:
+            continue
+        c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+        r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+        di_res = compute_dealer_intent(tk, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=c_res.get("spot", 0))
+        sm_r = sm_map.get(tk, {})
+
+        snaps = oi_hist_d.get(tk, []) if isinstance(oi_hist_d, dict) else []
+        last_sn = snaps[-1] if snaps else {}
+        prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+        c_prev = int(prev_sn.get("Call_OI", 0) or 0) if prev_sn else 0
+        c_now = int(last_sn.get("Call_OI", 0) or 0) if last_sn else 0
+        call_oi_chg = round((c_now - c_prev) / c_prev * 100.0, 1) if c_prev > 0 else 0.0
+
+        spot_v = float(di_res.get("spot", 0) or c_res.get("spot", 0) or 0)
+        zg_v = float(di_res.get("zg", 0) or 0)
+        cw_v = float(di_res.get("cw", 0) or 0)
+
+        trig_labels = []
+        def _push_pt(sev, typ, title, detail):
+            trig_labels.append(typ)
+            aid = f"{hour_key}|PT|{typ}|{tk}"
+            if aid in seen_ids:
+                return
+            seen_ids.add(aid)
+            new_trigs.append({
+                "id": aid, "date": today_s, "time": time_s,
+                "severity": sev, "type": f"PORTFOLIO:{typ}", "ticker": tk,
+                "title": title, "detail": detail,
+                "summary": f"Conviction {c_res['score']} | Trend {r_res['score']}/10 | {di_res['intent']} | {c_res['verdict']}",
+            })
+
+        # 1. BUY TRIGGER
+        if c_res["score"] >= 85 and r_res["score"] >= 8 and "상방" in di_res["intent"]:
+            _push_pt("🔴 Critical", "BUY TRIGGER", f"🚀 BUY TRIGGER · {tk}", f"Conviction {c_res['score']} | Trend {r_res['score']}/10 | 목표 {di_res['path']}")
+        # 2. SELL TRIGGER
+        if c_res["score"] < 50 and r_res["score"] <= 3 and "하방" in di_res["intent"]:
+            _push_pt("🔴 Critical", "SELL TRIGGER", f"🔻 SELL TRIGGER · {tk}", f"리스크 증가 (Conviction {c_res['score']} · Trend {r_res['score']}/10)")
+        # 3. OI TRIGGER
+        if call_oi_chg > 30.0:
+            _push_pt("🟠 High", "OI SURGE", f"📈 OI SURGE · {tk} (+{call_oi_chg:.1f}%)", f"Call OI 급증 +{call_oi_chg:.1f}%")
+        # 4. GAMMA TRIGGER
+        if spot_v > 0 and zg_v > 0 and zg_v < spot_v <= zg_v * 1.03:
+            _push_pt("🟠 High", "GAMMA FLIP", f"⚡ GAMMA FLIP · {tk}", f"Positive Gamma 진입 (${spot_v:g} > Flip ${zg_v:g})")
+        # 5. SMART MONEY TRIGGER
+        if sm_r.get("prem_m", 0) >= 10.0 and sm_r.get("ask_cnt", 0) >= 1 and sm_r.get("sweep_cnt", 0) >= 1:
+            _push_pt("🔴 Critical", "SMART MONEY", f"💰 SMART MONEY · {tk}", f"기관 매집 감지 (Prem ${sm_r['prem_m']:.1f}M · Sweep {sm_r['sweep_cnt']}건)")
+
+        rows.append({
+            "종목": tk,
+            "현재가": f"${spot_v:,.2f}" if spot_v > 0 else "-",
+            "Conviction": c_res["score"],
+            "Trend": f"{r_res['score']}/10",
+            "Dealer Intent": di_res["intent"],
+            "Smart Money": sm_r.get("score", 0),
+            "상태": c_res["verdict"],
+            "Call Wall": f"${cw_v:g}" if cw_v > 0 else "-",
+            "Flip Gamma": f"${zg_v:g}" if zg_v > 0 else "-",
+            "트리거": ", ".join(trig_labels) if trig_labels else "-",
+        })
+
+    if new_trigs:
+        hist = (new_trigs + hist)[:200]
+        save_json_file(AI_ALERTS_PATH, hist)
+        if auto_tg and tg_tok and tg_cid:
+            _pt_msg = "🎯 *[OptionHub Portfolio Trigger]*\n\n" + "\n".join(
+                f"{a['severity']} *{a['title']}*\n   {a['detail']}\n   ↳ {a['summary']}"
+                for a in new_trigs[:8]
+            )
+            send_telegram_msg(tg_tok, tg_cid, _pt_msg)
+
+    long_cnt = sum(1 for r in rows if "LONG" in r["상태"])
+    short_cnt = sum(1 for r in rows if "SHORT" in r["상태"])
+    avg_c = round(sum(r["Conviction"] for r in rows) / len(rows), 1) if rows else 0.0
+    if avg_c >= 65 or long_cnt > short_cnt:
+        port_state = "🟢 Risk-On"
+    elif avg_c < 45 or short_cnt > long_cnt:
+        port_state = "🔴 Risk-Off"
+    else:
+        port_state = "🟡 Neutral"
+    return rows, port_state, avg_c, long_cnt, short_cnt, new_trigs
+
+
+if nav_menu == "🎯 Portfolio Trigger":
+    st.title("🎯 Portfolio Trigger Engine (보유/관심종목 5대 실시간 트리거)")
+    st.caption("등록 종목의 Conviction · Trend Reversal · Dealer Intent · Smart Money · GEX · OI 변화를 감시해 BUY/SELL/OI/GAMMA/SMART MONEY 트리거를 발송합니다.")
+
+    _pt_cfg = load_json_file(PORTFOLIO_TRIG_CFG_PATH, {"tickers": ["NVDA", "TSLA", "META", "SOXL", "SPY"], "auto_tg": True})
+    _pt_c1, _pt_c2, _pt_c3 = st.columns([2.4, 0.8, 0.8])
+    _pt_inp = _pt_c1.text_input("관심/보유종목 등록 (쉼표 구분)", value=", ".join(_pt_cfg.get("tickers", ["NVDA", "TSLA", "META", "SOXL", "SPY"])), key="pt_tks_in")
+    _pt_auto_tg = _pt_c2.checkbox("텔레그램 자동 전송", value=bool(_pt_cfg.get("auto_tg", True)), key="pt_auto_tg")
+    if _pt_c3.button("💾 종목 저장", use_container_width=True, key="btn_pt_save"):
+        _new_list = [x.strip().upper() for x in _pt_inp.split(",") if x.strip()]
+        save_json_file(PORTFOLIO_TRIG_CFG_PATH, {"tickers": _new_list, "auto_tg": _pt_auto_tg})
+        st.success(f"✅ {len(_new_list)}개 종목 저장 완료!")
+
+    _tks_use = [x.strip().upper() for x in _pt_inp.split(",") if x.strip()] or ["NVDA", "TSLA", "META", "SOXL", "SPY"]
+    _pt_rows, _port_st, _avg_c, _l_cnt, _s_cnt, _new_pts = evaluate_portfolio_triggers(
+        _tks_use, load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []),
+        auto_tg=_pt_auto_tg, tg_tok=tg_token, tg_cid=tg_chat_id,
+    )
+
+    _pm1, _pm2, _pm3, _pm4 = st.columns(4)
+    _pm1.metric("포트폴리오 전체 상태", _port_st)
+    _pm2.metric("평균 Conviction", f"{_avg_c}/100")
+    _pm3.metric("LONG / SHORT 비중", f"🟢 {_l_cnt} / 🔴 {_s_cnt}")
+    _pm4.metric("신규 트리거 감지", f"{len(_new_pts)}건")
+
+    if _pt_rows:
+        st.dataframe(pd.DataFrame(_pt_rows), hide_index=True, use_container_width=True)
+        if st.button("📩 포트폴리오 현황 & 트리거 텔레그램 전송", type="primary", key="btn_pt_send_tg"):
+            _pt_summary = f"🎯 *[Portfolio Dashboard · {_port_st}]*\n평균 Conviction {_avg_c}/100\n\n" + "\n".join(
+                f"• *{r['종목']}* {r['Conviction']} {r['상태']} | Trend {r['Trend']} | {r['Dealer Intent']}"
+                for r in _pt_rows
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _pt_summary)[0]:
+                st.toast("✅ 포트폴리오 현황 텔레그램 전송 완료!")
