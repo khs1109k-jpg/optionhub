@@ -1384,6 +1384,7 @@ MENU_ITEMS = [
     "🏆 AI Watchlist",
     "📊 Backtest Center",
     "🚨 AI Alert Center",
+    "⏰ Telegram Scheduler",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -11318,3 +11319,104 @@ if nav_menu == "🚨 AI Alert Center":
                     st.toast("✅ 텔레그램 재전송 완료!")
     else:
         st.info("아직 조건을 충족한 알림이 없습니다. 상단 '지금 즉시 6대 알림 스캔'을 누르거나 장중 데이터가 들어오면 자동 기록됩니다.")
+
+
+TG_SCHED_CFG_PATH = os.path.expanduser("~/.optionhub_tg_scheduler_cfg.json")
+TG_SCHED_LOG_PATH = os.path.expanduser("~/.optionhub_tg_scheduler_logs.json")
+
+def build_compact_tg_briefing(oi_hist_d, raw_flows_l, big_flows_l):
+    spx_snaps = oi_hist_d.get("SPX") or oi_hist_d.get("SPY") or []
+    spx_last = spx_snaps[-1] if spx_snaps else {}
+    spx_px = float(spx_last.get("Spot", 0) or 0)
+    net_gex = float(spx_last.get("Net_GEX_M", 0) or 0)
+    net_dex = float(spx_last.get("Net_DEX_M", 0) or 0)
+    cw_v = float(spx_last.get("CallWall", 0) or 0)
+    pw_v = float(spx_last.get("PutWall", 0) or 0)
+    zg_v = float(spx_last.get("ZeroGamma", 0) or 0)
+    gross_gex = 0.0
+    if spx_last.get("상세"):
+        try:
+            gross_gex = round(sum(abs(float(x.get("GEX($M)", 0) or 0)) for x in spx_last["상세"]), 1)
+        except Exception:
+            pass
+    _, vix_now, _ = _fetch_vix_reversal_state()
+
+    conv_top5 = compute_top_conviction_ranking(oi_hist_d, raw_flows_l, big_flows_l)[:5]
+    rev_top5 = compute_top_reversal_ranking(oi_hist_d, raw_flows_l, big_flows_l)[:5]
+    sm_top5 = compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)[:5]
+
+    g_ic = "🟢" if net_gex > 0 else ("🔴" if net_gex < 0 else "⚪")
+    d_ic = "🟢" if net_dex > 0 else ("🔴" if net_dex < 0 else "⚪")
+    oi_ic = "🟢" if int(spx_last.get("Call_OI", 0) or 0) >= int(spx_last.get("Put_OI", 0) or 0) else "🔴"
+    outlook = "🟢 LONG" if (net_gex >= 0 and (vix_now == 0 or vix_now < 22)) else ("🔴 SHORT" if net_gex < -100 else "🟡 HOLD")
+    tgt_s = f"{cw_v:g} → {round(cw_v * 1.015, 0):g}" if cw_v > 0 else "상방 저항 확인"
+
+    lines = [
+        f"🌞 SPX {spx_px:g} | VIX {vix_now:.1f}" if spx_px > 0 else f"🌞 SPX 브리핑 | VIX {vix_now:.1f}",
+        f"GEX{g_ic} {net_gex:+.1f}M (Gross {gross_gex:.1f}M)",
+        f"DEX{d_ic} {net_dex:+.1f}M | OI{oi_ic}",
+        f"Flip {zg_v:g} | CW {cw_v:g} | PW {pw_v:g}",
+        "",
+        "Top Conviction",
+    ] + [f"{i} {r['tk']} {r['score']}" for i, r in enumerate(conv_top5, 1)] + [
+        "",
+        "Trend Reversal",
+    ] + [f"{i} {r['tk']} {r['score']}/10" for i, r in enumerate(rev_top5, 1)] + [
+        "",
+        "Smart Money",
+    ] + [f"{i} {r['tk']} {r['score']}" for i, r in enumerate(sm_top5, 1)] + [
+        "",
+        f"AI\n{outlook}",
+        f"목표\n{tgt_s}",
+    ]
+    return "\n".join(lines)
+
+
+if nav_menu == "⏰ Telegram Scheduler":
+    st.title("⏰ Telegram Auto Scheduler (자동 브리핑 & 채널 발행)")
+    st.caption("KST 정시 자동 브리핑 생성 · DM 및 텔레그램 채널 자동 발행 · 발송/실패 이력 관리")
+
+    _sc_cfg = load_json_file(TG_SCHED_CFG_PATH, {"enabled": True, "times": ["06:00", "09:00", "12:00", "18:00", "22:00"], "channel_id": "", "send_dm": True})
+    _default_slots = ["06:00", "09:00", "12:00", "18:00", "22:00"]
+    _cur_times = _sc_cfg.get("times", _default_slots)
+
+    with st.container(border=True):
+        _s1, _s2, _s3 = st.columns([1.0, 1.5, 1.5])
+        _en_sched = _s1.checkbox("자동 예약 활성화", value=bool(_sc_cfg.get("enabled", True)), key="tg_sch_en")
+        _send_dm = _s1.checkbox("개인 DM 발송", value=bool(_sc_cfg.get("send_dm", True)), key="tg_sch_dm")
+        _sel_slots = _s2.multiselect("발송 시간 (KST)", ["06:00", "07:00", "09:00", "12:00", "15:00", "18:00", "22:00", "23:30"], default=[t for t in _cur_times if t in ["06:00", "07:00", "09:00", "12:00", "15:00", "18:00", "22:00", "23:30"]] or _default_slots, key="tg_sch_slots")
+        _extra_tm = _s2.text_input("추가 예약 시간 (HH:MM, 쉼표 구분)", value=",".join(t for t in _cur_times if t not in ["06:00", "07:00", "09:00", "12:00", "15:00", "18:00", "22:00", "23:30"]), placeholder="예: 21:30", key="tg_sch_ext")
+        _chan_id = _s3.text_input("텔레그램 채널 ID (자동 발행용)", value=str(_sc_cfg.get("channel_id", "")), placeholder="@my_channel 또는 -1001234567890", key="tg_sch_chan")
+
+        _merged_times = sorted({t.strip() for t in (_sel_slots + [x.strip() for x in _extra_tm.split(",") if ":" in x]) if t.strip()})
+        _b1, _b2 = st.columns(2)
+        if _b1.button("⏰ 예약 발송 저장", use_container_width=True, key="btn_tg_sch_save"):
+            save_json_file(TG_SCHED_CFG_PATH, {"enabled": _en_sched, "times": _merged_times, "channel_id": _chan_id.strip(), "send_dm": _send_dm})
+            st.success(f"✅ 예약 저장 완료! ({', '.join(_merged_times)} KST)")
+
+        _brief_preview = build_compact_tg_briefing(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+        if _b2.button("📤 즉시 발송", type="primary", use_container_width=True, key="btn_tg_sch_now"):
+            _logs = load_json_file(TG_SCHED_LOG_PATH, [])
+            if not isinstance(_logs, list): _logs = []
+            _targets = []
+            if _send_dm and tg_chat_id: _targets.append(("DM", tg_chat_id))
+            if _chan_id.strip(): _targets.append(("Channel", _chan_id.strip()))
+            _now_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d %H:%M:%S")
+            for _tname, _tcid in _targets:
+                _ok, _err = send_telegram_msg(tg_token, _tcid, _brief_preview)
+                _logs.insert(0, {"시각": _now_str, "대상": f"{_tname} ({_tcid})", "상태": "✅ 성공" if _ok else "❌ 실패", "오류": "" if _ok else str(_err)[:120]})
+            save_json_file(TG_SCHED_LOG_PATH, _logs[:100])
+            if _targets:
+                st.toast("✅ 즉시 발송 처리 완료!")
+            else:
+                st.warning("DM 또는 채널 ID를 먼저 설정해 주세요.")
+
+    st.subheader("📱 모바일 최적화 브리핑 미리보기")
+    st.code(_brief_preview, language="text")
+
+    st.subheader("📜 발송 이력 및 실패 로그")
+    _sch_logs = load_json_file(TG_SCHED_LOG_PATH, [])
+    if _sch_logs:
+        st.dataframe(pd.DataFrame(_sch_logs[:50]), hide_index=True, use_container_width=True)
+    else:
+        st.info("아직 발송 이력이 없습니다. '📤 즉시 발송'으로 테스트해 보세요.")

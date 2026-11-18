@@ -622,6 +622,9 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "🚦 추세전환 7대 신호 체크 중...")
         send_msg(token, chat_id, build_trend_reversal_7())
 
+    elif low in ("/스케줄발송", "/자동브리핑", "/sched") or cmd == "cmd:sched":
+        send_msg(token, chat_id, build_compact_tg_briefing_bot())
+
     elif low in ("/watchlist", "/와치리스트", "/오늘종목", "/wl") or cmd == "cmd:watchlist":
         send_msg(token, chat_id, "🏆 TODAY AI WATCHLIST TOP 10 계산 중...")
         send_msg(token, chat_id, build_ai_watchlist_tg(limit=10))
@@ -2607,6 +2610,75 @@ def auto_scan_moomoo_big_ticks(token, chat_id):
     except Exception:
         pass
 
+def build_compact_tg_briefing_bot():
+    oi_p = os.path.expanduser("~/.optionhub_oi_history.json")
+    oi_d = {}
+    try:
+        if os.path.exists(oi_p):
+            oi_d = json.load(open(oi_p, encoding="utf-8"))
+    except Exception:
+        pass
+    spx_snaps = oi_d.get("SPX") or oi_d.get("SPY") or []
+    spx_last = spx_snaps[-1] if spx_snaps else {}
+    spx_px = float(spx_last.get("Spot", 0) or 0)
+    net_gex = float(spx_last.get("Net_GEX_M", 0) or 0)
+    net_dex = float(spx_last.get("Net_DEX_M", 0) or 0)
+    cw_v = float(spx_last.get("CallWall", 0) or 0)
+    pw_v = float(spx_last.get("PutWall", 0) or 0)
+    zg_v = float(spx_last.get("ZeroGamma", 0) or 0)
+    vix_p, _ = _yf_last_chg("^VIX")
+    vix_v = float(vix_p or 0)
+    g_ic = "🟢" if net_gex > 0 else ("🔴" if net_gex < 0 else "⚪")
+    d_ic = "🟢" if net_dex > 0 else ("🔴" if net_dex < 0 else "⚪")
+    outlook = "🟢 LONG" if (net_gex >= 0 and (vix_v == 0 or vix_v < 22)) else ("🔴 SHORT" if net_gex < -100 else "🟡 HOLD")
+    wl_txt = build_ai_watchlist_tg(limit=5)
+    return "\n".join([
+        f"🌞 SPX {spx_px:g} | VIX {vix_v:.1f}" if spx_px > 0 else f"🌞 SPX 브리핑 | VIX {vix_v:.1f}",
+        f"GEX{g_ic} {net_gex:+.1f}M | DEX{d_ic} {net_dex:+.1f}M",
+        f"Flip {zg_v:g} | CW {cw_v:g} | PW {pw_v:g}",
+        "",
+        wl_txt,
+        "",
+        f"AI\n{outlook}",
+    ])
+
+def auto_tg_scheduler_loop(token, default_cid):
+    cfg_p = os.path.expanduser("~/.optionhub_tg_scheduler_cfg.json")
+    log_p = os.path.expanduser("~/.optionhub_tg_scheduler_logs.json")
+    sent_keys = set()
+    while True:
+        try:
+            cfg = {"enabled": True, "times": ["06:00", "09:00", "12:00", "18:00", "22:00"], "channel_id": "", "send_dm": True}
+            if os.path.exists(cfg_p):
+                cfg.update(json.load(open(cfg_p, encoding="utf-8")))
+            if cfg.get("enabled"):
+                now_kst = datetime.utcnow() + timedelta(hours=9)
+                hhmm = now_kst.strftime("%H:%M")
+                skey = now_kst.strftime("%Y-%m-%d %H:%M")
+                if hhmm in (cfg.get("times") or []) and skey not in sent_keys:
+                    sent_keys.add(skey)
+                    msg_txt = build_compact_tg_briefing_bot()
+                    logs = []
+                    if os.path.exists(log_p):
+                        try: logs = json.load(open(log_p, encoding="utf-8"))
+                        except Exception: logs = []
+                    if not isinstance(logs, list): logs = []
+                    targets = []
+                    if cfg.get("send_dm", True) and default_cid:
+                        targets.append(("DM", default_cid))
+                    if str(cfg.get("channel_id", "")).strip():
+                        targets.append(("Channel", str(cfg.get("channel_id", "")).strip()))
+                    for tname, tcid in targets:
+                        try:
+                            send_msg(token, tcid, msg_txt)
+                            logs.insert(0, {"시각": now_kst.strftime("%Y-%m-%d %H:%M:%S"), "대상": f"{tname} ({tcid})", "상태": "✅ 자동성공", "오류": ""})
+                        except Exception as ex:
+                            logs.insert(0, {"시각": now_kst.strftime("%Y-%m-%d %H:%M:%S"), "대상": f"{tname} ({tcid})", "상태": "❌ 실패", "오류": str(ex)[:120]})
+                    json.dump(logs[:100], open(log_p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        time.sleep(20)
+
 def main():
     token, my_chat_id = load_cfg()
     set_bot_commands(token)
@@ -2628,6 +2700,9 @@ def main():
                 _th_bg.Thread(target=auto_scan_moomoo_cp_dominance, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_strong_cp, args=(token, my_chat_id), daemon=True).start()
                 _th_bg.Thread(target=auto_scan_moomoo_big_ticks, args=(token, my_chat_id), daemon=True).start()
+                if not getattr(main, "_sched_started", False):
+                    main._sched_started = True
+                    _th_bg.Thread(target=auto_tg_scheduler_loop, args=(token, my_chat_id), daemon=True).start()
                 last_auto_collect = now
             if now - last_sheet_check >= 300:
                 check_sheet_review(token, my_chat_id)
