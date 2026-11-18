@@ -3883,10 +3883,36 @@ if nav_menu == "⚡ 무무 실시간 차트":
           }});
           syncingX = false;
         }}
-        if (!hudEl || !param || !param.time) return;
+        let tipEl = document.getElementById("tv_cursor_tip");
+        if (!tipEl && elMain) {{
+          tipEl = document.createElement("div");
+          tipEl.id = "tv_cursor_tip";
+          tipEl.style.cssText = "position:absolute;pointer-events:none;display:none;z-index:40;background:rgba(15,23,42,0.92);border:1px solid #334155;border-radius:6px;padding:4px 8px;font:bold 12px monospace;color:#f8fafc;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.45);";
+          elMain.appendChild(tipEl);
+        }}
+        if (!param || !param.time || !param.point || param.point.x < 0 || param.point.y < 0) {{
+          if (tipEl) tipEl.style.display = "none";
+          return;
+        }}
         const bar = param.seriesData.get(cs);
-        if (!bar) return;
+        if (!bar) {{
+          if (tipEl) tipEl.style.display = "none";
+          return;
+        }}
         updateHud(bar, false);
+        if (tipEl) {{
+          const refP = Number(d.prev_close || d.open_px || (d.candles && d.candles.length ? d.candles[0].open : 0) || 0);
+          const pctV = refP > 0 ? ((Number(bar.close) - refP) / refP * 100.0) : 0.0;
+          const pctStr = refP > 0 ? `(${{pctV >= 0 ? "+" : ""}}${{pctV.toFixed(2)}}%)` : "";
+          const pctCol = pctV >= 0 ? "#22c55e" : "#ef4444";
+          tipEl.innerHTML = `$${{bar.close}} <span style="color:${{pctCol}};">${{pctStr}}</span>`;
+          const mw = elMain.clientWidth || 800;
+          const tx = (param.point.x + 150 > mw) ? Math.max(8, param.point.x - 145) : (param.point.x + 16);
+          const ty = Math.max(8, param.point.y - 24);
+          tipEl.style.left = tx + "px";
+          tipEl.style.top = ty + "px";
+          tipEl.style.display = "block";
+        }}
       }});
       subLinks.forEach(lk => lk.c.subscribeCrosshairMove(param => {{
         if (syncingX) return;
