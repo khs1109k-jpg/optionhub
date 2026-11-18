@@ -622,6 +622,10 @@ def handle_command(token, chat_id, text):
         send_msg(token, chat_id, "🚦 추세전환 7대 신호 체크 중...")
         send_msg(token, chat_id, build_trend_reversal_7())
 
+    elif low in ("/watchlist", "/와치리스트", "/오늘종목", "/wl") or cmd == "cmd:watchlist":
+        send_msg(token, chat_id, "🏆 TODAY AI WATCHLIST TOP 10 계산 중...")
+        send_msg(token, chat_id, build_ai_watchlist_tg(limit=10))
+
     elif low in ("/대량틱", "/틱", "/ticks") or cmd == "cmd:ticks":
         send_msg(token, chat_id, "🐋 무무 $100K+ 대량 틱·호가벽 불균형 스캔 중...")
         send_msg(token, chat_id, build_moomoo_big_ticks_alert(manual=True))
@@ -1676,6 +1680,70 @@ def build_trend_reversal_7():
     out.append(f"→ {verdict} ({yes_n}/7)")
     return "\n".join(out)
 
+def build_ai_watchlist_tg(limit=10):
+    oi_p = os.path.expanduser("~/.optionhub_oi_history.json")
+    bf_p = os.path.expanduser("~/.optionhub_big_flows.json")
+    oi_d = {}
+    bf_l = []
+    try:
+        if os.path.exists(oi_p):
+            oi_d = json.load(open(oi_p, encoding="utf-8"))
+    except Exception:
+        pass
+    try:
+        if os.path.exists(bf_p):
+            bf_l = json.load(open(bf_p, encoding="utf-8"))
+    except Exception:
+        pass
+    base = ["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "PLTR", "AMZN", "AAPL", "AVGO", "SPY", "QQQ", "SMH"]
+    tks = list(dict.fromkeys(base + list(oi_d.keys())))[:20]
+    rows = []
+    for tk in tks:
+        snaps = oi_d.get(tk, []) if isinstance(oi_d, dict) else []
+        last_sn = snaps[-1] if snaps else {}
+        prev_sn = snaps[-2] if len(snaps) >= 2 else {}
+        spot_v = float(last_sn.get("Spot", 0) or 0)
+        net_gex = float(last_sn.get("Net_GEX_M", 0) or 0)
+        net_dex = float(last_sn.get("Net_DEX_M", 0) or 0)
+        cw_v = float(last_sn.get("CallWall", 0) or 0)
+        pw_v = float(last_sn.get("PutWall", 0) or 0)
+        zg_v = float(last_sn.get("ZeroGamma", 0) or 0)
+        call_oi = int(last_sn.get("Call_OI", 0) or 0)
+        put_oi = int(last_sn.get("Put_OI", 0) or 0)
+        prev_tot = (int(prev_sn.get("Call_OI", 0) or 0) + int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
+        oi_chg = ((call_oi + put_oi - prev_tot) / prev_tot * 100.0) if prev_tot > 0 else 0.0
+
+        prem_m, bull_c, bear_c = 0.0, 0, 0
+        for bf in bf_l:
+            if str(bf.get("tk", "")).upper() != tk:
+                continue
+            for rec in bf.get("records", []):
+                prem_m += float(rec.get("prem_m", 0) or 0)
+                if rec.get("emoji") == "🟢":
+                    bull_c += 1
+                elif rec.get("emoji") == "🔴":
+                    bear_c += 1
+
+        sc = 0
+        sc += 25 if net_gex > 300 else (20 if net_gex > 50 else (15 if net_gex > 0 else 0))
+        sc += 20 if net_dex > 500 else (15 if net_dex > 100 else (10 if net_dex > 0 else 0))
+        sc += 15 if call_oi > put_oi * 1.2 else (10 if call_oi > put_oi else 3)
+        sc += 10 if oi_chg > 5 else (6 if oi_chg > 0 else 0)
+        sc += 15 if prem_m >= 20 else (12 if prem_m >= 5 else (6 if prem_m >= 1 else 0))
+        sc += 15 if (bull_c > bear_c or (net_gex > 0 and spot_v >= zg_v > 0)) else (5 if bull_c == bear_c else 0)
+        sc = min(100, sc)
+        verd = "🟢 LONG" if sc >= 70 else ("🟡 HOLD" if sc >= 45 else "🔴 SHORT")
+        tgt = cw_v if (verd != "🔴 SHORT" and cw_v > spot_v > 0) else (pw_v if (verd == "🔴 SHORT" and 0 < pw_v < spot_v) else (round(spot_v * (0.95 if verd == "🔴 SHORT" else 1.05), 2) if spot_v > 0 else 0))
+        stp = pw_v if (verd != "🔴 SHORT" and 0 < pw_v < spot_v) else (cw_v if (verd == "🔴 SHORT" and cw_v > spot_v > 0) else (round(spot_v * (1.03 if verd == "🔴 SHORT" else 0.96), 2) if spot_v > 0 else 0))
+        rows.append({"tk": tk, "sc": sc, "verd": verd, "spot": spot_v, "tgt": tgt, "stp": stp, "cw": cw_v, "pw": pw_v, "zg": zg_v, "prem": prem_m})
+    rows.sort(key=lambda x: (x["sc"], x["prem"]), reverse=True)
+    out_l = ["🏆 TODAY WATCHLIST (AI 자동 선정)"]
+    for i, r in enumerate(rows[:limit], 1):
+        lv_s = f"목표 ${r['tgt']:g} / 손절 ${r['stp']:g}" if r["tgt"] > 0 else "옵션 스냅샷 대기"
+        wall_s = f"CW ${r['cw']:g} · PW ${r['pw']:g} · Flip ${r['zg']:g}" if (r["cw"] > 0 or r["pw"] > 0) else ""
+        out_l.append(f"{i}. {r['tk']} | Score {r['sc']} | {r['verd']} | {lv_s}" + (f" ({wall_s})" if wall_s else ""))
+    return "\n".join(out_l)
+
 def build_morning_briefing():
     now_dt = datetime.utcnow() + timedelta(hours=9)
     wdays = ["월", "화", "수", "목", "금", "토", "일"]
@@ -1729,6 +1797,8 @@ def build_morning_briefing():
         "최종 종목 판정은 /브리핑, 레벨은 /레벨알림, 7대 신호는 /추세전환 으로 볼 수 있어.",
         "",
         build_trend_reversal_7(),
+        "",
+        build_ai_watchlist_tg(limit=5),
         "",
         "━━━━━━━━━━",
         f"🌅 최종분석 브리핑 ({short_dt})",
