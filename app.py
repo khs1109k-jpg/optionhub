@@ -9919,15 +9919,29 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
 
                 _ok_rk, _drk, _erk = _perspicium_get("/quant/risk", (("ticker", _p_tk), ("benchmark", _s_bench), ("period", "3y"), ("window", "60")), _pk_use)
                 if _ok_rk and (_drk or {}).get("summary"):
+                    _rk = _drk["summary"]
                     st.subheader(f"🛡️ {_p_tk} vs {_s_bench} 리스크 요약")
-                    st.json(_drk["summary"])
+                    _rk_c1, _rk_c2, _rk_c3, _rk_c4 = st.columns(4)
+                    _rk_c1.metric("베타 (민감도)", f"{float(_rk.get('beta', 0) or 0):.2f}x", f"상승 {float(_rk.get('upside_beta', 0) or 0):.2f} / 하락 {float(_rk.get('downside_beta', 0) or 0):.2f}")
+                    _rk_c2.metric("연율 변동성", f"{float(_rk.get('latest_vol_pct', 0) or 0):.1f}%", f"상관계수 {float(_rk.get('latest_corr', 0) or 0):.2f}")
+                    _rk_c3.metric("단기 / 전체 샤프", f"{float(_rk.get('latest_sharpe', 0) or 0):.2f}", f"전체 {float(_rk.get('period_sharpe', 0) or 0):.2f}")
+                    _rk_c4.metric("최대 낙폭 (MDD)", f"{float(_rk.get('max_drawdown_pct', 0) or 0):.1f}%")
                 elif not _ok_rk:
                     st.warning(f"리스크 조회 실패: {_erk}")
 
                 _ok_sec, _dsec, _esec = _perspicium_get("/quant/sector-insights", (("period", "1M"),), _pk_use)
                 if _ok_sec and (_dsec or {}).get("summary"):
-                    st.subheader("🧭 섹터 자금 순환 요약 (1M)")
-                    st.dataframe(pd.DataFrame(_dsec["summary"]) if isinstance(_dsec["summary"], list) else pd.DataFrame([_dsec["summary"]]), use_container_width=True, hide_index=True)
+                    _sc_d = _dsec["summary"]
+                    st.subheader("🧭 섹터 자금 순환 요약 (최근 1개월)")
+                    if isinstance(_sc_d, dict):
+                        _top3 = ", ".join(_sc_d.get("top3_by_total_return") or [])
+                        _bot3 = ", ".join(_sc_d.get("bottom3_by_total_return") or [])
+                        _sc_a, _sc_b, _sc_c = st.columns([1.8, 1.8, 1.0])
+                        _sc_a.success(f"🟢 **강세 상위 3섹터**: {_top3 or '-'}")
+                        _sc_b.error(f"🔴 **약세 하위 3섹터**: {_bot3 or '-'}")
+                        _sc_c.metric("등락 확산(AD비율)", f"{float(_sc_d.get('ad_ratio_mo_mean_last', 0) or 0):.2f}", f"AD선 {_sc_d.get('ad_line_last', '-')}")
+                    else:
+                        st.dataframe(pd.DataFrame(_sc_d), use_container_width=True, hide_index=True)
             else:
                 st.info("우측 `📊 퀀트 통계 조회` 버튼을 눌러주세요.")
 
