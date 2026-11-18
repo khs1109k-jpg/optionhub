@@ -1302,7 +1302,7 @@ def auto_scan_option_whales(token, chat_id):
     qctx = None
     try:
         from moomoo import OpenQuoteContext, RET_OK
-        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
         now_d = datetime.now()
         end_d = (now_d + timedelta(days=10)).strftime("%Y-%m-%d")
         start_d = now_d.strftime("%Y-%m-%d")
@@ -2103,7 +2103,7 @@ def build_moomoo_cp_dominance():
     import socket as _sock_cp
     tks = ["SPY", "QQQ", "IWM", "NVDA", "TSLA", "SOXL", "SOXS", "SMH", "MU", "AMD", "PLTR", "AAPL", "META", "AMZN", "AVGO", "ORCL"]
     try:
-        with _sock_cp.create_connection(("127.0.0.1", 11111), timeout=0.4):
+        with _sock_cp.create_connection(("10.0.0.42", 11111), timeout=0.4):
             pass
     except Exception:
         return "📡 무무 콜/풋 강세 스캔\n\n⚠️ 무무 OpenD(11111 포트)가 꺼져 있거나 응답이 없습니다."
@@ -2112,7 +2112,7 @@ def build_moomoo_cp_dominance():
     stats = {}
     try:
         from moomoo import OpenQuoteContext, RET_OK
-        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
         now_d = datetime.now()
         start_d = now_d.strftime("%Y-%m-%d")
         end_d = (now_d + timedelta(days=10)).strftime("%Y-%m-%d")
@@ -2458,7 +2458,7 @@ def build_moomoo_big_ticks_alert(manual=False):
     import socket as _sk_bt
     tks = ["SOXL", "NVDA", "TSLA", "SPY", "QQQ", "MU", "AMD"]
     try:
-        with _sk_bt.create_connection(("127.0.0.1", 11111), timeout=0.3):
+        with _sk_bt.create_connection(("10.0.0.42", 11111), timeout=0.3):
             pass
     except Exception:
         return "⚠️ 무무 OpenD(11111 포트)가 꺼져 있어 대량 틱 스캔을 건너뜁니다." if manual else ""
@@ -2467,7 +2467,7 @@ def build_moomoo_big_ticks_alert(manual=False):
     hits = []
     try:
         from moomoo import OpenQuoteContext, SubType, RET_OK
-        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
         syms = [f"US.{t}" for t in tks]
         qctx.subscribe(syms, [SubType.TICKER, SubType.ORDER_BOOK], subscribe_push=False)
         for tk in tks:

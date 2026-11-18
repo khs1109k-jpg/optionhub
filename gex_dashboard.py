@@ -121,11 +121,11 @@ def _fetch_cboe_chain_rows(tk: str, max_exps: int = 6):
 def _fetch_moomoo_chain_rows(tk: str, max_exps: int = 6):
     try:
         import socket as _sk_mg, concurrent.futures as _cf_mg
-        with _sk_mg.create_connection(("127.0.0.1", 11111), timeout=0.25):
+        with _sk_mg.create_connection(("10.0.0.42", 11111), timeout=0.25):
             pass
         def _mm_ch_w():
             from moomoo import OpenQuoteContext, RET_OK
-            qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+            qc = OpenQuoteContext(host="10.0.0.42", port=11111)
             try:
                 sym = f"US.{tk}"
                 spot_mm = 0.0
@@ -555,13 +555,13 @@ def _get_mm_live_for_gex(tk):
     parts = []
     try:
         import socket, concurrent.futures
-        with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+        with socket.create_connection(("10.0.0.42", 11111), timeout=0.2):
             pass
         def _gex_mm_w():
             out_p = []
             snap_px = 0.0
             from moomoo import OpenQuoteContext, SubType, RET_OK
-            qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+            qc = OpenQuoteContext(host="10.0.0.42", port=11111)
             try:
                 try:
                     r_sn, df_sn = qc.get_market_snapshot([sym])

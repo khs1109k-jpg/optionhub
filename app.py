@@ -1591,7 +1591,7 @@ def _start_live_quote_server():
         qctx = None
         try:
             from moomoo import OpenQuoteContext, SubType, RET_OK
-            qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
             qctx.subscribe([sym_s], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
             r_ob, df_ob = qctx.get_order_book(sym_s, num=10)
             if r_ob == RET_OK and isinstance(df_ob, dict):
@@ -1962,7 +1962,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
         import socket, concurrent.futures
         out_k = []
         try:
-            with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+            with socket.create_connection(("10.0.0.42", 11111), timeout=0.2):
                 pass
         except Exception:
             return out_k
@@ -1974,7 +1974,7 @@ if nav_menu == "⚡ 무무 실시간 차트":
             if _kl_pair is None:
                 return res_k
             _kl_t, _sub_t = _kl_pair
-            qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
             try:
                 qctx.subscribe([sym_s], [_sub_t], subscribe_push=False)
                 ret, df_k = qctx.get_cur_kline(sym_s, 240, _kl_t)
@@ -2624,11 +2624,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if show_cvd:
         try:
             import socket, concurrent.futures
-            with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+            with socket.create_connection(("10.0.0.42", 11111), timeout=0.2):
                 pass
             def _fetch_cvd_w():
                 from moomoo import OpenQuoteContext, SubType, RET_OK
-                qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+                qc = OpenQuoteContext(host="10.0.0.42", port=11111)
                 try:
                     qc.subscribe([sel_syn], [SubType.TICKER], subscribe_push=False)
                     return qc.get_rt_ticker(sel_syn, num=500)
@@ -2766,11 +2766,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if len(_stream_items) < 10:
         try:
             import socket, concurrent.futures
-            with socket.create_connection(("127.0.0.1", 11111), timeout=0.2):
+            with socket.create_connection(("10.0.0.42", 11111), timeout=0.2):
                 pass
             def _fetch_mm_opt_w():
                 from moomoo import OpenQuoteContext, RET_OK
-                qo = OpenQuoteContext(host="127.0.0.1", port=11111)
+                qo = OpenQuoteContext(host="10.0.0.42", port=11111)
                 try:
                     _now_d = pd.Timestamp.now(tz="America/New_York")
                     _rc, _dfc = qo.get_option_chain(code=f"US.{opt_tk}", start=_now_d.strftime("%Y-%m-%d"), end=(_now_d + pd.Timedelta(days=10)).strftime("%Y-%m-%d"))
@@ -3840,12 +3840,12 @@ if nav_menu == "⚡ 무무 실시간 차트":
     if (_need_bk or _need_fl) and clean_tk:
         try:
             import socket as _sk_bf, concurrent.futures as _cf_bf
-            with _sk_bf.create_connection(("127.0.0.1", 11111), timeout=0.2):
+            with _sk_bf.create_connection(("10.0.0.42", 11111), timeout=0.2):
                 pass
             def _fetch_mm_bk_fl_w():
                 _out_bk, _out_fl, _errs = {}, {}, []
                 from moomoo import OpenQuoteContext, SubType, RET_OK
-                _qc_b = OpenQuoteContext(host="127.0.0.1", port=11111)
+                _qc_b = OpenQuoteContext(host="10.0.0.42", port=11111)
                 try:
                     _sym_b = f"US.{clean_tk}"
                     if _need_bk:
@@ -4009,11 +4009,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
         _res_p = {"ok": False, "gex": [], "hiro": 0.0, "net_gex": 0.0, "cap_flow": [], "semi": [], "ticks": []}
         try:
             import socket as _sk_p, concurrent.futures as _cf_p
-            with _sk_p.create_connection(("127.0.0.1", 11111), timeout=0.25):
+            with _sk_p.create_connection(("10.0.0.42", 11111), timeout=0.25):
                 pass
             def _w_pro():
                 from moomoo import OpenQuoteContext, SubType, PeriodType, RET_OK
-                _qc = OpenQuoteContext(host="127.0.0.1", port=11111)
+                _qc = OpenQuoteContext(host="10.0.0.42", port=11111)
                 _out = {"ok": True, "gex": [], "hiro": 0.0, "net_gex": 0.0, "cap_flow": [], "semi": [], "ticks": []}
                 try:
                     _sym = f"US.{_tk_p}"
@@ -7125,10 +7125,10 @@ def get_moomoo_live_snapshot(tk):
     qctx = None
     try:
         import socket as _sk_snap
-        with _sk_snap.create_connection(("127.0.0.1", 11111), timeout=0.2):
+        with _sk_snap.create_connection(("10.0.0.42", 11111), timeout=0.2):
             pass
         from moomoo import OpenQuoteContext, SubType, RET_OK
-        qctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
         qctx.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
         r_ob, df_ob = qctx.get_order_book(sym, num=10)
         if r_ob == RET_OK and isinstance(df_ob, dict):
