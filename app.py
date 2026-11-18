@@ -487,7 +487,7 @@ def _conviction_grade_and_verdict(score):
         grade = "🔴 Bearish"
     else:
         grade = "☠️ Strong Bearish"
-    verdict = "🟢 LONG" if s >= 80 else ("🟡 HOLD" if s >= 60 else "🔴 SHORT")
+    verdict = "🟢 LONG" if s >= 70 else ("🟡 HOLD" if s >= 40 else "🔴 SHORT")
     return grade, verdict
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -538,11 +538,17 @@ def compute_conviction_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov
     # 2. DEX (20점)
     _dex_pts = 20 if net_dex > 1000 else (15 if net_dex > 500 else (10 if net_dex > 0 else 0))
 
-    # 3. OI: Call ΔOI - Put ΔOI (15점)
+    # 3. OI: Call ΔOI - Put ΔOI (15점, 2일 스냅샷 없을 때는 단일 스냅샷/시트 수급 보완)
     _call_doi = (int(last_sn.get("Call_OI", 0) or 0) - int(prev_sn.get("Call_OI", 0) or 0)) if prev_sn else 0
     _put_doi = (int(last_sn.get("Put_OI", 0) or 0) - int(prev_sn.get("Put_OI", 0) or 0)) if prev_sn else 0
     _net_doi = _call_doi - _put_doi
-    _oi_pts = 15 if _net_doi > 10000 else (12 if _net_doi > 5000 else (8 if _net_doi > 0 else 0))
+    if prev_sn:
+        _oi_pts = 15 if _net_doi > 10000 else (12 if _net_doi > 5000 else (8 if _net_doi > 0 else 0))
+    elif last_sn:
+        _oi_diff = int(last_sn.get("Call_OI", 0) or 0) - int(last_sn.get("Put_OI", 0) or 0)
+        _oi_pts = 12 if _oi_diff > 20000 else (8 if _oi_diff > 0 else 2)
+    else:
+        _oi_pts = None
 
     # 시트 + 대형체결 집계 (Premium, Volume/OI, Above Ask, Sweep, Dark Pool)
     _sh_prem_m = 0.0
@@ -617,6 +623,9 @@ def compute_conviction_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov
 
     # 8. Technical (5점): VWAP(+2), 20MA(+2), Zero Gamma(+1)
     _tech_pts = _fetch_tech_for_conviction(tk, spot_v, zg_v)
+
+    if _oi_pts is None:
+        _oi_pts = 8 if _bull_cnt > _bear_cnt else (4 if (_bull_cnt == _bear_cnt and (_bull_cnt + _bear_cnt) > 0) else 0)
 
     total = _gex_pts + _dex_pts + _oi_pts + _voi_pts + _prem_pts + _flow_pts + _dp_pts + _tech_pts
     grade, verdict = _conviction_grade_and_verdict(total)
