@@ -491,7 +491,7 @@ def fetch_gex_chain_data(ticker: str, max_exps: int = 6, spot_override: float = 
         "ticker": tk,
         "spot": spot,
         "data_source": _src_used if "rows" in locals() and rows else "Yahoo Finance",
-        "exps": sel_exps,
+        "exps": sorted(df["exp"].astype(str).unique().tolist()) if "exp" in df.columns else [],
         "by_k": by_k_sorted,
         "by_dte": by_dte,
         "top_oi": top_oi,
