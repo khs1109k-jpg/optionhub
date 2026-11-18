@@ -2189,12 +2189,29 @@ def build_moomoo_cp_dominance():
         now_d = datetime.now()
         start_d = now_d.strftime("%Y-%m-%d")
         end_d = (now_d + timedelta(days=10)).strftime("%Y-%m-%d")
+        spot_map = {}
+        try:
+            rs_u, dfs_u = qctx.get_market_snapshot([f"US.{t}" for t in tks])
+            if rs_u == RET_OK and dfs_u is not None and not dfs_u.empty:
+                for _, ur in dfs_u.iterrows():
+                    _uc = str(ur.get("code", "")).replace("US.", "")
+                    _up = float(ur.get("last_price", 0) or ur.get("prev_close_price", 0) or 0)
+                    if _uc and _up > 0:
+                        spot_map[_uc] = _up
+        except Exception:
+            pass
         code_to_tk = {}
         opt_codes = []
         for tk in tks:
             ret_c, df_c = qctx.get_option_chain(code=f"US.{tk}", start=start_d, end=end_d)
             if ret_c == RET_OK and df_c is not None and not df_c.empty:
-                c_list = df_c["code"].tolist()[:50]
+                _sp_u = spot_map.get(tk, 0.0)
+                if _sp_u > 0 and "strike_price" in df_c.columns:
+                    _sk_s = df_c["strike_price"].astype(float)
+                    _df_near = df_c[(_sk_s >= _sp_u * 0.85) & (_sk_s <= _sp_u * 1.15)]
+                    if not _df_near.empty:
+                        df_c = _df_near
+                c_list = df_c["code"].tolist()[:60]
                 for oc in c_list:
                     code_to_tk[oc] = tk
                 opt_codes.extend(c_list)
@@ -2238,6 +2255,40 @@ def build_moomoo_cp_dominance():
             try: qctx.close()
             except Exception: pass
 
+    is_cboe_fb = False
+    if not stats:
+        is_cboe_fb = True
+        import re as _re_cp
+        for tk in tks:
+            try:
+                _u = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{tk}.json"
+                _raw = json.loads(urllib.request.urlopen(urllib.request.Request(_u, headers={"User-Agent": "Mozilla/5.0"}), timeout=5).read().decode("utf-8"))
+                _opts = (_raw.get("data") or {}).get("options") or []
+                for _o in _opts:
+                    _occ = str(_o.get("option") or "")
+                    _m = _re_cp.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", _occ)
+                    if not _m:
+                        continue
+                    _yymmdd, _cp_ch, _k_raw = _m.groups()
+                    _vol = int(_o.get("volume") or 0)
+                    _px = float(_o.get("last_trade_price") or _o.get("bid") or 0)
+                    if _vol <= 0 or _px <= 0:
+                        continue
+                    _prem = _vol * _px * 100.0
+                    _stk = int(_k_raw) / 1000.0
+                    _exp_s = f"{_yymmdd[2:4]}-{_yymmdd[4:6]}"
+                    _d = stats.setdefault(tk, {"c_prem": 0.0, "p_prem": 0.0, "c_vol": 0, "p_vol": 0, "bull": 0.0, "bear": 0.0, "top_c": (0.0, ""), "top_p": (0.0, "")})
+                    if _cp_ch == "C":
+                        _d["c_prem"] += _prem; _d["c_vol"] += _vol
+                        if _prem > _d["top_c"][0]:
+                            _d["top_c"] = (_prem, f"{_stk:g}C({_exp_s}, {_fmt_prem_short(_prem)})")
+                    else:
+                        _d["p_prem"] += _prem; _d["p_vol"] += _vol
+                        if _prem > _d["top_p"][0]:
+                            _d["top_p"] = (_prem, f"{_stk:g}P({_exp_s}, {_fmt_prem_short(_prem)})")
+            except Exception:
+                pass
+
     call_dom, put_dom = [], []
     for tk, d in stats.items():
         tot_p = d["c_prem"] + d["p_prem"]
@@ -2253,7 +2304,7 @@ def build_moomoo_cp_dominance():
     if not call_dom and not put_dom:
         return "📡 무무 실시간 콜/풋 쏠림 종목\n\n현재 콜/풋 한쪽으로 62% 이상 쏠린 종목이 없습니다."
 
-    out = ["📡 무무 실시간 콜/풋 강세 종목"]
+    out = ["📡 콜/풋 강세 종목 (장전 · Cboe 최근 마감 기준)" if is_cboe_fb else "📡 무무 실시간 콜/풋 강세 종목"]
     if call_dom:
         out.append("\n🔥 [콜(상승) 우위 종목]")
         out.extend(x[1] for x in sorted(call_dom, reverse=True)[:6])
