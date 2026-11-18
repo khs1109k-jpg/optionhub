@@ -1388,6 +1388,7 @@ MENU_ITEMS = [
     "🎯 Portfolio Trigger",
     "📋 AI Trade Plan",
     "📡 OI Change Radar",
+    "🌊 Vanna & Charm",
     "🎯 AI GEX 분석",
     "🔥 Top Ticker + 차트/P&L",
     "📊 OI(미결제약정) 수집",
@@ -11812,3 +11813,159 @@ if nav_menu == "📡 OI Change Radar":
         ]
         if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_rd_lines))[0]:
             st.toast("✅ OI Change Radar 텔레그램 전송 완료!")
+
+
+@st.cache_data(ttl=240, show_spinner=False)
+def compute_vanna_charm_metrics(tk_in):
+    tk = str(tk_in or "").strip().upper()
+    oi_d = load_json_file(OI_PATH, {})
+    snaps = oi_d.get(tk, []) if isinstance(oi_d, dict) else []
+    last_sn = snaps[-1] if snaps else {}
+    rows = last_sn.get("상세") or []
+    spot_v = float(last_sn.get("Spot", 0) or 0)
+    if not rows or spot_v <= 0 or float(last_sn.get("Net_GEX_M", 0) or 0) == 0:
+        _fb = _fetch_live_oi_fallback(tk)
+        if _fb:
+            rows = _fb.get("상세") or rows
+            spot_v = float(_fb.get("Spot", 0) or spot_v or 0)
+    if not rows or spot_v <= 0:
+        return {"tk": tk, "ok": False}
+
+    r_rate = 0.045
+    strike_vanna = {}
+    strike_charm = {}
+    net_vanna_m = 0.0
+    net_charm_m = 0.0
+    for x in rows:
+        try:
+            K = float(x.get("행사가", 0) or 0)
+            oi = int(x.get("OI", 0) or 0)
+            if K <= 0 or oi <= 0:
+                continue
+            dte = max(int(x.get("DTE", 7) or 7), 1)
+            T = dte / 365.0
+            iv = max(float(x.get("IV(%)", 30) or 30) / 100.0, 0.05)
+            sqrtT = math.sqrt(T)
+            d1 = (math.log(spot_v / K) + (r_rate + 0.5 * iv * iv) * T) / (iv * sqrtT)
+            d2 = d1 - iv * sqrtT
+            pdf = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+            cp_raw = str(x.get("구분", "")).upper()
+            sign = 1.0 if (cp_raw.startswith("C") or "콜" in cp_raw) else -1.0
+
+            vanna = -pdf * d2 / iv
+            charm_yr = -pdf * (2.0 * r_rate * T - d2 * iv * sqrtT) / (2.0 * T * iv * sqrtT)
+
+            v_exp_m = (sign * vanna * oi * 100.0 * spot_v * 0.01) / 1e6
+            c_exp_m = (sign * charm_yr * oi * 100.0 * spot_v / 365.0) / 1e6
+
+            net_vanna_m += v_exp_m
+            net_charm_m += c_exp_m
+            strike_vanna[K] = strike_vanna.get(K, 0.0) + v_exp_m
+            strike_charm[K] = strike_charm.get(K, 0.0) + c_exp_m
+        except Exception:
+            pass
+
+    def _find_flip(s_map):
+        ks = sorted(s_map.keys())
+        if len(ks) < 2:
+            return 0.0
+        cum, prev_c, prev_k = 0.0, None, None
+        flips = []
+        for k in ks:
+            cum += s_map[k]
+            if prev_c is not None and ((prev_c < 0 <= cum) or (prev_c > 0 >= cum)):
+                denom = cum - prev_c
+                frac = (-prev_c / denom) if denom != 0 else 0.5
+                flips.append(round(prev_k + frac * (k - prev_k), 2))
+            prev_c, prev_k = cum, k
+        return min(flips, key=lambda x: abs(x - spot_v)) if flips else 0.0
+
+    vanna_flip = _find_flip(strike_vanna)
+    charm_flip = _find_flip(strike_charm)
+    v_flow = round(net_vanna_m, 2)
+    c_flow = round(net_charm_m, 2)
+    tot_abs = max(abs(v_flow) + abs(c_flow), 0.01)
+    bull_force = max(0.0, v_flow) + max(0.0, c_flow)
+    bear_force = max(0.0, -v_flow) + max(0.0, -c_flow)
+    up_pct = int(round(bull_force / tot_abs * 100))
+    dn_pct = 100 - up_pct
+
+    if up_pct >= 60:
+        impact = f"🟢 상승압력 우세 ({up_pct}%) · IV 하락·시간경과 시 딜러 매수 헤지 유입"
+    elif dn_pct >= 60:
+        impact = f"🔴 하락압력 우세 ({dn_pct}%) · 시간경과·변동성 확대 시 딜러 매도 헤지 출회"
+    else:
+        impact = f"🟡 양방향 균형 (상승 {up_pct}% / 하락 {dn_pct}%) · Flip 레벨 돌파 방향 추종"
+
+    df_vc = pd.DataFrame([
+        {"행사가": k, "Vanna($M)": round(strike_vanna[k], 3), "Charm($M/d)": round(strike_charm.get(k, 0.0), 3)}
+        for k in sorted(strike_vanna.keys())
+        if spot_v * 0.80 <= k <= spot_v * 1.20
+    ])
+    return {
+        "tk": tk, "ok": True, "spot": spot_v,
+        "net_vanna": round(net_vanna_m, 2), "net_charm": round(net_charm_m, 2),
+        "vanna_flip": vanna_flip, "charm_flip": charm_flip,
+        "v_flow": f"${v_flow:+.2f}M / 1% IV", "c_flow": f"${c_flow:+.2f}M / 일",
+        "up_pct": up_pct, "dn_pct": dn_pct, "impact": impact, "df": df_vc,
+    }
+
+
+if nav_menu == "🌊 Vanna & Charm":
+    st.title("🌊 Vanna & Charm Dashboard (2차 그릭스 · 딜러 수급 압력)")
+    st.caption("SPX · QQQ · NVDA · TSLA 기준 Net Vanna · Net Charm · Flip 레벨 · 시간/변동성 헤지 압력 분석")
+
+    _vc_tks = ["SPX", "QQQ", "NVDA", "TSLA"]
+    _vc_all = [compute_vanna_charm_metrics(t) for t in _vc_tks]
+    _vc_ok = [x for x in _vc_all if x.get("ok")]
+
+    if _vc_ok:
+        st.dataframe(pd.DataFrame([
+            {
+                "종목": x["tk"], "현재가": f"${x['spot']:,.2f}",
+                "Net Vanna($M)": f"${x['net_vanna']:+.2f}M",
+                "Net Charm($M/d)": f"${x['net_charm']:+.2f}M",
+                "Vanna Flip": f"${x['vanna_flip']:g}" if x["vanna_flip"] > 0 else "-",
+                "Charm Flip": f"${x['charm_flip']:g}" if x["charm_flip"] > 0 else "-",
+                "상승압력": f"{x['up_pct']}%", "하락압력": f"{x['dn_pct']}%",
+                "예상 영향": x["impact"],
+            }
+            for x in _vc_ok
+        ]), hide_index=True, use_container_width=True)
+
+        _sel_vc = st.selectbox("🔍 행사가별 Vanna & Charm 상세 차트 종목", [x["tk"] for x in _vc_ok], key="vc_sel_tk")
+        _cur_vc = next(x for x in _vc_ok if x["tk"] == _sel_vc)
+        _m1, _m2, _m3, _m4, _m5, _m6 = st.columns(6)
+        _m1.metric("Net Vanna", f"${_cur_vc['net_vanna']:+.2f}M")
+        _m2.metric("Net Charm", f"${_cur_vc['net_charm']:+.2f}M")
+        _m3.metric("Vanna Flip", f"${_cur_vc['vanna_flip']:g}" if _cur_vc["vanna_flip"] > 0 else "-")
+        _m4.metric("Charm Flip", f"${_cur_vc['charm_flip']:g}" if _cur_vc["charm_flip"] > 0 else "-")
+        _m5.metric("Dealer Vanna Flow", _cur_vc["v_flow"])
+        _m6.metric("Dealer Charm Flow", _cur_vc["c_flow"])
+
+        _p1, _p2 = st.columns(2)
+        _p1.metric("🟢 상승압력", f"{_cur_vc['up_pct']}%")
+        _p2.metric("🔴 하락압력", f"{_cur_vc['dn_pct']}%")
+        st.info(f"💡 **예상 영향:** {_cur_vc['impact']}")
+
+        if not _cur_vc["df"].empty:
+            _fig_vc = go.Figure()
+            _fig_vc.add_trace(go.Bar(x=_cur_vc["df"]["행사가"], y=_cur_vc["df"]["Vanna($M)"], name="Vanna ($M)", marker_color="#38bdf8"))
+            _fig_vc.add_trace(go.Bar(x=_cur_vc["df"]["행사가"], y=_cur_vc["df"]["Charm($M/d)"], name="Charm ($M/d)", marker_color="#f59e0b"))
+            _fig_vc.add_vline(x=_cur_vc["spot"], line_dash="dash", line_color="#10b981", annotation_text=f"Spot ${_cur_vc['spot']:g}")
+            _fig_vc.update_layout(
+                title=f"{_cur_vc['tk']} 행사가별 Dealer Vanna & Charm 분포",
+                barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
+                height=360, margin=dict(l=20, r=20, t=44, b=24),
+            )
+            st.plotly_chart(_fig_vc, use_container_width=True)
+
+        if st.button("📩 Vanna & Charm 브리핑 텔레그램 전송", type="primary", key="btn_vc_tg"):
+            _vc_msg = "🌊 *[OptionHub Vanna & Charm]*\n\n" + "\n".join(
+                f"• *{x['tk']}* (${x['spot']:,.2f}) | Vanna ${x['net_vanna']:+.2f}M (Flip ${x['vanna_flip']:g}) | Charm ${x['net_charm']:+.2f}M | 상승 {x['up_pct']}% / 하락 {x['dn_pct']}%"
+                for x in _vc_ok
+            )
+            if send_telegram_msg(tg_token, tg_chat_id, _vc_msg)[0]:
+                st.toast("✅ Vanna & Charm 브리핑 텔레그램 전송 완료!")
+    else:
+        st.warning("옵션 체인 데이터를 불러오는 중입니다. 잠시 후 새로고침해 주세요.")
