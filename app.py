@@ -471,6 +471,30 @@ st.markdown("""
 # =========================================================
 # 🏆 Conviction Score Engine (0~100점 · GEX/DEX/OI/VolOI/Prem/Flow/DarkPool/Tech)
 # =========================================================
+def compute_signal_confidence(verdict_str, score_100=50, net_gex=0.0, net_dex=0.0, oi_ok=False, ask_ok=False, sweep_ok=False, prem_m=0.0, dp_bull=False):
+    v_u = str(verdict_str or "").upper()
+    reasons = []
+    if "SHORT" in v_u:
+        base = 52 + min(26, max(0, int((55 - score_100) * 0.65)))
+        if net_gex < 0: base += 7; reasons.append("Net GEX Negative")
+        if net_dex < 0: base += 5; reasons.append("Net DEX Negative")
+        if not oi_ok: base += 4; reasons.append("Put OI 우위")
+        if not dp_bull: base += 4; reasons.append("Dark Pool 약세")
+    elif "LONG" in v_u:
+        base = 56 + min(26, max(0, int((score_100 - 60) * 0.75)))
+        if net_gex > 0: base += 5; reasons.append("GEX Positive")
+        if oi_ok: base += 4; reasons.append("OI 증가")
+        if ask_ok: base += 4; reasons.append("Above Ask")
+        if sweep_ok: base += 3; reasons.append("Sweep")
+        if prem_m >= 5.0: base += 3; reasons.append("Premium 증가")
+        if dp_bull: base += 2; reasons.append("Dark Pool Bullish")
+    else:
+        base = 50 + min(18, max(0, 18 - abs(int(score_100) - 55)))
+        reasons.append("지표 혼조·중립")
+        if prem_m >= 5.0: base += 4; reasons.append("대형 프리미엄 유입")
+    conf = max(45, min(97, int(round(base))))
+    return conf, (" · ".join(reasons[:4]) if reasons else "기본 수급 모델")
+
 def _conviction_grade_and_verdict(score):
     s = int(round(score))
     if s >= 90:
@@ -633,8 +657,9 @@ def compute_conviction_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov
 
     total = _gex_pts + _dex_pts + _oi_pts + _voi_pts + _prem_pts + _flow_pts + _dp_pts + _tech_pts
     grade, verdict = _conviction_grade_and_verdict(total)
+    _c_conf, _c_rsn = compute_signal_confidence(verdict, total, net_gex, net_dex, _oi_pts >= 8, _above_ask_cnt > 0, _sweep_cnt > 0, _tot_prem_m, _dp_lbl == "Bullish")
     return {
-        "tk": tk, "score": total, "grade": grade, "verdict": verdict, "spot": spot_v,
+        "tk": tk, "score": total, "grade": grade, "verdict": verdict, "conf": _c_conf, "conf_reasons": _c_rsn, "spot": spot_v,
         "GEX": _gex_pts, "DEX": _dex_pts, "OI": _oi_pts, "VOL_OI": _voi_pts,
         "PREMIUM": _prem_pts, "FLOW": _flow_pts, "DARKPOOL": _dp_pts, "TECH": _tech_pts,
         "dp_lbl": _dp_lbl, "net_gex": net_gex, "net_dex": net_dex, "net_doi": _net_doi,
@@ -654,7 +679,7 @@ def render_conviction_detail_card(c_res):
         _c1, _c2, _c3 = st.columns([1.2, 1.4, 1.2])
         _c1.metric(f"🏆 {c_res['tk']} Conviction Score", f"{c_res['score']}/100")
         _c2.metric("등급", c_res["grade"])
-        _c3.metric("AI 최종판정", c_res["verdict"])
+        _c3.metric("AI 최종판정", f"{c_res['verdict']} ({c_res.get('conf', 70)}%)", c_res.get("conf_reasons", ""))
         _d_cols = st.columns(8)
         _items_d = [
             ("GEX", f"{c_res['GEX']}/25"), ("DEX", f"{c_res['DEX']}/20"),
@@ -804,8 +829,9 @@ def compute_trend_reversal_score(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spo
     _failed = [lbl_no for ok, _, lbl_no in _checks if not ok]
     _score = len(_passed)
     _grade, _verdict = _reversal_grade_and_verdict(_score)
+    _r_conf, _r_rsn = compute_signal_confidence(_verdict, _score * 10, net_gex, 0.0, _call_doi > _put_doi, _above_ask_cnt > 0, _sweep_cnt > 0, _call_prem_m, _bull_cnt > _bear_cnt)
     return {
-        "tk": tk, "score": _score, "grade": _grade, "verdict": _verdict,
+        "tk": tk, "score": _score, "grade": _grade, "verdict": _verdict, "conf": _r_conf, "conf_reasons": _r_rsn,
         "passed": _passed, "failed": _failed,
         "net_gex": net_gex, "spot": spot_v, "zg": zg_v,
         "call_prem_m": round(_call_prem_m, 2), "put_prem_m": round(_put_prem_m, 2),
@@ -824,7 +850,7 @@ def render_trend_reversal_card(r_res):
         _r1, _r2, _r3 = st.columns([1.2, 1.4, 1.2])
         _r1.metric(f"🔥 {r_res['tk']} Trend Reversal Score", f"{r_res['score']} / 10")
         _r2.metric("결과 등급", r_res["grade"])
-        _r3.metric("AI 최종판정", r_res["verdict"])
+        _r3.metric("AI 최종판정", f"{r_res['verdict']} ({r_res.get('conf', 70)}%)")
         _pc1, _pc2 = st.columns(2)
         with _pc1:
             st.markdown("**통과 항목**")
@@ -1262,8 +1288,9 @@ def compute_ai_watchlist(oi_hist_d, raw_flows_l, big_flows_l, fill_live_walls=Fa
             target_px = cw_v if (cw_v > 0 and (spot_v <= 0 or cw_v > spot_v)) else (mp_v if mp_v > spot_v else (round(spot_v * 1.05, 2) if spot_v > 0 else 0.0))
             stop_px = pw_v if (pw_v > 0 and (spot_v <= 0 or pw_v < spot_v)) else (zg_v if (zg_v > 0 and zg_v < spot_v) else (round(spot_v * 0.96, 2) if spot_v > 0 else 0.0))
 
+        _wl_conf, _ = compute_signal_confidence(verdict, total_score, c_res["net_gex"], c_res["net_dex"], oi_chg_pct > 0, c_res["FLOW"] >= 3, c_res["FLOW"] >= 5, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
         items.append({
-            "tk": tk, "score": total_score, "verdict": verdict,
+            "tk": tk, "score": total_score, "verdict": verdict, "conf": _wl_conf,
             "conv": c_res["score"], "rev": r_res["score"],
             "spot": spot_v, "target": target_px, "stop": stop_px,
             "cw": cw_v, "pw": pw_v, "zg": zg_v,
@@ -5154,7 +5181,7 @@ if nav_menu == "📝 오늘의 종합평":
                 _wcol.metric(f"{_wi}. {_wr['tk']} ({_wr['verdict']})", f"Score {_wr['score']}", f"목표 ${ _wr['target']:g} / 손절 ${_wr['stop']:g}" if _wr["target"] > 0 else f"Conv {_wr['conv']} · Rev {_wr['rev']}/10")
             st.dataframe(pd.DataFrame([
                 {
-                    "순위": i, "종목": r["tk"], "Score": r["score"], "판정": r["verdict"],
+                    "순위": i, "종목": r["tk"], "Score": r["score"], "판정": r["verdict"], "신뢰도": f"{r.get('conf', 70)}%",
                     "현재가": f"${r['spot']:,.2f}" if r["spot"] > 0 else "-",
                     "목표가": f"${r['target']:,.2f}" if r["target"] > 0 else "-",
                     "손절가": f"${r['stop']:,.2f}" if r["stop"] > 0 else "-",
@@ -11036,7 +11063,7 @@ if nav_menu == "🏆 Top Conviction Ranking":
         _df_rank_full = pd.DataFrame([
             {
                 "순위": i, "종목": r["tk"], "Conviction Score": r["score"],
-                "등급": r["grade"], "AI 최종판정": r["verdict"],
+                "등급": r["grade"], "AI 최종판정": r["verdict"], "신뢰도": f"{r.get('conf', 70)}%",
                 "Net GEX($M)": f"${r['net_gex']:+,.1f}M" if r.get("net_gex", 0) != 0 else "-",
                 "Net DEX($M)": f"${r['net_dex']:+,.1f}M" if r.get("net_dex", 0) != 0 else "-",
                 "GEX점수(25)": r["GEX"], "DEX점수(20)": r["DEX"], "OI점수(15)": r["OI"],
@@ -11638,8 +11665,9 @@ def compute_ai_trade_plan(tk_in, oi_hist_d, raw_flows_l, big_flows_l):
     else:
         conclusion = f"현재는 HOLD(중립) 구간. ${stop_px:g} 지지 여부 및 ${t1_px:g} 돌파 확인 후 진입 권장." if spot_v > 0 else "방향성 확인 후 진입 권장."
 
+    _tp_conf, _tp_rsn = compute_signal_confidence(plan_dir, c_res["score"], net_gex, c_res["net_dex"], c_res["OI"] >= 8, c_res["FLOW"] >= 2, c_res["FLOW"] >= 4, c_res["prem_m"], c_res["dp_lbl"] == "Bullish")
     return {
-        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10",
+        "tk": tk, "spot": spot_v, "conv": c_res["score"], "trend": f"{r_res['score']}/10", "conf": _tp_conf, "conf_reasons": _tp_rsn,
         "intent": di_res["intent"], "sm_detected": sm_r.get("score", 0) >= 60, "sm_score": sm_r.get("score", 0),
         "alerts": tk_alerts, "dir": plan_dir,
         "entry": f"${entry_lo:g}~${entry_hi:g}" if spot_v > 0 else "-",
@@ -11660,7 +11688,7 @@ def render_ai_trade_plan_card(tp, key_prefix="tp"):
         _m5.metric("Smart Money", f"Detected ({tp['sm_score']})" if tp["sm_detected"] else f"대기 ({tp['sm_score']})")
 
         _p1, _p2, _p3, _p4, _p5, _p6, _p7 = st.columns(7)
-        _p1.metric("AI Trade Plan", tp["dir"])
+        _p1.metric("AI Trade Plan", f"{tp['dir']} ({tp.get('conf', 75)}%)")
         _p2.metric("매수/진입구간", tp["entry"])
         _p3.metric("손절", tp["stop"])
         _p4.metric("1차 목표", tp["t1"])
@@ -11761,6 +11789,13 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
                     est_act = "STC/BTC (청산)"
 
             badge = "🔥 +100%↑" if chg_pct >= 100 else ("⚡ +50%↑" if chg_pct >= 50 else ("📈 +20%↑" if chg_pct >= 20 else ("📉 -20%↓" if chg_pct <= -20 else "-")))
+            _rd_conf = 52 + (14 if abs(chg_pct) >= 20 else 7) + (10 if fh["ask"] > 0 or fh["bid"] > 0 else 0) + (9 if fh["sweep"] > 0 else 0) + (8 if prem_usd >= 5e6 else (5 if prem_usd >= 1e6 else 0)) + (4 if voi_v >= 1.5 else 0)
+            _rd_rsns = []
+            if delta_oi > 0: _rd_rsns.append("OI 증가")
+            else: _rd_rsns.append("OI 감소")
+            if fh["ask"] > 0: _rd_rsns.append("Above Ask")
+            if fh["sweep"] > 0: _rd_rsns.append("Sweep")
+            if prem_usd >= 1e6: _rd_rsns.append("Premium 증가")
             rec = {
                 "종목": tk, "계약": f"${stk_v:g}{'C' if cp_norm == 'Call' else 'P'} ({exp_s[5:]})",
                 "전일OI": prev_oi, "현재OI": now_oi, "ΔOI": delta_oi, "변화율(%)": chg_pct,
@@ -11768,6 +11803,8 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
                 "프리미엄": f"${prem_usd/1e6:.2f}M" if prem_usd >= 1e6 else f"${prem_usd/1e3:.0f}K",
                 "Sweep/Ask": f"S:{fh['sweep']} · A:{fh['ask']}",
                 "기관판독": est_act,
+                "신뢰도": f"{min(97, _rd_conf)}%",
+                "판독근거": " · ".join(_rd_rsns),
             }
             if delta_oi > 0:
                 (call_surge if cp_norm == "Call" else put_surge).append(rec)
