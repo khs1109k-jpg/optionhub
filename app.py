@@ -1639,6 +1639,144 @@ def render_ai_trade_plan_card(tp, key_prefix="tp"):
             _pc2.metric("🔴 SHORT", f"확률 {_pr['short']['prob']}%", f"신뢰도 {_pr['short']['conf']}% · 기대수익 {_pr['short']['exp']} · 리스크 {_pr['short']['risk']}")
             _pc3.metric("🟡 HOLD", f"확률 {_pr['hold']['prob']}%", f"신뢰도 {_pr['hold']['conf']}% · 기대수익 {_pr['hold']['exp']} · 리스크 {_pr['hold']['risk']}")
 
+
+# =========================================================
+# 🧠 AI Consensus Engine (9대 데이터 통합 합의 & Market Risk Score)
+# =========================================================
+def parse_insider_consensus_signals():
+    import re as _re_ins
+    mails = load_json_file(os.path.expanduser("~/.optionhub_insider_mails.json"), [])
+    if not isinstance(mails, list) or not mails:
+        return {}, {"insights": 0, "noteworthy": 0, "plays": 0, "etf": 0, "unusual": 0}, "인사이더 파이낸셜 이메일 대기"
+    latest = mails[0] if isinstance(mails[0], dict) else {}
+    txt = str(latest.get("text", "") or latest.get("html", "") or "")
+    sec_counts = {
+        "insights": len(_re_ins.findall(r"Market Insights|AI Market", txt, _re_ins.I)),
+        "noteworthy": len(_re_ins.findall(r"Noteworthy Trades", txt, _re_ins.I)),
+        "plays": len(_re_ins.findall(r"Options Plays", txt, _re_ins.I)),
+        "etf": len(_re_ins.findall(r"ETF Flow", txt, _re_ins.I)),
+        "unusual": len(_re_ins.findall(r"Unusual Flow", txt, _re_ins.I)),
+    }
+    tk_bias = {}
+    for line in txt.splitlines():
+        m_tk = _re_ins.search(r"\b([A-Z]{2,5})\b", line)
+        if not m_tk:
+            continue
+        t = m_tk.group(1)
+        if t in ("HTML", "HTTP", "HTTPS", "USD", "CALL", "PUT", "ETF", "FLOW"):
+            continue
+        low = line.lower()
+        b = tk_bias.setdefault(t, {"bull": 0, "bear": 0})
+        if any(w in low for w in ("bull", "call", "상승", "매수", "sweep", "long")):
+            b["bull"] += 1
+        if any(w in low for w in ("bear", "put", "하락", "매도", "헷지", "short")):
+            b["bear"] += 1
+    subj = str(latest.get("subject", "") or "최신 인사이더 파이낸셜 메일")
+    return tk_bias, sec_counts, subj
+
+def compute_ai_consensus(tk_in, oi_hist_d, raw_flows_l, big_flows_l, ins_bias=None, dp_map=None, tide_d=None):
+    tk = str(tk_in or "").strip().upper()
+    c_res = compute_conviction_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+    r_res = compute_trend_reversal_score(tk, oi_hist_d, raw_flows_l, big_flows_l)
+    sm_list = compute_smart_money_tracker(oi_hist_d, raw_flows_l, big_flows_l)
+    sm_r = next((x for x in sm_list if x["tk"] == tk), {"score": 0})
+
+    net_gex = float(c_res.get("net_gex", 0) or 0)
+    net_dex = float(c_res.get("net_dex", 0) or 0)
+    net_doi = int(c_res.get("net_doi", 0) or 0)
+    flow_pts = int(c_res.get("FLOW", 0) or 0)
+    dp_lbl = str(c_res.get("dp_lbl", "Neutral"))
+    if dp_map and tk in dp_map:
+        _dpc = str(dp_map[tk].get("분류", ""))
+        if "매집" in _dpc: dp_lbl = "Bullish"
+        elif "헤지" in _dpc or "차익" in _dpc: dp_lbl = "Bearish"
+        else: dp_lbl = "Neutral"
+
+    gex_st = "Bullish" if net_gex > 0 else ("Bearish" if net_gex < 0 else "Neutral")
+    dex_st = "Bullish" if net_dex > 0 else ("Bearish" if net_dex < 0 else "Neutral")
+    oi_st = "Bullish" if (net_doi > 0 or c_res.get("OI", 0) >= 8) else ("Bearish" if net_doi < 0 else "Neutral")
+    flow_st = "Bullish" if flow_pts >= 5 else ("Bearish" if (c_res["score"] < 45 and flow_pts <= 2) else "Neutral")
+    sm_st = "Bullish" if sm_r.get("score", 0) >= 60 else ("Bearish" if sm_r.get("score", 0) < 25 else "Neutral")
+
+    ins_d = (ins_bias or {}).get(tk, {"bull": 0, "bear": 0})
+    ins_st = "Bullish" if ins_d["bull"] > ins_d["bear"] else ("Bearish" if ins_d["bear"] > ins_d["bull"] else "Neutral")
+
+    tide_trend = str((tide_d or {}).get("trend", "")).lower()
+    tide_st = "Bullish" if "bull" in tide_trend else ("Bearish" if "bear" in tide_trend else "Neutral")
+
+    def _to_val(st):
+        return 1.0 if st == "Bullish" else (-1.0 if st == "Bearish" else 0.0)
+
+    weights = [
+        (_to_val(gex_st), 15), (_to_val(dex_st), 10), (_to_val(oi_st), 12),
+        (_to_val(flow_st), 13), (_to_val(sm_st), 12), (_to_val(dp_lbl), 10),
+        (_to_val(ins_st), 10), (_to_val(tide_st), 8), ((c_res["score"] - 50) / 50.0, 10),
+    ]
+    raw_sum = sum(v * w for v, w in weights)  # -100 ~ +100
+    score_100 = int(round(max(0, min(100, 50 + raw_sum * 0.5))))
+    strength_score = int(round(max(score_100, 100 - score_100)))
+
+    if score_100 >= 62:
+        dir_lbl = "🟢 Bullish"
+    elif score_100 <= 38:
+        dir_lbl = "🔴 Bearish"
+    else:
+        dir_lbl = "🟡 Neutral"
+
+    conf, _ = compute_signal_confidence(
+        "LONG" if score_100 >= 62 else ("SHORT" if score_100 <= 38 else "HOLD"),
+        c_res["score"], net_gex, net_dex, oi_st == "Bullish", flow_st == "Bullish", sm_st == "Bullish", c_res["prem_m"], dp_lbl == "Bullish"
+    )
+    short_term = "Bullish" if (_to_val(gex_st) + _to_val(flow_st)) > 0 else ("Bearish" if (_to_val(gex_st) + _to_val(flow_st)) < 0 else "Neutral")
+    mid_term = "Bullish" if (_to_val(oi_st) + _to_val(tide_st)) > 0 else ("Bearish" if (_to_val(oi_st) + _to_val(tide_st)) < 0 else "Neutral")
+    long_term = "Bullish" if (_to_val(sm_st) + _to_val(dp_lbl) + _to_val(ins_st)) > 0 else ("Bearish" if (_to_val(sm_st) + _to_val(dp_lbl) + _to_val(ins_st)) < 0 else "Neutral")
+
+    if short_term == "Bearish" and long_term == "Bullish":
+        final_txt = "기관은 단기 헤지 증가 · 장기 포지션 유지"
+    elif short_term == "Bullish" and long_term == "Bullish":
+        final_txt = "단기·중기·장기 전 구간 기관 상방 합의 우세"
+    elif short_term == "Bearish" and long_term == "Bearish":
+        final_txt = "단기·장기 모두 보수적 헤지·하방 경계 우세"
+    else:
+        final_txt = "단기 변동성 탐색 구간 · 방향성 확인 후 추종 권장"
+
+    return {
+        "tk": tk, "score": score_100, "strength": strength_score, "dir": dir_lbl, "conf": conf,
+        "GEX": gex_st, "DEX": dex_st, "OI": oi_st, "Flow": flow_st,
+        "Dark Pool": dp_lbl, "InsiderFinance": ins_st, "Smart Money": sm_st, "Market Tide": tide_st,
+        "Conviction": c_res["score"], "Reversal": r_res["score"],
+        "단기": short_term, "중기": mid_term, "장기": long_term, "최종": final_txt,
+    }
+
+def compute_market_and_sector_consensus(oi_hist_d, raw_flows_l, big_flows_l):
+    ins_bias, sec_cnts, ins_subj = parse_insider_consensus_signals()
+    dp_txt = load_json_file(DARKPOOL_PRINTS_PATH, {}).get("text", "")
+    dp_rows, _, _ = classify_darkpool_prints(parse_darkpool_text(dp_txt), oi_hist_d, raw_flows_l) if dp_txt else ([], {}, "")
+    dp_map = {r["tk"]: r for r in dp_rows}
+    tide_d = load_json_file(os.path.expanduser("~/.optionhub_market_tide_cache.json"), {})
+
+    mkt_tks = ["SPY", "QQQ", "SOXX"]
+    mkt_res = [compute_ai_consensus(t, oi_hist_d, raw_flows_l, big_flows_l, ins_bias, dp_map, tide_d) for t in mkt_tks]
+    avg_mkt = sum(x["score"] for x in mkt_res) / len(mkt_res)
+    _, vix_now, _ = _fetch_vix_reversal_state()
+    risk_score = int(round(max(5, min(98, (100 - avg_mkt) * 0.75 + (min(40, vix_now) / 40.0) * 25.0))))
+    mkt_dir = "🟢 Bullish" if avg_mkt >= 60 else ("🔴 Bearish" if avg_mkt <= 42 else "🟡 Neutral")
+
+    sec_defs = {
+        "반도체": ["NVDA", "AMD", "AVGO", "MU", "SOXL"],
+        "AI·빅테크": ["MSFT", "AAPL", "META", "AMZN", "PLTR"],
+        "에너지": ["XOM", "CVX"],
+        "소비재": ["TSLA", "WMT", "COST"],
+        "소재": ["FCX", "AA"],
+    }
+    sec_res = []
+    for s_nm, s_tks in sec_defs.items():
+        s_items = [compute_ai_consensus(t, oi_hist_d, raw_flows_l, big_flows_l, ins_bias, dp_map, tide_d) for t in s_tks]
+        s_avg = int(round(sum(x["score"] for x in s_items) / len(s_items))) if s_items else 50
+        s_ic = "🟢" if s_avg >= 62 else ("🔴" if s_avg <= 42 else "🟡")
+        sec_res.append({"섹터": s_nm, "점수": s_avg, "상태": f"{s_ic} {s_avg}"})
+    return mkt_dir, risk_score, mkt_res, sec_res, ins_bias, sec_cnts, ins_subj, dp_map, tide_d
+
 MENU_ITEMS = [
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
@@ -1649,6 +1787,7 @@ MENU_ITEMS = [
     "⏰ Telegram Scheduler",
     "🎯 Portfolio Trigger",
     "📋 AI Trade Plan",
+    "🧠 AI Consensus",
     "📡 OI Change Radar",
     "🌊 Vanna & Charm",
     "🌑 Dark Pool Classification",
@@ -5394,6 +5533,16 @@ def format_emoji_review(raw_txt):
 if nav_menu == "📝 오늘의 종합평":
     st.title("📝 오늘의 종합평")
     st.caption("🏆 Top Conviction Ranking · 추세전환 7대 신호 · OI 급증 TOP10 · InsiderFinance 옵션 플로우 종합 평가")
+
+    _mc_dir, _mc_risk, _mc_list, _sc_list, _ins_b, _ins_cnts, _ins_subj, _dp_m, _td_d = compute_market_and_sector_consensus(
+        load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, [])
+    )
+    with st.container(border=True):
+        _mc1, _mc2, _mc3, _mc4, _mc5 = st.columns(5)
+        _mc1.metric("🧠 AI Market Consensus", _mc_dir)
+        _mc2.metric("⚠️ Market Risk Score", f"{_mc_risk} / 100")
+        for _mcol, _mr in zip((_mc3, _mc4, _mc5), _mc_list):
+            _mcol.metric(f"{_mr['tk']} Consensus", _mr["dir"], f"강도 {_mr['strength']}/100 · 신뢰도 {_mr['conf']}%")
 
     _al_hist_h, _al_new_h = evaluate_ai_alerts(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), auto_tg=True, tg_tok=tg_token, tg_cid=tg_chat_id)
     _today_al_s = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
@@ -12481,3 +12630,69 @@ if nav_menu == "🌑 Dark Pool Classification":
             )
             if send_telegram_msg(tg_token, tg_chat_id, _dp_tg)[0]:
                 st.toast("✅ Dark Pool 해석 리포트 텔레그램 전송 완료!")
+
+
+if nav_menu == "🧠 AI Consensus":
+    st.title("🧠 AI Consensus Engine (9대 데이터 통합 합의)")
+    st.caption("GEX · DEX · OI · Option Flow · Smart Money · Dark Pool · InsiderFinance · Market Tide · Conviction 통합 합의")
+
+    _oi_c = load_json_file(OI_PATH, {})
+    _bf_c = load_json_file(BIG_FLOWS_PATH, [])
+    _mc_dir, _mc_risk, _mc_list, _sc_list, _ins_b, _ins_cnts, _ins_subj, _dp_m, _td_d = compute_market_and_sector_consensus(_oi_c, all_raw_flows, _bf_c)
+
+    _tm1, _tm2, _tm3, _tm4, _tm5 = st.columns(5)
+    _tm1.metric("AI Market Consensus", _mc_dir)
+    _tm2.metric("Risk Score", f"{_mc_risk} / 100")
+    for _mcol, _mr in zip((_tm3, _tm4, _tm5), _mc_list):
+        _mcol.metric(f"{_mr['tk']}", _mr["dir"], f"점수 {_mr['strength']}/100")
+
+    _c_tks = ["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "AAPL", "MSFT", "AVGO", "SPY", "QQQ", "SOXX"]
+    _sel_cs_tk = st.selectbox("🔍 종목별 9대 데이터 AI Consensus 상세", _c_tks, index=0, key="cs_sel_tk")
+    _cs = compute_ai_consensus(_sel_cs_tk, _oi_c, all_raw_flows, _bf_c, _ins_b, _dp_m, _td_d)
+
+    with st.container(border=True):
+        _h1, _h2, _h3 = st.columns(3)
+        _h1.metric(f"🧠 {_cs['tk']} Consensus Score", f"{_cs['score']} / 100")
+        _h2.metric("최종 합의 방향", _cs["dir"])
+        _h3.metric("신뢰도", f"{_cs['conf']}%")
+
+        _f1, _f2, _f3, _f4, _f5, _f6 = st.columns(6)
+        _f1.metric("GEX", _cs["GEX"])
+        _f2.metric("OI", _cs["OI"])
+        _f3.metric("Flow", _cs["Flow"])
+        _f4.metric("Dark Pool", _cs["Dark Pool"])
+        _f5.metric("InsiderFinance", _cs["InsiderFinance"])
+        _f6.metric("Smart Money", _cs["Smart Money"])
+
+        _t1, _t2, _t3 = st.columns(3)
+        _t1.metric("단기 (GEX·Flow)", _cs["단기"])
+        _t2.metric("중기 (OI·Tide)", _cs["중기"])
+        _t3.metric("장기 (SM·DP·Insider)", _cs["장기"])
+        st.info(f"💡 **최종 해석:** {_cs['최종']}")
+
+    _sc_c1, _sc_c2 = st.columns(2)
+    with _sc_c1:
+        st.subheader("📊 Sector Consensus")
+        st.dataframe(pd.DataFrame(_sc_list), hide_index=True, use_container_width=True)
+    with _sc_c2:
+        st.subheader("📧 InsiderFinance 이메일 자동 파싱 (5대 섹션)")
+        st.caption(f"최신 메일: {_ins_subj}")
+        st.dataframe(pd.DataFrame([
+            {"섹션": "AI Market Insights", "감지": _ins_cnts["insights"]},
+            {"섹션": "AI Noteworthy Trades", "감지": _ins_cnts["noteworthy"]},
+            {"섹션": "AI Options Plays", "감지": _ins_cnts["plays"]},
+            {"섹션": "ETF Flow", "감지": _ins_cnts["etf"]},
+            {"섹션": "Unusual Flow", "감지": _ins_cnts["unusual"]},
+        ]), hide_index=True, use_container_width=True)
+
+    if st.button("📩 AI Consensus 브리핑 텔레그램 전송", type="primary", key="btn_cs_tg"):
+        _cs_msg = (
+            f"🧠 *[AI Consensus Engine]*\n"
+            f"시장: {_mc_dir} | Risk Score: {_mc_risk}/100\n"
+            + " · ".join(f"{x['tk']} {x['dir']}({x['strength']})" for x in _mc_list)
+            + f"\n\n*{_cs['tk']}* {_cs['score']}/100 ({_cs['dir']}, 신뢰도 {_cs['conf']}%)\n"
+            f"단기 {_cs['단기']} · 중기 {_cs['중기']} · 장기 {_cs['장기']}\n"
+            f"↳ {_cs['최종']}"
+        )
+        if send_telegram_msg(tg_token, tg_chat_id, _cs_msg)[0]:
+            st.toast("✅ AI Consensus 텔레그램 전송 완료!")
