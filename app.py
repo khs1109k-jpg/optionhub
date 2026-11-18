@@ -884,25 +884,48 @@ def compute_dealer_intent(tk_in, oi_hist_d, raw_flows_l, big_flows_l, spot_ov=0.
             if _df_d.empty or "행사가" not in _df_d.columns:
                 return _cw, _pw, _zg, _mp
             _df_d["행사가"] = pd.to_numeric(_df_d["행사가"], errors="coerce")
-            _df_d["OI"] = pd.to_numeric(_df_d.get("OI", 0), errors="coerce").fillna(0)
-            _df_d["GEX($M)"] = pd.to_numeric(_df_d.get("GEX($M)", 0), errors="coerce").fillna(0)
+            _df_d["OI"] = pd.to_numeric(_df_d.get("OI", 0), errors="coerce").fillna(0.0)
+            _df_d["GEX($M)"] = pd.to_numeric(_df_d.get("GEX($M)", 0), errors="coerce").fillna(0.0)
             _df_d = _df_d.dropna(subset=["행사가"])
             if _df_d["OI"].sum() <= 0:
                 return _cw, _pw, _zg, _mp
-            _df_zg = _df_d.groupby("행사가", as_index=False)["GEX($M)"].sum()
-            _zg = float(calc_zero_gamma(_df_zg, sp_ref) or 0)
-            _mp = float(calc_max_pain(_df_d) or 0)
-            _cp_s = _df_d["구분"].astype(str).str.upper()
-            _g_cw = _df_d[_cp_s.str.startswith("C") & (_df_d["행사가"] >= sp_ref * 0.98) & (_df_d["행사가"] <= sp_ref * 1.25)]
-            if _g_cw.empty:
-                _g_cw = _df_d[_cp_s.str.startswith("C") & (_df_d["행사가"] >= sp_ref * 0.40) & (_df_d["행사가"] <= sp_ref * 2.20)]
-            _g_pw = _df_d[_cp_s.str.startswith("P") & (_df_d["행사가"] >= sp_ref * 0.80) & (_df_d["행사가"] <= sp_ref * 1.02)]
-            if _g_pw.empty:
-                _g_pw = _df_d[_cp_s.str.startswith("P") & (_df_d["행사가"] >= sp_ref * 0.40) & (_df_d["행사가"] <= sp_ref * 2.20)]
-            if not _g_cw.empty and _g_cw["OI"].sum() > 0:
-                _cw = float(_g_cw.groupby("행사가")["OI"].sum().idxmax())
-            if not _g_pw.empty and _g_pw["OI"].sum() > 0:
-                _pw = float(_g_pw.groupby("행사가")["OI"].sum().idxmax())
+            try:
+                _df_zg = _df_d.groupby("행사가", as_index=False)["GEX($M)"].sum()
+                _zg = float(calc_zero_gamma(_df_zg, sp_ref) or 0)
+            except Exception:
+                pass
+            _cp_s = _df_d["구분"].astype(str).str.strip().str.upper()
+            _is_call_m = _cp_s.str.startswith("C") | _cp_s.str.contains("콜")
+            _is_put_m = _cp_s.str.startswith("P") | _cp_s.str.contains("풋")
+            try:
+                _c_map = _df_d[_is_call_m].groupby("행사가")["OI"].sum().to_dict()
+                _p_map = _df_d[_is_put_m].groupby("행사가")["OI"].sum().to_dict()
+                _all_ks = sorted(set(_c_map.keys()) | set(_p_map.keys()))
+                if _all_ks:
+                    _best_p, _best_k = None, 0.0
+                    for _kc in _all_ks:
+                        _pv = sum(max(_kc - _k, 0.0) * _v for _k, _v in _c_map.items()) + sum(max(_k - _kc, 0.0) * _v for _k, _v in _p_map.items())
+                        if _best_p is None or _pv < _best_p:
+                            _best_p, _best_k = _pv, float(_kc)
+                    _mp = _best_k
+            except Exception:
+                pass
+            try:
+                _g_cw = _df_d[_is_call_m & (_df_d["행사가"] >= sp_ref * 0.98) & (_df_d["행사가"] <= sp_ref * 1.25)]
+                if _g_cw.empty or _g_cw["OI"].sum() <= 0:
+                    _g_cw = _df_d[_is_call_m & (_df_d["행사가"] >= sp_ref * 0.40) & (_df_d["행사가"] <= sp_ref * 2.20)]
+                if not _g_cw.empty and _g_cw["OI"].sum() > 0:
+                    _cw = float(_g_cw.groupby("행사가")["OI"].sum().idxmax())
+            except Exception:
+                pass
+            try:
+                _g_pw = _df_d[_is_put_m & (_df_d["행사가"] >= sp_ref * 0.80) & (_df_d["행사가"] <= sp_ref * 1.02)]
+                if _g_pw.empty or _g_pw["OI"].sum() <= 0:
+                    _g_pw = _df_d[_is_put_m & (_df_d["행사가"] >= sp_ref * 0.40) & (_df_d["행사가"] <= sp_ref * 2.20)]
+                if not _g_pw.empty and _g_pw["OI"].sum() > 0:
+                    _pw = float(_g_pw.groupby("행사가")["OI"].sum().idxmax())
+            except Exception:
+                pass
         except Exception:
             pass
         return _cw, _pw, _zg, _mp
