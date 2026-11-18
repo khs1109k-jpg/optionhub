@@ -11896,11 +11896,15 @@ def compute_vanna_charm_metrics(tk_in):
     else:
         impact = f"🟡 양방향 균형 (상승 {up_pct}% / 하락 {dn_pct}%) · Flip 레벨 돌파 방향 추종"
 
-    df_vc = pd.DataFrame([
+    _vc_rows = [
         {"행사가": k, "Vanna($M)": round(strike_vanna[k], 3), "Charm($M/d)": round(strike_charm.get(k, 0.0), 3)}
         for k in sorted(strike_vanna.keys())
-        if spot_v * 0.80 <= k <= spot_v * 1.20
-    ])
+        if spot_v * 0.90 <= k <= spot_v * 1.10 and (abs(strike_vanna[k]) + abs(strike_charm.get(k, 0.0)) > 0.001)
+    ]
+    if len(_vc_rows) > 45:
+        _vc_rows = sorted(_vc_rows, key=lambda r: abs(r["Vanna($M)"]) + abs(r["Charm($M/d)"]), reverse=True)[:45]
+        _vc_rows = sorted(_vc_rows, key=lambda r: r["행사가"])
+    df_vc = pd.DataFrame(_vc_rows)
     return {
         "tk": tk, "ok": True, "spot": spot_v,
         "net_vanna": round(net_vanna_m, 2), "net_charm": round(net_charm_m, 2),
@@ -11949,13 +11953,17 @@ if nav_menu == "🌊 Vanna & Charm":
 
         if not _cur_vc["df"].empty:
             _fig_vc = go.Figure()
-            _fig_vc.add_trace(go.Bar(x=_cur_vc["df"]["행사가"], y=_cur_vc["df"]["Vanna($M)"], name="Vanna ($M)", marker_color="#38bdf8"))
-            _fig_vc.add_trace(go.Bar(x=_cur_vc["df"]["행사가"], y=_cur_vc["df"]["Charm($M/d)"], name="Charm ($M/d)", marker_color="#f59e0b"))
-            _fig_vc.add_vline(x=_cur_vc["spot"], line_dash="dash", line_color="#10b981", annotation_text=f"Spot ${_cur_vc['spot']:g}")
+            _x_lbls = [f"${k:g}" for k in _cur_vc["df"]["행사가"]]
+            _fig_vc.add_trace(go.Bar(x=_x_lbls, y=_cur_vc["df"]["Vanna($M)"], name="Vanna ($M)", marker_color="#38bdf8", marker_line_width=0))
+            _fig_vc.add_trace(go.Bar(x=_x_lbls, y=_cur_vc["df"]["Charm($M/d)"], name="Charm ($M/d)", marker_color="#f59e0b", marker_line_width=0))
+            _spot_idx = min(range(len(_cur_vc["df"])), key=lambda i: abs(float(_cur_vc["df"]["행사가"].iloc[i]) - _cur_vc["spot"]))
+            _fig_vc.add_vline(x=_spot_idx, line_dash="dash", line_color="#10b981", annotation_text=f"Spot ${_cur_vc['spot']:g}")
             _fig_vc.update_layout(
-                title=f"{_cur_vc['tk']} 행사가별 Dealer Vanna & Charm 분포",
-                barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
-                height=360, margin=dict(l=20, r=20, t=44, b=24),
+                title=f"{_cur_vc['tk']} 행사가별 Dealer Vanna & Charm 분포 (상위 45개 행사가)",
+                barmode="group", bargap=0.18, bargroupgap=0.05,
+                template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626",
+                height=380, margin=dict(l=20, r=20, t=44, b=36),
+                xaxis=dict(type="category"),
             )
             st.plotly_chart(_fig_vc, use_container_width=True)
 
