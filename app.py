@@ -9778,13 +9778,28 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                     st.info("표시할 이상 옵션 체결이 없습니다.")
                 else:
                     _df_uoa = pd.DataFrame(_trades)
+                    _pref_cols = [c for c in ["expiration", "expiry", "type", "option_type", "cp", "strike", "volume", "open_interest", "vol_oi_ratio", "total_premium", "premium", "last_price", "last", "bid", "ask", "implied_volatility", "iv", "GEX_contrib", "DEX_contrib"] if c in _df_uoa.columns]
+                    _rest_cols = [c for c in _df_uoa.columns if c not in _pref_cols]
+                    _df_uoa_disp = _df_uoa[_pref_cols + _rest_cols].copy()
+                    for _nc in _df_uoa_disp.select_dtypes(include=["float64", "float32"]).columns:
+                        _df_uoa_disp[_nc] = _df_uoa_disp[_nc].round(2)
                     if _uc3.button("📩 UOA 상위 10건 텔레그램 전송", use_container_width=True, key="btn_persp_uoa_tg"):
-                        _lines_u = [f"🔥 *[Perspicium {_p_tk} 이상 옵션 체결 TOP 10]* (Spot ${_du.get('spot', '-')})"]
+                        _lines_u = [f"🔥 [Perspicium {_p_tk} 이상 옵션 체결 TOP 10] (Spot ${_du.get('spot', '-')})", ""]
                         for _, _ur in _df_uoa.head(10).iterrows():
-                            _lines_u.append("• " + " | ".join(f"{k}:{v}" for k, v in list(_ur.items())[:6]))
+                            _exp_u = str(_ur.get("expiration") or _ur.get("expiry") or "-")[:10]
+                            _cp_u = str(_ur.get("type") or _ur.get("option_type") or _ur.get("cp") or "").upper()[:1]
+                            _k_u = _ur.get("strike") or _ur.get("strike_price") or "-"
+                            _v_u = int(float(_ur.get("volume") or 0))
+                            _oi_u = int(float(_ur.get("open_interest") or 0))
+                            _pr_u = float(_ur.get("total_premium") or _ur.get("premium") or (_v_u * float(_ur.get("last_price") or _ur.get("ask") or 0) * 100.0))
+                            _pr_s = f"${_pr_u/1e6:.2f}M" if _pr_u >= 1e6 else (f"${_pr_u/1e3:.0f}K" if _pr_u >= 1e3 else f"${_pr_u:,.0f}")
+                            _bd_u = float(_ur.get("bid") or 0); _ak_u = float(_ur.get("ask") or 0)
+                            _gx_u = float(_ur.get("GEX_contrib") or 0)
+                            _emo_u = "🟢" if _cp_u == "C" else ("🔴" if _cp_u == "P" else "⚪")
+                            _lines_u.append(f"{_emo_u} {_k_u}{_cp_u} ({_exp_u}) | 거래 {_v_u:,} · OI {_oi_u:,} | {_pr_s} | 호가 ${_bd_u:.2f}/${_ak_u:.2f} | GEX {_gx_u/1e3:+,.0f}K")
                         if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_lines_u)[:3900])[0]:
                             st.toast("✅ UOA 텔레그램 전송 완료!")
-                    st.dataframe(_df_uoa, use_container_width=True, hide_index=True)
+                    st.dataframe(_df_uoa_disp, use_container_width=True, hide_index=True)
 
         with _pt2:
             _gc1, _gc2, _gc3 = st.columns([1.4, 1.4, 1.0])
