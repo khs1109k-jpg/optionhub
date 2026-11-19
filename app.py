@@ -11371,19 +11371,18 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
 
         with _pt2:
             _gc1, _gc2, _gc3 = st.columns([1.4, 1.4, 1.0])
-            _g_basis = _gc1.selectbox("GEX 계산 기준", ["open_interest", "volume", "total_premium"], key="persp_gex_basis")
+            _g_basis = _gc1.selectbox(
+                "GEX / 지표 기준",
+                ["open_interest", "volume", "total_premium", "Underlying Price", "Implied Volatility", "Delta", "Gamma", "Theta", "Vega"],
+                key="persp_gex_basis",
+            )
             _g_rng = _gc2.slider("행사가 범위 (±%)", 0.15, 1.0, 0.35, 0.05, key="persp_gex_rng")
             if _gc3.button("⚡ GEX 조회", type="primary", use_container_width=True, key="btn_persp_run_gex"):
                 st.session_state[f"persp_run_gex_{_p_tk}"] = True
             if st.session_state.get(f"persp_run_gex_{_p_tk}"):
-                _m_g1, _m_g2, _m_g3 = st.columns(3)
-                for _mcol, _bs_n, _bs_lbl in [(_m_g1, "open_interest", "OI 기준 Flip"), (_m_g2, "volume", "거래량 기준 Flip"), (_m_g3, "total_premium", "프리미엄 기준 Flip")]:
-                    _ok_gb, _d_gb, _ = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _bs_n), ("range_pct", str(_g_rng))), _pk_use)
-                    _zl = (_d_gb or {}).get("zero_level") if _ok_gb else None
-                    _mcol.metric(_bs_lbl, f"${float(_zl):,.2f}" if _zl else "-")
-
                 _cmp_all = st.checkbox("📊 3가지 기준(OI · Volume · Total Premium) 동시 비교 + Greeks 지표 보기", value=True, key="persp_gex_cmp_all")
-                _bases_to_run = ["open_interest", "volume", "total_premium"] if _cmp_all else [_g_basis]
+                _persp_valid_bases = ("open_interest", "volume", "total_premium")
+                _bases_to_run = list(_persp_valid_bases) if _cmp_all else ([_g_basis] if _g_basis in _persp_valid_bases else ["open_interest"])
                 _res_3b = {}
                 for _bs in _bases_to_run:
                     _ok_b, _db, _eb = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _bs), ("range_pct", str(_g_rng))), _pk_use)
@@ -11444,8 +11443,10 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                             for r in _top_g
                         ]), hide_index=True, use_container_width=True)
 
-                    # 추가 Greeks & OI/Volume 프로파일 (OptionCharts 스타일)
-                    _ind_sel = st.multiselect("📐 추가 Greeks · OI · Volume 프로파일 오버레이", ["Volume", "Open Interest", "Delta", "Gamma", "IV(%)"], default=["Open Interest", "Volume", "Gamma"], key="persp_gex_inds")
+                    # 추가 Greeks & OI/Volume 프로파일 (OptionCharts 스타일: Volume, OI, Underlying Price, IV, Delta, Gamma, Theta, Vega)
+                    _ind_opts = ["Volume", "Open Interest", "Underlying Price", "Implied Volatility", "Delta", "Gamma", "Theta", "Vega"]
+                    _ind_def = [_g_basis] if _g_basis in _ind_opts else ["Open Interest", "Volume", "Gamma", "Theta", "Vega"]
+                    _ind_sel = st.multiselect("📐 추가 지표 (OptionCharts 스타일: Volume · OI · IV · Delta · Gamma · Theta · Vega)", _ind_opts, default=_ind_def, key="persp_gex_inds")
                     if _ind_sel:
                         _cb_fb = _fetch_live_oi_fallback(_p_tk)
                         _cb_rows = (_cb_fb or {}).get("상세") or []
@@ -11453,16 +11454,40 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                             _dfc_g = pd.DataFrame(_cb_rows)
                             _sp_c = float((_dg or {}).get("spot") or (_cb_fb or {}).get("Spot") or 0)
                             if _sp_c > 0 and "행사가" in _dfc_g.columns:
-                                _dfc_g = _dfc_g[(_dfc_g["행사가"] >= _sp_c * (1 - _g_rng)) & (_dfc_g["행사가"] <= _sp_c * (1 + _g_rng))]
+                                _dfc_g = _dfc_g[(_dfc_g["행사가"] >= _sp_c * (1 - _g_rng)) & (_dfc_g["행사가"] <= _sp_c * (1 + _g_rng))].copy()
                             if not _dfc_g.empty:
-                                _grp_g = _dfc_g.groupby("행사가", as_index=False).agg({"거래량": "sum", "OI": "sum", "Delta": "mean", "Gamma": "mean", "IV(%)": "mean"})
-                                _col_map = {"Volume": ("거래량", "#38bdf8"), "Open Interest": ("OI", "#10b981"), "Delta": ("Delta", "#a855f7"), "Gamma": ("Gamma", "#f59e0b"), "IV(%)": ("IV(%)", "#ef4444")}
+                                _th_l, _vg_l = [], []
+                                for _, _gr in _dfc_g.iterrows():
+                                    _kk = float(_gr.get("행사가", 0) or 0)
+                                    _ivk = max(float(_gr.get("IV(%)", 30) or 30) / 100.0, 0.08)
+                                    _tk_y = max(int(_gr.get("DTE", 7) or 7), 1) / 365.0
+                                    try:
+                                        _sq = math.sqrt(_tk_y)
+                                        _d1 = (math.log(max(_sp_c, 0.01) / max(_kk, 0.01)) + (0.045 + 0.5 * _ivk * _ivk) * _tk_y) / (_ivk * _sq)
+                                        _pdf = math.exp(-0.5 * _d1 * _d1) / math.sqrt(2.0 * math.pi)
+                                        _vega = (_sp_c * _pdf * _sq) / 100.0
+                                        _theta = -(_sp_c * _pdf * _ivk) / (2.0 * _sq) / 365.0
+                                    except Exception:
+                                        _vega, _theta = 0.0, 0.0
+                                    _th_l.append(round(_theta, 4))
+                                    _vg_l.append(round(_vega, 4))
+                                _dfc_g["Theta"] = _th_l
+                                _dfc_g["Vega"] = _vg_l
+                                _grp_g = _dfc_g.groupby("행사가", as_index=False).agg({"거래량": "sum", "OI": "sum", "Delta": "mean", "Gamma": "mean", "IV(%)": "mean", "Theta": "mean", "Vega": "mean"})
+                                _col_map = {
+                                    "Volume": ("거래량", "#38bdf8"), "Open Interest": ("OI", "#10b981"),
+                                    "Implied Volatility": ("IV(%)", "#ef4444"), "Delta": ("Delta", "#a855f7"),
+                                    "Gamma": ("Gamma", "#f59e0b"), "Theta": ("Theta", "#ec4899"), "Vega": ("Vega", "#14b8a6"),
+                                }
                                 _fig_ind = _go_pg.Figure()
                                 for _iname in _ind_sel:
-                                    _cn, _cc = _col_map[_iname]
-                                    if _cn in _grp_g.columns:
-                                        _fig_ind.add_trace(_go_pg.Bar(x=_grp_g["행사가"], y=_grp_g[_cn], name=_iname, marker_color=_cc, opacity=0.75))
-                                _fig_ind.update_layout(title=f"{_p_tk} 행사가별 Greeks · OI · Volume 분포", barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=320, margin=dict(l=16, r=16, t=40, b=20))
+                                    if _iname == "Underlying Price" and _sp_c > 0:
+                                        _fig_ind.add_vline(x=_sp_c, line_color="#ffffff", line_dash="dash", annotation_text=f"Underlying ${_sp_c:,.2f}")
+                                        continue
+                                    _cn, _cc = _col_map.get(_iname, (None, "#cbd5e1"))
+                                    if _cn and _cn in _grp_g.columns:
+                                        _fig_ind.add_trace(_go_pg.Bar(x=_grp_g["행사가"], y=_grp_g[_cn], name=_iname, marker_color=_cc, opacity=0.78))
+                                _fig_ind.update_layout(title=f"{_p_tk} 행사가별 Greeks · OI · Volume · Theta · Vega 분포", barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=340, margin=dict(l=16, r=16, t=40, b=20))
                                 st.plotly_chart(_fig_ind, use_container_width=True, key="persp_gex_ind_chart")
 
                     if st.button("📩 3기준 GEX 브리핑 텔레그램 전송", key="btn_persp_gex_tg"):
