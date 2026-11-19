@@ -12065,10 +12065,201 @@ if nav_menu == "🏆 Top Conviction Ranking":
             render_trend_reversal_card(next(r for r in _all_rev if r["tk"] == _sel_rv_p_tk))
 
 
+def compute_smart_money_streaks(oi_hist_d, raw_flows_l, big_flows_l):
+    dp_path = os.path.expanduser("~/.optionhub_darkpool_prints.json")
+    dp_raw = load_json_file(dp_path, [])
+    dp_by_tk_day = {}
+    if isinstance(dp_raw, list):
+        for _dp in dp_raw:
+            if not isinstance(_dp, dict):
+                continue
+            _dtk = str(_dp.get("ticker", _dp.get("종목", ""))).upper().strip()
+            _ddt = str(_dp.get("date", _dp.get("날짜", "")))[:10]
+            _dcls = str(_dp.get("class", _dp.get("분류", "")))
+            if _dtk and _ddt:
+                _s = 1 if ("매집" in _dcls or "유입" in _dcls) else (-1 if ("차익" in _dcls or "이탈" in _dcls or "매도" in _dcls) else 0)
+                dp_by_tk_day.setdefault((_dtk, _ddt), 0)
+                dp_by_tk_day[(_dtk, _ddt)] += _s
+
+    flow_by_tk_day = {}
+    for _r in (raw_flows_l or []):
+        try:
+            _dt = str(_r[0])[:10]
+            _tk = str(_r[1]).strip().upper()
+            if not _tk or not _dt:
+                continue
+            _cp = str(_r[3]).upper()
+            _sd = str(_r[4]).upper()
+            _typ = str(_r[13] if len(_r) > 13 else "").upper()
+            _pm = parse_prem_usd(_r[14] if len(_r) > 14 else "0")
+            _d = flow_by_tk_day.setdefault(_tk, {}).setdefault(_dt, {"bull": 0.0, "bear": 0.0, "prem": 0.0, "sweep": 0})
+            _d["prem"] += _pm
+            if "SWEEP" in _typ:
+                _d["sweep"] += 1
+            if ("C" in _cp and "A" in _sd) or ("P" in _cp and "B" in _sd):
+                _d["bull"] += _pm
+            else:
+                _d["bear"] += _pm
+        except Exception:
+            pass
+
+    for _bf in (big_flows_l or []):
+        try:
+            if not isinstance(_bf, dict):
+                continue
+            _tk = str(_bf.get("ticker", _bf.get("종목", ""))).upper().strip()
+            _dt = str(_bf.get("date", _bf.get("날짜", "")))[:10]
+            if not _tk or not _dt:
+                continue
+            _pm = float(_bf.get("premium", 0) or 0)
+            _cp = str(_bf.get("cp", "")).upper()
+            _sd = str(_bf.get("side", "")).upper()
+            _d = flow_by_tk_day.setdefault(_tk, {}).setdefault(_dt, {"bull": 0.0, "bear": 0.0, "prem": 0.0, "sweep": 0})
+            _d["prem"] += _pm
+            if "SWEEP" in str(_bf.get("type", "")).upper():
+                _d["sweep"] += 1
+            if ("C" in _cp and "A" in _sd) or ("P" in _cp and "B" in _sd):
+                _d["bull"] += _pm
+            else:
+                _d["bear"] += _pm
+        except Exception:
+            pass
+
+    all_tks = set(flow_by_tk_day.keys()) | set((oi_hist_d or {}).keys())
+    results = []
+    for _tk in sorted(all_tks):
+        _oi_snaps = (oi_hist_d or {}).get(_tk, [])
+        _oi_by_day = {}
+        if isinstance(_oi_snaps, list):
+            for _sn in _oi_snaps:
+                _dk = str(_sn.get("수집시각", ""))[:10]
+                if _dk:
+                    _oi_by_day[_dk] = _sn
+        _f_days = flow_by_tk_day.get(_tk, {})
+        _dp_days = {dt: sc for (t, dt), sc in dp_by_tk_day.items() if t == _tk}
+        _dates = sorted(set(_oi_by_day.keys()) | set(_f_days.keys()) | set(_dp_days.keys()))
+        if not _dates:
+            continue
+
+        _oi_dates_sorted = sorted(_oi_by_day.keys())
+        _daily_signals = []
+        for _d in _dates:
+            _fd = _f_days.get(_d, {"bull": 0.0, "bear": 0.0, "prem": 0.0, "sweep": 0})
+            _oi_delta_c = 0
+            _oi_delta_p = 0
+            if _d in _oi_by_day:
+                _idx_o = _oi_dates_sorted.index(_d)
+                if _idx_o > 0:
+                    _prev_o = _oi_by_day[_oi_dates_sorted[_idx_o - 1]]
+                    _cur_o = _oi_by_day[_d]
+                    _oi_delta_c = int(_cur_o.get("Call_OI", 0) or 0) - int(_prev_o.get("Call_OI", 0) or 0)
+                    _oi_delta_p = int(_cur_o.get("Put_OI", 0) or 0) - int(_prev_o.get("Put_OI", 0) or 0)
+
+            _dp_s = _dp_days.get(_d, 0)
+            _sig = 0
+            _votes_bull = 0
+            _votes_bear = 0
+            if _fd["prem"] > 0:
+                if _fd["bull"] >= _fd["bear"] * 1.1: _votes_bull += 1
+                elif _fd["bear"] >= _fd["bull"] * 1.1: _votes_bear += 1
+            if _oi_delta_c > 0 and _oi_delta_c >= _oi_delta_p: _votes_bull += 1
+            elif _oi_delta_p > _oi_delta_c and _oi_delta_c <= 0: _votes_bear += 1
+            if _dp_s > 0: _votes_bull += 1
+            elif _dp_s < 0: _votes_bear += 1
+
+            if _votes_bull > _votes_bear: _sig = 1
+            elif _votes_bear > _votes_bull: _sig = -1
+
+            _daily_signals.append({
+                "date": _d, "sig": _sig, "prem": _fd["prem"], "sweep": _fd["sweep"],
+                "d_oi": _oi_delta_c - _oi_delta_p, "sources": _votes_bull + _votes_bear
+            })
+
+        _acc_days = 0
+        for _ds in reversed(_daily_signals):
+            if _ds["sig"] == 1: _acc_days += 1
+            else: break
+
+        _dist_days = 0
+        for _ds in reversed(_daily_signals):
+            if _ds["sig"] == -1: _dist_days += 1
+            else: break
+
+        _streak_len = max(_acc_days, _dist_days, 1)
+        _win = _daily_signals[-_streak_len:]
+        _cum_prem = sum(x["prem"] for x in _win)
+        _cum_oi = sum(x["d_oi"] for x in _win)
+        _cum_sweep = sum(x["sweep"] for x in _win)
+        _multi_src = max((x["sources"] for x in _win), default=1)
+
+        _conf = 48 + min(26, max(_acc_days, _dist_days) * 7) + (10 if _multi_src >= 2 else 0) + (8 if _cum_sweep >= 3 else (4 if _cum_sweep >= 1 else 0)) + (7 if _cum_prem >= 5e6 else (4 if _cum_prem >= 1e6 else 0))
+        _conf = min(98, int(round(_conf)))
+
+        _is_alert = (_acc_days >= 3) or (_dist_days >= 3)
+        _alert_txt = "🔥 Smart Money Alert" if _is_alert else "-"
+        if _acc_days >= 3:
+            _verdict = f"🟢 {_acc_days}일 연속 기관 매집"
+        elif _dist_days >= 3:
+            _verdict = f"🔴 {_dist_days}일 연속 기관 청산"
+        elif _acc_days > 0:
+            _verdict = f"🟢 매집 진행 ({_acc_days}일)"
+        elif _dist_days > 0:
+            _verdict = f"🔴 청산 진행 ({_dist_days}일)"
+        else:
+            _verdict = "🟡 중립/관망"
+
+        results.append({
+            "tk": _tk, "alert": _alert_txt, "is_alert": _is_alert,
+            "acc_days": _acc_days, "dist_days": _dist_days,
+            "conf": _conf, "cum_prem": _cum_prem, "cum_oi": _cum_oi,
+            "cum_sweep": _cum_sweep, "verdict": _verdict,
+        })
+
+    results.sort(key=lambda r: (1 if r["is_alert"] else 0, max(r["acc_days"], r["dist_days"]), r["cum_prem"]), reverse=True)
+    return results
+
+
 if nav_menu == "🏦 Smart Money Tracker":
-    st.title("🏦 Smart Money Tracker (기관 매집 자동 탐지)")
-    st.caption("Call OI 증가 · Above Ask · Sweep · Premium > $5M · DTE 30일+ · Dark Pool 동반 6대 지표 기반 기관 매집 탐지")
-    _sm_all = compute_smart_money_tracker(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+    st.title("🏦 Smart Money Tracker (연속 기관 매집·청산 추적)")
+    st.caption("OI · Flow · Dark Pool 3대 데이터를 결합해 기관이 며칠째 같은 방향으로 포지션을 구축·청산하는지 추적합니다. (3일 이상 지속 시 🔥 Smart Money Alert)")
+
+    _oi_sm_d = load_json_file(OI_PATH, {})
+    _bf_sm_l = load_json_file(BIG_FLOWS_PATH, [])
+    _streaks = compute_smart_money_streaks(_oi_sm_d, all_raw_flows, _bf_sm_l)
+    _alerts_3d = [r for r in _streaks if r["is_alert"]]
+
+    if _alerts_3d:
+        st.error(f"🔥 **Smart Money Alert — 3일 이상 연속 기관 포지션 포착 ({len(_alerts_3d)}개 종목)**")
+        _al_cols = st.columns(min(len(_alerts_3d), 4))
+        for _ac, _ar in zip(_al_cols, _alerts_3d[:4]):
+            _ac.metric(
+                f"🔥 {_ar['tk']}",
+                _ar["verdict"],
+                f"신뢰도 {_ar['conf']}% · ${_ar['cum_prem']/1e6:.1f}M · Sweep {_ar['cum_sweep']}건",
+            )
+    else:
+        st.info("현재 3일 이상 연속 매집/청산 조건(🔥 Smart Money Alert)에 도달한 종목이 없습니다. (다일간 Flow/OI 데이터가 쌓이면 자동 경보가 생성됩니다.)")
+
+    if _streaks:
+        st.subheader("📊 기관 연속 매집·청산 추적 테이블")
+        st.dataframe(pd.DataFrame([
+            {
+                "종목": r["tk"],
+                "알림": r["alert"],
+                "기관 매집일수": f"{r['acc_days']}일",
+                "기관 청산일수": f"{r['dist_days']}일",
+                "신뢰도": f"{r['conf']}%",
+                "누적 프리미엄": f"${r['cum_prem']/1e6:.2f}M" if r["cum_prem"] >= 1e6 else f"${r['cum_prem']/1e3:.0f}K",
+                "누적 OI": f"{r['cum_oi']:+,}",
+                "누적 Sweep": f"{r['cum_sweep']}건",
+                "판정": r["verdict"],
+            }
+            for r in _streaks[:30]
+        ]), hide_index=True, use_container_width=True)
+
+    st.divider()
+    st.subheader("🎯 금일 6대 지표 기관 매집 스코어")
+    _sm_all = compute_smart_money_tracker(_oi_sm_d, all_raw_flows, _bf_sm_l)
     _fc1, _fc2, _fc3, _fc4 = st.columns(4)
     _f_prem5 = _fc1.checkbox("Premium ≥ $5M만", value=False, key="sm_f_prem5")
     _f_dte30 = _fc2.checkbox("DTE 30일 이상만", value=False, key="sm_f_dte30")
@@ -12093,8 +12284,12 @@ if nav_menu == "🏦 Smart Money Tracker":
             }
             for i, r in enumerate(_sm_filt, 1)
         ]), hide_index=True, use_container_width=True)
-        if st.button("📩 Smart Money TOP 5 텔레그램 전송", type="primary", key="btn_sm_page_tg"):
-            _sm_p_txt = "🔥 *[오늘의 기관 매집 TOP 5]*\n\n" + "\n".join(
+        if st.button("📩 Smart Money Alert · TOP 5 텔레그램 전송", type="primary", key="btn_sm_page_tg"):
+            _al_lines = ["🔥 *[Smart Money Alert (3일+ 연속)]*"] + [
+                f"• *{a['tk']}*: {a['verdict']} | 신뢰도 {a['conf']}% | 누적 ${a['cum_prem']/1e6:.1f}M | Sweep {a['cum_sweep']}건"
+                for a in _alerts_3d[:5]
+            ] if _alerts_3d else []
+            _sm_p_txt = ("\n".join(_al_lines) + "\n\n" if _al_lines else "") + "🏦 *[오늘의 기관 매집 TOP 5]*\n\n" + "\n".join(
                 f"{i}. *{r['tk']}* | 매집점수 {r['score']} | {r['tags_str']}\n   ↳ {r['interp']}"
                 for i, r in enumerate(_sm_filt[:5], 1)
             )
