@@ -11457,47 +11457,75 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             _m3.metric("Call Wall / Put Wall", f"${_cw_k:g} / ${_pw_k:g}")
             _m4.metric(f"최대 집중 행사가", f"${float(_pk_row['행사가']):g}", f"{float(_pk_row[_val_col]):+,.3f}")
 
-            # 1) Perspicium 스타일: Net + Call/Put Wall 하이라이트 + Cumulative 선 오버레이
+            # 1) Perspicium 스타일: Net + Call/Put Wall 하이라이트 + Cumulative 선 오버레이 (대형 풀폭)
             _bar_cols = [("#ef4444" if abs(float(k) - _cw_k) < 0.01 else ("#10b981" if abs(float(k) - _pw_k) < 0.01 else "#db2777")) for k in _grp_sg["행사가"]]
             _fig_sg = _mk_sub_sg(specs=[[{"secondary_y": True}]])
             _fig_sg.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg[_val_col], name=f"Net {_metric_nm} (빨강=CW · 초록=PW)", marker_color=_bar_cols), secondary_y=False)
-            _fig_sg.add_trace(_go_sg.Scatter(x=_grp_sg["행사가"], y=_grp_sg["CumVal"], mode="lines", name=f"Cumulative {_metric_nm}", line=dict(color="#f8fafc", width=2)), secondary_y=True)
+            _fig_sg.add_trace(_go_sg.Scatter(x=_grp_sg["행사가"], y=_grp_sg["CumVal"], mode="lines", name=f"Cumulative {_metric_nm}", line=dict(color="#f8fafc", width=2.2)), secondary_y=True)
             _fig_sg.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
-            _fig_sg.update_layout(title=f"{_tk_g} Net {_metric_nm} Exposure Profile (Call/Put Wall · Cumulative)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=370, margin=dict(l=16, r=16, t=42, b=20), legend=dict(orientation="h", y=1.12))
+            _fig_sg.update_layout(title=f"{_tk_g} Net {_metric_nm} Exposure Profile (Call/Put Wall · Cumulative)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=480, margin=dict(l=20, r=20, t=64, b=24), legend=dict(orientation="h", y=1.08, x=0.0))
             st.plotly_chart(_fig_sg, use_container_width=True, key=f"sg_chart_{_key_suf}")
 
-            # 2) Put & Call 분리 + Delta-Weighted Exposure 나란히 표시
-            _pc_col, _dw_col = st.columns(2)
-            with _pc_col:
-                _c_by_k = _df_sg[_df_sg["구분"] == "Call"].groupby("행사가")[_val_col].agg(_agg_fn)
-                _p_by_k = _df_sg[_df_sg["구분"] == "Put"].groupby("행사가")[_val_col].agg(_agg_fn)
-                _fig_pc = _go_sg.Figure()
-                _fig_pc.add_trace(_go_sg.Bar(x=_c_by_k.index, y=_c_by_k.values, name=f"Call {_metric_nm}", marker_color="#10b981"))
-                _fig_pc.add_trace(_go_sg.Bar(x=_p_by_k.index, y=_p_by_k.values, name=f"Put {_metric_nm}", marker_color="#ef4444"))
-                _fig_pc.add_vline(x=_sp_sg, line_color="#ffffff", line_dash="dash")
-                _fig_pc.update_layout(title=f"Put & Call {_metric_nm} Exposure", barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=300, margin=dict(l=12, r=12, t=38, b=20))
-                st.plotly_chart(_fig_pc, use_container_width=True, key=f"sg_pc_{_key_suf}")
-            with _dw_col:
-                _fig_dw = _go_sg.Figure()
-                _fig_dw.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg["DW_Val"], name=f"Delta-Weighted {_metric_nm}", marker_color="#38bdf8"))
-                _fig_dw.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
-                _fig_dw.update_layout(title=f"Delta-Weighted {_metric_nm} Exposure", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=300, margin=dict(l=12, r=12, t=38, b=20))
-                st.plotly_chart(_fig_dw, use_container_width=True, key=f"sg_dw_{_key_suf}")
+            # 2) Put vs Call Exposure (대형 풀폭, Call + / Put - 적층)
+            _c_by_k = _df_sg[_df_sg["구분"] == "Call"].groupby("행사가")[_val_col].agg(_agg_fn)
+            _p_by_k = _df_sg[_df_sg["구분"] == "Put"].groupby("행사가")[_val_col].agg(_agg_fn)
+            _fig_pc = _go_sg.Figure()
+            _fig_pc.add_trace(_go_sg.Bar(x=_c_by_k.index, y=_c_by_k.values, name=f"Call {_metric_nm} Exposure", marker_color="#10b981"))
+            _fig_pc.add_trace(_go_sg.Bar(x=_p_by_k.index, y=_p_by_k.values, name=f"Put {_metric_nm} Exposure", marker_color="#ef4444"))
+            _fig_pc.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
+            _fig_pc.update_layout(title=f"Put vs Call {_metric_nm} Exposure", barmode="relative", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=420, margin=dict(l=20, r=20, t=56, b=24), legend=dict(orientation="h", y=1.08, x=0.0))
+            st.plotly_chart(_fig_pc, use_container_width=True, key=f"sg_pc_{_key_suf}")
+
+            # 3) Delta-Weighted Exposure (풀폭)
+            _fig_dw = _go_sg.Figure()
+            _fig_dw.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg["DW_Val"], name=f"Delta-Weighted {_metric_nm}", marker_color="#38bdf8"))
+            _fig_dw.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
+            _fig_dw.update_layout(title=f"Delta-Weighted {_metric_nm} Exposure", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=360, margin=dict(l=20, r=20, t=48, b=24))
+            st.plotly_chart(_fig_dw, use_container_width=True, key=f"sg_dw_{_key_suf}")
 
             _top15_sg = _grp_sg.reindex(_grp_sg[_val_col].abs().sort_values(ascending=False).index).head(15)
             st.dataframe(_top15_sg, hide_index=True, use_container_width=True)
-            if st.button(f"📩 {_tk_g} {_metric_nm} 텔레그램 전송", type="primary", key=f"btn_sg_tg_{_key_suf}"):
+            if st.button(f"📩 {_tk_g} {_metric_nm} 그래프+요약 텔레그램 전송", type="primary", key=f"btn_sg_tg_{_key_suf}"):
                 _exp_txt = ", ".join(_sel_exp_lbls) if _sel_exp_lbls else "전체 만기"
                 _top5_txt = "\n".join(f"• ${float(r['행사가']):g}: {float(r[_val_col]):+,.3f} (OI {int(r['OI']):,})" for _, r in _top15_sg.head(5).iterrows())
                 _sg_msg = (
-                    f"⚡ *[{_tk_g} {_metric_nm} 분석]*\n"
+                    f"⚡ [{_tk_g} {_metric_nm} Exposure]\n"
                     f"만기: {_exp_txt}\n"
                     f"현재가: ${_sp_sg:,.2f} | {'Net' if _agg_fn=='sum' else '평균'} {_metric_nm}: {_tot_v:+,.3f}\n"
                     f"Call Wall: ${_cw_k:g} | Put Wall: ${_pw_k:g} | 최대 집중: ${float(_pk_row['행사가']):g}\n\n"
-                    f"*상위 5개 행사가*\n{_top5_txt}"
+                    f"상위 5개 행사가:\n{_top5_txt}"
                 )
-                if send_telegram_msg(tg_token, tg_chat_id, _sg_msg)[0]:
-                    st.toast(f"✅ {_tk_g} {_metric_nm} 텔레그램 전송 완료!")
+                _png_sg = None
+                try:
+                    import io as _io_sg
+                    import matplotlib
+                    matplotlib.use("Agg")
+                    import matplotlib.pyplot as _plt_sg
+                    _fig_m, _ax1 = _plt_sg.subplots(figsize=(10, 4.8), facecolor="#07111e")
+                    _ax1.set_facecolor("#0b1626")
+                    _xs = [float(k) for k in _grp_sg["행사가"]]
+                    _ys = [float(v) for v in _grp_sg[_val_col]]
+                    _ax1.bar(_xs, _ys, width=max(0.4, (max(_xs) - min(_xs)) / max(len(_xs) * 1.4, 10)), color=_bar_cols, alpha=0.92)
+                    _ax1.axhline(0, color="#334155", linewidth=0.9)
+                    _ax1.axvline(_sp_sg, color="#ef4444", linestyle="--", linewidth=1.4, label=f"Spot ${_sp_sg:,.2f}")
+                    _ax2 = _ax1.twinx()
+                    _ax2.plot(_xs, _grp_sg["CumVal"].tolist(), color="#f8fafc", linewidth=2.0, label="Cumulative")
+                    _ax1.set_title(f"{_tk_g} Net {_metric_nm} Exposure ({_exp_txt})", color="#f8fafc", fontsize=12, fontweight="bold")
+                    _ax1.tick_params(colors="#cbd5e1"); _ax2.tick_params(colors="#cbd5e1")
+                    for _spn in _ax1.spines.values(): _spn.set_color("#1e293b")
+                    for _spn in _ax2.spines.values(): _spn.set_color("#1e293b")
+                    _buf_sg = _io_sg.BytesIO()
+                    _plt_sg.tight_layout()
+                    _fig_m.savefig(_buf_sg, format="png", dpi=150, facecolor="#07111e")
+                    _plt_sg.close(_fig_m)
+                    _png_sg = _buf_sg.getvalue()
+                except Exception:
+                    _png_sg = None
+                if _png_sg:
+                    send_telegram_photo_bytes(tg_token, tg_chat_id, _png_sg, _sg_msg)
+                    st.toast(f"✅ {_tk_g} {_metric_nm} 그래프+요약 텔레그램 전송 완료!")
+                elif send_telegram_msg(tg_token, tg_chat_id, _sg_msg)[0]:
+                    st.toast(f"✅ {_tk_g} {_metric_nm} 요약 텔레그램 전송 완료!")
 
         with _pt_g:
             _render_single_greek_tab(_p_tk, "GEX", "#10b981", "gex")
