@@ -11328,18 +11328,25 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
 
         def _render_single_greek_tab(_tk_g, _metric_nm, _col_hex, _key_suf):
             import plotly.graph_objects as _go_sg
-            _rng_sg = st.slider("행사가 범위 (±%)", 0.15, 0.80, 0.30, 0.05, key=f"sg_rng_{_key_suf}")
+            from plotly.subplots import make_subplots as _mk_sub_sg
             _cb_sg = _fetch_live_oi_fallback(_tk_g)
             _rows_sg = (_cb_sg or {}).get("상세") or []
             _sp_sg = float((_cb_sg or {}).get("Spot") or 0)
             if not _rows_sg or _sp_sg <= 0:
                 st.warning(f"{_tk_g} 옵션 체인 데이터를 불러오지 못했습니다.")
                 return
-            _df_sg = pd.DataFrame(_rows_sg)
+            _df_sg_all = pd.DataFrame(_rows_sg)
+            _avail_exps = sorted(_df_sg_all["만기"].astype(str).unique().tolist()) if "만기" in _df_sg_all.columns else []
+            _sg_c1, _sg_c2 = st.columns([1.8, 1.2])
+            _sel_exps = _sg_c1.multiselect("📅 만기(기간) 선택 (비우면 전체)", _avail_exps, default=_avail_exps[:1] if _avail_exps else [], key=f"sg_exp_{_key_suf}")
+            _rng_sg = _sg_c2.slider("행사가 범위 (±%)", 0.10, 0.80, 0.15, 0.05, key=f"sg_rng_{_key_suf}")
+            _df_sg = _df_sg_all.copy()
+            if _sel_exps and "만기" in _df_sg.columns:
+                _df_sg = _df_sg[_df_sg["만기"].astype(str).isin(_sel_exps)]
             if "행사가" in _df_sg.columns:
                 _df_sg = _df_sg[(_df_sg["행사가"] >= _sp_sg * (1 - _rng_sg)) & (_df_sg["행사가"] <= _sp_sg * (1 + _rng_sg))].copy()
             if _df_sg.empty:
-                st.info("선택한 범위 내 행사가가 없습니다.")
+                st.info("선택한 기간/범위 내 행사가가 없습니다.")
                 return
             if _metric_nm in ("Theta", "Vega"):
                 _vals_tv = []
@@ -11358,21 +11365,49 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                 _df_sg[_metric_nm] = _vals_tv
             _val_col = {"GEX": "GEX($M)", "Delta": "DEX($M)", "Gamma": "Gamma", "Theta": "Theta", "Vega": "Vega"}[_metric_nm]
             _agg_fn = "sum" if _metric_nm in ("GEX", "Delta") else "mean"
-            _grp_sg = _df_sg.groupby("행사가", as_index=False).agg({_val_col: _agg_fn, "OI": "sum", "거래량": "sum"})
+            _df_sg["DW_Val"] = pd.to_numeric(_df_sg[_val_col], errors="coerce").fillna(0.0) * pd.to_numeric(_df_sg.get("Delta", 0), errors="coerce").fillna(0.0).abs()
+            _grp_sg = _df_sg.groupby("행사가", as_index=False).agg({_val_col: _agg_fn, "DW_Val": _agg_fn, "OI": "sum", "거래량": "sum"}).sort_values("행사가")
+            _grp_sg["CumVal"] = _grp_sg[_val_col].cumsum()
+            _c_grp = _df_sg[_df_sg["구분"] == "Call"].groupby("행사가")["OI"].sum()
+            _p_grp = _df_sg[_df_sg["구분"] == "Put"].groupby("행사가")["OI"].sum()
+            _cw_k = float(_c_grp.idxmax()) if not _c_grp.empty else 0.0
+            _pw_k = float(_p_grp.idxmax()) if not _p_grp.empty else 0.0
+
             _tot_v = float(_grp_sg[_val_col].sum()) if _agg_fn == "sum" else float(_grp_sg[_val_col].mean())
             _pk_row = _grp_sg.iloc[_grp_sg[_val_col].abs().argmax()]
-            _m1, _m2, _m3 = st.columns(3)
+            _m1, _m2, _m3, _m4 = st.columns(4)
             _m1.metric(f"{_tk_g} 현재가", f"${_sp_sg:,.2f}")
             _m2.metric(f"{'Net ' if _agg_fn=='sum' else '평균 '}{_metric_nm}", f"{_tot_v:+,.3f}" + ("M" if _metric_nm in ("GEX", "Delta") else ""))
-            _m3.metric(f"최대 집중 행사가", f"${float(_pk_row['행사가']):g}", f"{float(_pk_row[_val_col]):+,.3f}")
-            _fig_sg = _go_sg.Figure()
-            _fig_sg.add_trace(_go_sg.Bar(
-                x=_grp_sg["행사가"], y=_grp_sg[_val_col], name=_metric_nm,
-                marker_color=(["#10b981" if float(v) >= 0 else "#ef4444" for v in _grp_sg[_val_col]] if _metric_nm in ("GEX", "Delta") else _col_hex),
-            ))
-            _fig_sg.add_vline(x=_sp_sg, line_color="#ffffff", line_dash="dash", annotation_text=f"Spot ${_sp_sg:,.2f}")
-            _fig_sg.update_layout(title=f"{_tk_g} 행사가별 {_metric_nm} 단독 분포", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=360, margin=dict(l=16, r=16, t=40, b=20))
+            _m3.metric("Call Wall / Put Wall", f"${_cw_k:g} / ${_pw_k:g}")
+            _m4.metric(f"최대 집중 행사가", f"${float(_pk_row['행사가']):g}", f"{float(_pk_row[_val_col]):+,.3f}")
+
+            # 1) Perspicium 스타일: Net + Call/Put Wall 하이라이트 + Cumulative 선 오버레이
+            _bar_cols = [("#ef4444" if abs(float(k) - _cw_k) < 0.01 else ("#10b981" if abs(float(k) - _pw_k) < 0.01 else "#db2777")) for k in _grp_sg["행사가"]]
+            _fig_sg = _mk_sub_sg(specs=[[{"secondary_y": True}]])
+            _fig_sg.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg[_val_col], name=f"Net {_metric_nm} (빨강=CW · 초록=PW)", marker_color=_bar_cols), secondary_y=False)
+            _fig_sg.add_trace(_go_sg.Scatter(x=_grp_sg["행사가"], y=_grp_sg["CumVal"], mode="lines", name=f"Cumulative {_metric_nm}", line=dict(color="#f8fafc", width=2)), secondary_y=True)
+            _fig_sg.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
+            _fig_sg.update_layout(title=f"{_tk_g} Net {_metric_nm} Exposure Profile (Call/Put Wall · Cumulative)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=370, margin=dict(l=16, r=16, t=42, b=20), legend=dict(orientation="h", y=1.12))
             st.plotly_chart(_fig_sg, use_container_width=True, key=f"sg_chart_{_key_suf}")
+
+            # 2) Put & Call 분리 + Delta-Weighted Exposure 나란히 표시
+            _pc_col, _dw_col = st.columns(2)
+            with _pc_col:
+                _c_by_k = _df_sg[_df_sg["구분"] == "Call"].groupby("행사가")[_val_col].agg(_agg_fn)
+                _p_by_k = _df_sg[_df_sg["구분"] == "Put"].groupby("행사가")[_val_col].agg(_agg_fn)
+                _fig_pc = _go_sg.Figure()
+                _fig_pc.add_trace(_go_sg.Bar(x=_c_by_k.index, y=_c_by_k.values, name=f"Call {_metric_nm}", marker_color="#10b981"))
+                _fig_pc.add_trace(_go_sg.Bar(x=_p_by_k.index, y=_p_by_k.values, name=f"Put {_metric_nm}", marker_color="#ef4444"))
+                _fig_pc.add_vline(x=_sp_sg, line_color="#ffffff", line_dash="dash")
+                _fig_pc.update_layout(title=f"Put & Call {_metric_nm} Exposure", barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=300, margin=dict(l=12, r=12, t=38, b=20))
+                st.plotly_chart(_fig_pc, use_container_width=True, key=f"sg_pc_{_key_suf}")
+            with _dw_col:
+                _fig_dw = _go_sg.Figure()
+                _fig_dw.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg["DW_Val"], name=f"Delta-Weighted {_metric_nm}", marker_color="#38bdf8"))
+                _fig_dw.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
+                _fig_dw.update_layout(title=f"Delta-Weighted {_metric_nm} Exposure", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=300, margin=dict(l=12, r=12, t=38, b=20))
+                st.plotly_chart(_fig_dw, use_container_width=True, key=f"sg_dw_{_key_suf}")
+
             st.dataframe(_grp_sg.reindex(_grp_sg[_val_col].abs().sort_values(ascending=False).index).head(15), hide_index=True, use_container_width=True)
 
         with _pt_g:
