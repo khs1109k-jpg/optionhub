@@ -11382,28 +11382,96 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                     _zl = (_d_gb or {}).get("zero_level") if _ok_gb else None
                     _mcol.metric(_bs_lbl, f"${float(_zl):,.2f}" if _zl else "-")
 
-                _ok_g, _dg, _eg = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _g_basis), ("range_pct", str(_g_rng))), _pk_use)
-                if not _ok_g:
-                    st.warning(f"GEX 조회 실패: {_eg}")
+                _cmp_all = st.checkbox("📊 3가지 기준(OI · Volume · Total Premium) 동시 비교 + Greeks 지표 보기", value=True, key="persp_gex_cmp_all")
+                _bases_to_run = ["open_interest", "volume", "total_premium"] if _cmp_all else [_g_basis]
+                _res_3b = {}
+                for _bs in _bases_to_run:
+                    _ok_b, _db, _eb = _perspicium_get("/greeks/gex", (("ticker", _p_tk), ("basis", _bs), ("range_pct", str(_g_rng))), _pk_use)
+                    if _ok_b and _db:
+                        _res_3b[_bs] = _db
+                if not _res_3b:
+                    st.warning("GEX 조회 실패: Perspicium 응답을 받지 못했습니다.")
                 else:
+                    import plotly.graph_objects as _go_pg
+                    _b_labels = {"open_interest": "OI 기준", "volume": "Volume 기준", "total_premium": "Total Premium 기준"}
+                    _b_cols = st.columns(len(_res_3b))
+                    for _bc, (_bs, _db) in zip(_b_cols, _res_3b.items()):
+                        _s_arr = ((_db or {}).get("series") or {}).get("net") or []
+                        _tot_g = sum(float(x.get("value", 0) or 0) for x in _s_arr)
+                        _z_lv = _db.get("zero_level")
+                        _sp_lv = _db.get("spot")
+                        _hs = _db.get("highlight_strikes") or {}
+                        with _bc.container(border=True):
+                            st.metric(_b_labels.get(_bs, _bs), f"{_tot_g:+,.2f}", f"Flip ${float(_z_lv):,.2f}" if _z_lv else (f"Spot ${float(_sp_lv):,.2f}" if _sp_lv else "-"))
+                            if _hs:
+                                st.caption(" · ".join(f"{k}: {v}" for k, v in list(_hs.items())[:4]))
+
+                    _dg = _res_3b.get(_g_basis) or next(iter(_res_3b.values()))
                     _net_arr = ((_dg or {}).get("series") or {}).get("net") or []
                     if _net_arr:
                         _df_gn = pd.DataFrame(_net_arr)
-                        import plotly.graph_objects as _go_pg
                         _fg_p = _go_pg.Figure()
                         _fg_p.add_trace(_go_pg.Bar(
                             x=_df_gn["strike"], y=_df_gn["value"],
                             marker_color=["#10b981" if float(v) >= 0 else "#ef4444" for v in _df_gn["value"]],
-                            name="Net GEX"
+                            name=f"Net GEX ({_b_labels.get(_g_basis, _g_basis)})"
                         ))
+                        if len(_res_3b) > 1:
+                            _line_cols = {"open_interest": "#38bdf8", "volume": "#f59e0b", "total_premium": "#a855f7"}
+                            for _bs2, _db2 in _res_3b.items():
+                                if _bs2 == _g_basis:
+                                    continue
+                                _arr2 = ((_db2 or {}).get("series") or {}).get("net") or []
+                                if _arr2:
+                                    _df2 = pd.DataFrame(_arr2)
+                                    _fg_p.add_trace(_go_pg.Scatter(x=_df2["strike"], y=_df2["value"], mode="lines", name=_b_labels.get(_bs2, _bs2), line=dict(color=_line_cols.get(_bs2, "#cbd5e1"), width=2)))
                         if (_dg or {}).get("spot"):
                             _fg_p.add_vline(x=float(_dg["spot"]), line_color="#ffffff", line_dash="solid", annotation_text=f"Spot ${_dg['spot']:,.2f}")
                         if (_dg or {}).get("zero_level"):
                             _fg_p.add_vline(x=float(_dg["zero_level"]), line_color="#fbbf24", line_dash="dash", annotation_text=f"Flip ${_dg['zero_level']:,.2f}")
-                        _fg_p.update_layout(template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=380, margin=dict(l=16, r=16, t=35, b=20))
+                        _fg_p.update_layout(title=f"{_p_tk} 3기준 GEX 비교 차트", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=390, margin=dict(l=16, r=16, t=40, b=20))
                         st.plotly_chart(_fg_p, use_container_width=True, key="persp_gex_chart")
-                    if (_dg or {}).get("highlight_strikes"):
-                        st.json(_dg["highlight_strikes"])
+
+                        _sp_g = float((_dg or {}).get("spot") or 0)
+                        _top_g = sorted(_net_arr, key=lambda r: abs(float(r.get("value", 0) or 0)), reverse=True)[:12]
+                        st.dataframe(pd.DataFrame([
+                            {
+                                "행사가": f"${float(r['strike']):g}",
+                                "GEX 값": round(float(r["value"]), 3),
+                                "레짐": "🟢 Positive (지지/억제)" if float(r["value"]) >= 0 else "🔴 Negative (변동성 확대)",
+                                "Spot 대비": f"{((float(r['strike']) - _sp_g) / _sp_g * 100):+.1f}%" if _sp_g > 0 else "-",
+                            }
+                            for r in _top_g
+                        ]), hide_index=True, use_container_width=True)
+
+                    # 추가 Greeks & OI/Volume 프로파일 (OptionCharts 스타일)
+                    _ind_sel = st.multiselect("📐 추가 Greeks · OI · Volume 프로파일 오버레이", ["Volume", "Open Interest", "Delta", "Gamma", "IV(%)"], default=["Open Interest", "Volume", "Gamma"], key="persp_gex_inds")
+                    if _ind_sel:
+                        _cb_fb = _fetch_live_oi_fallback(_p_tk)
+                        _cb_rows = (_cb_fb or {}).get("상세") or []
+                        if _cb_rows:
+                            _dfc_g = pd.DataFrame(_cb_rows)
+                            _sp_c = float((_dg or {}).get("spot") or (_cb_fb or {}).get("Spot") or 0)
+                            if _sp_c > 0 and "행사가" in _dfc_g.columns:
+                                _dfc_g = _dfc_g[(_dfc_g["행사가"] >= _sp_c * (1 - _g_rng)) & (_dfc_g["행사가"] <= _sp_c * (1 + _g_rng))]
+                            if not _dfc_g.empty:
+                                _grp_g = _dfc_g.groupby("행사가", as_index=False).agg({"거래량": "sum", "OI": "sum", "Delta": "mean", "Gamma": "mean", "IV(%)": "mean"})
+                                _col_map = {"Volume": ("거래량", "#38bdf8"), "Open Interest": ("OI", "#10b981"), "Delta": ("Delta", "#a855f7"), "Gamma": ("Gamma", "#f59e0b"), "IV(%)": ("IV(%)", "#ef4444")}
+                                _fig_ind = _go_pg.Figure()
+                                for _iname in _ind_sel:
+                                    _cn, _cc = _col_map[_iname]
+                                    if _cn in _grp_g.columns:
+                                        _fig_ind.add_trace(_go_pg.Bar(x=_grp_g["행사가"], y=_grp_g[_cn], name=_iname, marker_color=_cc, opacity=0.75))
+                                _fig_ind.update_layout(title=f"{_p_tk} 행사가별 Greeks · OI · Volume 분포", barmode="group", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=320, margin=dict(l=16, r=16, t=40, b=20))
+                                st.plotly_chart(_fig_ind, use_container_width=True, key="persp_gex_ind_chart")
+
+                    if st.button("📩 3기준 GEX 브리핑 텔레그램 전송", key="btn_persp_gex_tg"):
+                        _g_tg = f"⚡ *[{_p_tk} 3기준 GEX 비교]*\n" + "\n".join(
+                            f"• {_b_labels.get(_bs, _bs)}: Net {sum(float(x.get('value',0) or 0) for x in ((_db or {}).get('series') or {}).get('net') or []):+,.2f} | Flip ${_db.get('zero_level', '-')}"
+                            for _bs, _db in _res_3b.items()
+                        )
+                        if send_telegram_msg(tg_token, tg_chat_id, _g_tg)[0]:
+                            st.toast("✅ 3기준 GEX 브리핑 텔레그램 전송 완료!")
             else:
                 st.info("우측 `⚡ GEX 조회` 버튼을 누르면 3가지 기준 GEX를 불러옵니다.")
 
