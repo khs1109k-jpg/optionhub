@@ -8097,6 +8097,16 @@ def get_moomoo_live_snapshot(tk):
             pass
         from moomoo import OpenQuoteContext, SubType, RET_OK
         qctx = OpenQuoteContext(host="10.0.0.42", port=11111)
+        try:
+            _rs_px, _dfs_px = qctx.get_market_snapshot([sym])
+            if _rs_px == RET_OK and _dfs_px is not None and not _dfs_px.empty:
+                _pr0 = _dfs_px.iloc[0]
+                for _pk in ("overnight_price", "after_price", "pre_price", "last_price"):
+                    _pv = float(_pr0.get(_pk, 0) or 0)
+                    if _pv > 0:
+                        out["px"] = round(_pv, 2); out["ok"] = True; break
+        except Exception:
+            pass
         qctx.subscribe([sym], [SubType.ORDER_BOOK, SubType.TICKER], subscribe_push=False)
         r_ob, df_ob = qctx.get_order_book(sym, num=10)
         if r_ob == RET_OK and isinstance(df_ob, dict):
@@ -11463,24 +11473,24 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             _m3.metric("Call Wall / Put Wall", f"${_cw_k:g} / ${_pw_k:g}")
             _m4.metric(f"최대 집중 행사가", f"${float(_pk_row['행사가']):g}", f"{float(_pk_row[_val_col]):+,.3f}")
 
-            # 1) Perspicium 스타일: Net + Call/Put Wall 하이라이트 + Cumulative 선 오버레이 (대형 풀폭)
-            _bar_cols = [("#ef4444" if abs(float(k) - _cw_k) < 0.01 else ("#10b981" if abs(float(k) - _pw_k) < 0.01 else "#db2777")) for k in _grp_sg["행사가"]]
-            _fig_sg = _mk_sub_sg(specs=[[{"secondary_y": True}]])
-            _fig_sg.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg[_val_col], name=f"Net {_metric_nm} (빨강=CW · 초록=PW)", marker_color=_bar_cols), secondary_y=False)
-            _fig_sg.add_trace(_go_sg.Scatter(x=_grp_sg["행사가"], y=_grp_sg["CumVal"], mode="lines", name=f"Cumulative {_metric_nm}", line=dict(color="#f8fafc", width=2.2)), secondary_y=True)
-            _fig_sg.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
-            _fig_sg.update_layout(title=f"{_tk_g} Net {_metric_nm} Exposure Profile (Call/Put Wall · Cumulative)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=480, margin=dict(l=20, r=20, t=64, b=24), legend=dict(orientation="h", y=1.08, x=0.0))
-            st.plotly_chart(_fig_sg, use_container_width=True, key=f"sg_chart_{_key_suf}")
-
-            # 2) Put vs Call Exposure (대형 풀폭, Call + / Put - 적층)
+            # 1) Put vs Call Exposure (제일 위 · 대형 풀폭, Call + / Put - 적층)
             _c_by_k = _df_sg[_df_sg["구분"] == "Call"].groupby("행사가")[_val_col].agg(_agg_fn)
             _p_by_k = _df_sg[_df_sg["구분"] == "Put"].groupby("행사가")[_val_col].agg(_agg_fn)
             _fig_pc = _go_sg.Figure()
             _fig_pc.add_trace(_go_sg.Bar(x=_c_by_k.index, y=_c_by_k.values, name=f"Call {_metric_nm} Exposure", marker_color="#10b981"))
             _fig_pc.add_trace(_go_sg.Bar(x=_p_by_k.index, y=_p_by_k.values, name=f"Put {_metric_nm} Exposure", marker_color="#ef4444"))
             _fig_pc.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
-            _fig_pc.update_layout(title=f"Put vs Call {_metric_nm} Exposure", barmode="relative", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=420, margin=dict(l=20, r=20, t=56, b=24), legend=dict(orientation="h", y=1.08, x=0.0))
+            _fig_pc.update_layout(title=f"{_tk_g} Put vs Call {_metric_nm} Exposure", barmode="relative", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=480, margin=dict(l=20, r=20, t=64, b=24), legend=dict(orientation="h", y=1.08, x=0.0))
             st.plotly_chart(_fig_pc, use_container_width=True, key=f"sg_pc_{_key_suf}")
+
+            # 2) Perspicium 스타일: Net + Call/Put Wall 하이라이트 + Cumulative 선 오버레이
+            _bar_cols = [("#ef4444" if abs(float(k) - _cw_k) < 0.01 else ("#10b981" if abs(float(k) - _pw_k) < 0.01 else "#db2777")) for k in _grp_sg["행사가"]]
+            _fig_sg = _mk_sub_sg(specs=[[{"secondary_y": True}]])
+            _fig_sg.add_trace(_go_sg.Bar(x=_grp_sg["행사가"], y=_grp_sg[_val_col], name=f"Net {_metric_nm} (빨강=CW · 초록=PW)", marker_color=_bar_cols), secondary_y=False)
+            _fig_sg.add_trace(_go_sg.Scatter(x=_grp_sg["행사가"], y=_grp_sg["CumVal"], mode="lines", name=f"Cumulative {_metric_nm}", line=dict(color="#f8fafc", width=2.2)), secondary_y=True)
+            _fig_sg.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
+            _fig_sg.update_layout(title=f"{_tk_g} Net {_metric_nm} Exposure Profile (Call/Put Wall · Cumulative)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=420, margin=dict(l=20, r=20, t=64, b=24), legend=dict(orientation="h", y=1.08, x=0.0))
+            st.plotly_chart(_fig_sg, use_container_width=True, key=f"sg_chart_{_key_suf}")
 
             # 3) Delta-Weighted Exposure (풀폭)
             _fig_dw = _go_sg.Figure()
