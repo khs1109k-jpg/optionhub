@@ -12685,39 +12685,597 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
     return call_surge[:10], put_surge[:10], oi_drop[:10]
 
 
+LEVEL_TRACKER_PATH = os.path.expanduser("~/.optionhub_level_tracker.json")
+
+
+def _bs_touch_prob(spot, strike, iv_pct, dte):
+    try:
+        if spot <= 0 or strike <= 0:
+            return 0
+        if abs(strike - spot) / spot < 0.003:
+            return 99
+        iv = max(float(iv_pct or 30.0) / 100.0, 0.10)
+        T = max(int(dte or 1), 1) / 365.0
+        sig_t = iv * math.sqrt(T)
+        if sig_t <= 0:
+            return 0
+        z = abs(math.log(strike / spot)) / sig_t
+        # Standard normal survival * 2 (barrier touch approximation)
+        cdf_neg_z = 0.5 * math.erfc(z / math.sqrt(2.0))
+        prob = min(99, max(1, int(round(2.0 * cdf_neg_z * 100.0))))
+        return prob
+    except Exception:
+        return 0
+
+
+def _calc_max_pain_for_exp(rows_exp):
+    try:
+        strikes = sorted(set(float(r.get("행사가", 0) or 0) for r in rows_exp if float(r.get("행사가", 0) or 0) > 0))
+        if not strikes:
+            return 0.0
+        c_oi = {}
+        p_oi = {}
+        for r in rows_exp:
+            k = float(r.get("행사가", 0) or 0)
+            oi = int(r.get("OI", 0) or 0)
+            if k <= 0 or oi <= 0:
+                continue
+            if str(r.get("구분", "")).lower().startswith("c"):
+                c_oi[k] = c_oi.get(k, 0) + oi
+            else:
+                p_oi[k] = p_oi.get(k, 0) + oi
+        best_k, min_pain = strikes[0], None
+        for test_k in strikes:
+            pain = 0.0
+            for k, oi in c_oi.items():
+                if test_k > k:
+                    pain += (test_k - k) * oi
+            for k, oi in p_oi.items():
+                if test_k < k:
+                    pain += (k - test_k) * oi
+            if min_pain is None or pain < min_pain:
+                min_pain = pain
+                best_k = test_k
+        return best_k
+    except Exception:
+        return 0.0
+
+
+def _update_level_tracker_outcomes(tk, records):
+    if not records:
+        return records
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(tk).history(period="6mo")
+        if hist is None or hist.empty:
+            return records
+        hist.index = pd.to_datetime(hist.index).tz_localize(None).strftime("%Y-%m-%d")
+        dates_list = list(hist.index)
+        closes = {d: float(hist.loc[d, "Close"]) for d in dates_list}
+        highs = {d: float(hist.loc[d, "High"]) for d in dates_list}
+        lows = {d: float(hist.loc[d, "Low"]) for d in dates_list}
+        changed = False
+        for rec in records:
+            dt = str(rec.get("date", ""))[:10]
+            sp0 = float(rec.get("spot", 0) or 0)
+            if not dt or sp0 <= 0 or dt not in closes:
+                continue
+            idx = dates_list.index(dt)
+            if idx + 1 < len(dates_list) and rec.get("ret1") is None:
+                c1 = closes[dates_list[idx + 1]]
+                rec["ret1"] = round((c1 - sp0) / sp0 * 100.0, 2)
+                changed = True
+            if idx + 5 < len(dates_list) and rec.get("ret5") is None:
+                c5 = closes[dates_list[idx + 5]]
+                rec["ret5"] = round((c5 - sp0) / sp0 * 100.0, 2)
+                changed = True
+            exp_dt = str(rec.get("exp_date", ""))[:10]
+            cw = float(rec.get("call_wall", 0) or 0)
+            pw = float(rec.get("put_wall", 0) or 0)
+            mp = float(rec.get("max_pain", 0) or 0)
+            if exp_dt and exp_dt <= dates_list[-1]:
+                win_dates = [d for d in dates_list[idx:] if d <= exp_dt]
+                if win_dates:
+                    max_hi = max(highs[d] for d in win_dates)
+                    min_lo = min(lows[d] for d in win_dates)
+                    last_c = closes[win_dates[-1]]
+                    if cw > 0 and rec.get("cw_hit") is None:
+                        rec["cw_hit"] = bool(max_hi >= cw)
+                        changed = True
+                    if pw > 0 and rec.get("pw_hit") is None:
+                        rec["pw_hit"] = bool(min_lo <= pw)
+                        changed = True
+                    if mp > 0 and rec.get("mp_hit") is None:
+                        rec["mp_hit"] = bool(abs(last_c - mp) / mp <= 0.02)
+                        changed = True
+        if changed:
+            all_tr = load_json_file(LEVEL_TRACKER_PATH, {})
+            all_tr[tk] = records[-60:]
+            save_json_file(LEVEL_TRACKER_PATH, all_tr)
+    except Exception:
+        pass
+    return records
+
+
 if nav_menu == "📡 OI Change Radar":
-    st.title("📡 OI Change Radar (전일 대비 OI 급증·청산 추적)")
-    st.caption("전일 대비 콜/풋 OI 변화율(+20% · +50% · +100%) 및 Volume/OI · Premium · Above Ask · Sweep 기반 BTO/STO/STC/BTC 자동 추정")
+    st.title("📡 OI Change Radar · 대장 레벨 흐름")
+    st.caption("만기별 콜·풋 Strike→Future 흐름, 어제 신규 포지션, 만기 카드 해석·적중률 추적기, 전일 대비 OI 급증·청산 레이더")
 
-    _min_pct_opt = st.radio("최소 변화율 필터", ["전체", "+20% 이상", "+50% 이상", "+100% 이상"], horizontal=True, key="radar_min_pct")
-    _min_pct_v = {"전체": 0.0, "+20% 이상": 20.0, "+50% 이상": 50.0, "+100% 이상": 100.0}.get(_min_pct_opt, 0.0)
-    _cs10, _ps10, _dr10 = compute_oi_change_radar(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+    _rad_tab_lv, _rad_tab_new, _rad_tab_ai, _rad_tab_top = st.tabs([
+        "🎯 만기별 콜·풋 요약 (Strike→Future)",
+        "🆕 만기별 신규 포지션 (어제 ΔOI)",
+        "🧠 만기 카드 해석 · 적중률 추적기",
+        "📡 전일 대비 OI 급증·감소 TOP10",
+    ])
 
-    _cs_f = [r for r in _cs10 if r["변화율(%)"] >= _min_pct_v]
-    _ps_f = [r for r in _ps10 if r["변화율(%)"] >= _min_pct_v]
-    _dr_f = [r for r in _dr10 if abs(r["변화율(%)"]) >= _min_pct_v]
+    _lv_tk_list = ["SOXL", "NVDA", "TSLA", "MU", "QQQ", "SPY", "AMD", "PLTR", "AVGO", "SNDK"]
+    _def_lv_idx = _lv_tk_list.index(sel_tk) if sel_tk in _lv_tk_list else 0
 
-    _rt1, _rt2, _rt3 = st.tabs([f"🟢 콜 OI 급증 TOP10 ({len(_cs_f)})", f"🔴 풋 OI 급증 TOP10 ({len(_ps_f)})", f"🧹 OI 감소 TOP10 ({len(_dr_f)})"])
-    with _rt1:
-        if _cs_f: st.dataframe(pd.DataFrame(_cs_f), hide_index=True, use_container_width=True)
-        else: st.info("조건에 해당하는 콜 OI 급증 계약이 없습니다. (2일 이상 OI 스냅샷 필요)")
-    with _rt2:
-        if _ps_f: st.dataframe(pd.DataFrame(_ps_f), hide_index=True, use_container_width=True)
-        else: st.info("조건에 해당하는 풋 OI 급증 계약이 없습니다.")
-    with _rt3:
-        if _dr_f: st.dataframe(pd.DataFrame(_dr_f), hide_index=True, use_container_width=True)
-        else: st.info("조건에 해당하는 OI 감소 계약이 없습니다.")
+    with _rad_tab_lv:
+        _lc1, _lc2, _lc3, _lc4, _lc5 = st.columns([1.3, 1.3, 1.3, 1.3, 1.2])
+        _lv_tk = _lc1.text_input("종목 티커", value=sel_tk or "SOXL", key="lv_tk_in").strip().upper() or "SOXL"
+        _lv_n_exp = _lc2.radio("만기 개수", [2, 4, 6, 8], index=0, horizontal=True, key="lv_n_exp")
+        _lv_rng = _lc3.radio("범위", ["±10%", "±20%", "±30%", "전체"], index=1, horizontal=True, key="lv_rng")
+        _lv_basis = _lc4.radio("Strike 기준", ["벽(최대 OI)", "감마 최대", "거래량 최대"], index=0, horizontal=True, key="lv_basis")
+        _lv_unit = _lc5.radio("단위", ["계약수", "금액"], index=0, horizontal=True, key="lv_unit")
 
-    if st.button("📩 OI Change Radar 텔레그램 전송", type="primary", key="btn_radar_tg"):
-        _rd_lines = ["📡 *[OptionHub OI Change Radar]*\n", "🟢 *콜 OI 급증 TOP 5*"] + [
-            f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _cs_f[:5]
-        ] + ["", "🔴 *풋 OI 급증 TOP 5*"] + [
-            f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _ps_f[:5]
-        ] + ["", "🧹 *OI 감소 TOP 5*"] + [
-            f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _dr_f[:5]
-        ]
-        if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_rd_lines))[0]:
-            st.toast("✅ OI Change Radar 텔레그램 전송 완료!")
+        _rng_pct = {"±10%": 0.10, "±20%": 0.20, "±30%": 0.30, "전체": 10.0}.get(_lv_rng, 0.20)
+
+        with st.spinner(f"{_lv_tk} 만기별 옵션 체인 불러오는 중..."):
+            _cboe_rows, _cboe_sp = _fetch_cboe_multi_exp_rows(_lv_tk, max_exps=int(_lv_n_exp))
+
+        _mm_snap = get_moomoo_live_snapshot(_lv_tk)
+        _lv_spot = float(_mm_snap.get("price", 0) or _cboe_sp or 0)
+        _lv_chg_p = float(_mm_snap.get("chg_pct", 0) or 0)
+        _lv_sess = _mm_snap.get("session", "")
+
+        if not _cboe_rows:
+            _oi_fb_all = load_json_file(OI_PATH, {})
+            _sn_fb = (_oi_fb_all.get(_lv_tk) or [{}])[-1]
+            _cboe_rows = _sn_fb.get("상세") or []
+            if _lv_spot <= 0:
+                _lv_spot = float(_sn_fb.get("Spot", 0) or 0)
+
+        if _cboe_rows and _lv_spot > 0:
+            _chg_clr = "#22c55e" if _lv_chg_p >= 0 else "#ef4444"
+            st.markdown(
+                f"<div style='background:#0b1626;border:1px solid #1e3a5f;border-radius:8px;padding:10px 14px;margin-bottom:10px;'>"
+                f"<span style='font-size:17px;font-weight:700;color:#f8fafc;'>{_lv_tk}</span> &nbsp;|&nbsp; "
+                f"<span style='font-size:16px;font-weight:700;color:#f8fafc;'>Last: ${_lv_spot:,.2f}</span> "
+                f"<span style='color:{_chg_clr};font-weight:600;'>({_lv_chg_p:+.2f}%)</span> "
+                f"<span style='color:#94a3b8;font-size:12px;margin-left:10px;'>{_lv_sess} · OI 기준: 전 거래일 마감 (Cboe 실시간 체인)</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            _by_exp = {}
+            for _r in _cboe_rows:
+                _ex = str(_r.get("만기", ""))[:10]
+                if _ex:
+                    _by_exp.setdefault(_ex, []).append(_r)
+            _exp_keys = sorted(_by_exp.keys())[:int(_lv_n_exp)]
+
+            _summary_tbl = []
+            _tg_close_lines = [f"🔔 *[{_lv_tk} 만기별 레벨 흐름]* (현재가 ${_lv_spot:,.2f})"]
+            _parsed_exp_cards = []
+
+            for _ex in _exp_keys:
+                _erows = _by_exp[_ex]
+                _dte_v = int(_erows[0].get("DTE", 0) or 0)
+                _mp_v = _calc_max_pain_for_exp(_erows)
+                _in_rng = [
+                    r for r in _erows
+                    if (_rng_pct >= 5.0 or (_lv_spot * (1.0 - _rng_pct) <= float(r.get("행사가", 0) or 0) <= _lv_spot * (1.0 + _rng_pct)))
+                ] or _erows
+
+                _calls = [r for r in _in_rng if str(r.get("구분", "")).lower().startswith("c")]
+                _puts = [r for r in _in_rng if str(r.get("구분", "")).lower().startswith("p")]
+
+                def _pick_strike(lst, mode, is_call=True):
+                    if not lst:
+                        return 0.0, 0, 0
+                    # Aggregate by strike
+                    agg = {}
+                    for r in lst:
+                        k = float(r.get("행사가", 0) or 0)
+                        oi = int(r.get("OI", 0) or 0)
+                        vol = int(r.get("거래량", 0) or 0)
+                        gex = abs(float(r.get("GEX($M)", 0) or 0))
+                        if k not in agg:
+                            agg[k] = {"oi": 0, "vol": 0, "gex": 0.0}
+                        agg[k]["oi"] += oi
+                        agg[k]["vol"] += vol
+                        agg[k]["gex"] += gex
+                    if mode == "감마 최대":
+                        best_k = max(agg.keys(), key=lambda x: agg[x]["gex"])
+                    elif mode == "거래량 최대":
+                        best_k = max(agg.keys(), key=lambda x: agg[x]["vol"])
+                    else:
+                        # 벽(최대 OI) - prefer >= spot for call, <= spot for put if available
+                        cands = [k for k in agg.keys() if (k >= _lv_spot * 0.98 if is_call else k <= _lv_spot * 1.02)] or list(agg.keys())
+                        best_k = max(cands, key=lambda x: agg[x]["oi"])
+                    return best_k, agg[best_k]["vol"], agg[best_k]["oi"]
+
+                _c_strk, _c_strk_vol, _c_strk_oi = _pick_strike(_calls, _lv_basis, True)
+                _p_strk, _p_strk_vol, _p_strk_oi = _pick_strike(_puts, _lv_basis, False)
+                _c_fut, _c_fut_vol, _c_fut_oi = _pick_strike(_calls, "거래량 최대", True)
+                _p_fut, _p_fut_vol, _p_fut_oi = _pick_strike(_puts, "거래량 최대", False)
+
+                _tot_c_vol = sum(int(r.get("거래량", 0) or 0) for r in _erows if str(r.get("구분", "")).lower().startswith("c"))
+                _tot_p_vol = sum(int(r.get("거래량", 0) or 0) for r in _erows if str(r.get("구분", "")).lower().startswith("p"))
+                _tot_c_oi = sum(int(r.get("OI", 0) or 0) for r in _erows if str(r.get("구분", "")).lower().startswith("c"))
+                _tot_p_oi = sum(int(r.get("OI", 0) or 0) for r in _erows if str(r.get("구분", "")).lower().startswith("p"))
+
+                _c_delta = round(_c_fut - _c_strk, 1)
+                _p_delta = round(_p_fut - _p_strk, 1)
+                _pc_oi = round(_tot_p_oi / _tot_c_oi, 2) if _tot_c_oi > 0 else 0.0
+
+                # Flow direction check from all_raw_flows for this ticker
+                _c_buy_p, _p_buy_p = 50, 50
+                _tk_flows = [f for f in all_raw_flows if str(f.get("ticker", "")).upper() == _lv_tk]
+                if _tk_flows:
+                    _cf_b = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("C") and "ASK" in str(f.get("side", "")).upper())
+                    _cf_t = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("C"))
+                    _pf_b = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("P") and "ASK" in str(f.get("side", "")).upper())
+                    _pf_t = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("P"))
+                    if _cf_t > 0:
+                        _c_buy_p = int(round(_cf_b / _cf_t * 100))
+                    if _pf_t > 0:
+                        _p_buy_p = int(round(_pf_b / _pf_t * 100))
+
+                _c_ratio = round(_c_fut_vol / max(_c_fut_oi, 1), 2)
+                _p_ratio = round(_p_fut_vol / max(_p_fut_oi, 1), 2)
+                _c_new_txt = "신규 포지션" if _c_ratio >= 1.0 else "기존 포지션 정리/교체"
+                _p_new_txt = "신규 포지션" if _p_ratio >= 1.0 else "기존 포지션 정리/교체"
+
+                _interp_parts = []
+                if _pc_oi >= 1.2:
+                    _interp_parts.append(f"풋 OI 우위 ({_pc_oi:.2f})")
+                elif _pc_oi <= 0.75:
+                    _interp_parts.append(f"콜 OI 우세 ({_pc_oi:.2f})")
+                else:
+                    _interp_parts.append(f"콜·풋 OI 비슷 ({_pc_oi:.2f})")
+
+                if _c_delta < 0:
+                    _interp_parts.append(f"더 낮은 ${_c_fut:g}에 콜 거래 집중 → 저항이 내려옴 (약세)")
+                elif _c_delta > 0:
+                    _interp_parts.append(f"더 높은 ${_c_fut:g}로 콜 상향 이동 → 돌파 베팅 (강세)")
+                else:
+                    _interp_parts.append(f"콜 벽 ${_c_strk:g} 유지")
+
+                if _p_delta < 0:
+                    _interp_parts.append(f"더 낮은 ${_p_fut:g}로 풋 하향 → 지지선 하방 이동")
+                elif _p_delta > 0:
+                    _interp_parts.append(f"더 높은 ${_p_fut:g}로 풋 상향 → 지지 강화/방어")
+
+                _mp_pct = (_mp_v - _lv_spot) / _lv_spot * 100.0 if _lv_spot > 0 and _mp_v > 0 else 0.0
+                _mp_note = f"맥스페인 ${_mp_v:g} ({_mp_pct:+.1f}%)" + (" → 만기 끌림 참고" if _dte_v <= 5 else " → 아직 멀어서 참고만")
+
+                # Avg IV at call/put wall
+                _cw_iv = next((float(r.get("IV(%)", 30) or 30) for r in _calls if float(r.get("행사가", 0) or 0) == _c_strk), 35.0)
+                _pw_iv = next((float(r.get("IV(%)", 30) or 30) for r in _puts if float(r.get("행사가", 0) or 0) == _p_strk), 35.0)
+
+                _parsed_exp_cards.append({
+                    "exp": _ex, "dte": _dte_v, "mp": _mp_v, "mp_pct": _mp_pct,
+                    "c_strk": _c_strk, "c_fut": _c_fut, "c_fut_vol": _c_fut_vol, "c_fut_oi": _c_fut_oi,
+                    "c_delta": _c_delta, "tot_c_vol": _tot_c_vol, "tot_c_oi": _tot_c_oi, "c_ratio": _c_ratio, "c_new_txt": _c_new_txt, "c_buy_p": _c_buy_p,
+                    "p_strk": _p_strk, "p_fut": _p_fut, "p_fut_vol": _p_fut_vol, "p_fut_oi": _p_fut_oi,
+                    "p_delta": _p_delta, "tot_p_vol": _tot_p_vol, "tot_p_oi": _tot_p_oi, "p_ratio": _p_ratio, "p_new_txt": _p_new_txt, "p_buy_p": _p_buy_p,
+                    "pc_oi": _pc_oi, "interp": " · ".join(_interp_parts) + f" · {_mp_note}",
+                    "cw_iv": _cw_iv, "pw_iv": _pw_iv,
+                })
+
+                _summary_tbl.append({
+                    "Expiry": f"{_ex} ({_dte_v}일)",
+                    "Max Pain": f"${_mp_v:,.2f}",
+                    "Call Flow (Strike→Fut)": f"{_c_strk:g} → {_c_fut:g} ({_c_delta:+g})",
+                    "Put Flow (Strike→Fut)": f"{_p_strk:g} → {_p_fut:g} ({_p_delta:+g})",
+                    "P/C OI": _pc_oi,
+                    "해석": " · ".join(_interp_parts),
+                })
+                _tg_close_lines.append(
+                    f"▸ *{_ex} ({_dte_v}일)* | 맥스페인 ${_mp_v:g}\n"
+                    f"  콜 {_c_strk:g}→{_c_fut:g} ({_c_delta:+g}) | 풋 {_p_strk:g}→{_p_fut:g} ({_p_delta:+g}) | P/C {_pc_oi}"
+                )
+
+            # Render 2-column cards
+            for _ci in range(0, len(_parsed_exp_cards), 2):
+                _cols_card = st.columns(2)
+                for _cj in range(2):
+                    if _ci + _cj >= len(_parsed_exp_cards):
+                        continue
+                    _cd = _parsed_exp_cards[_ci + _cj]
+                    _cd_c_bg = "#16a34a" if _cd["c_delta"] >= 0 else "#65a30d"
+                    _cd_p_bg = "#dc2626" if _cd["p_delta"] < 0 else "#ea580c"
+                    _c_vol_disp = f"${_cd['c_fut_vol'] * _lv_spot * 0.05:,.0f}" if _lv_unit == "금액" else f"{_cd['c_fut_vol']:,}"
+                    _p_vol_disp = f"${_cd['p_fut_vol'] * _lv_spot * 0.05:,.0f}" if _lv_unit == "금액" else f"{_cd['p_fut_vol']:,}"
+                    _card_html = f"""
+                    <div style="background:#0c1421;border:1px solid #1e293b;border-radius:10px;padding:12px;margin-bottom:12px;">
+                      <div style="display:flex;justify-content:center;margin-bottom:6px;">
+                        <span style="background:{_cd_c_bg};color:#fff;font-weight:700;padding:2px 24px;border-radius:4px;font-size:13px;">{_cd['c_delta']:+.1f}</span>
+                      </div>
+                      <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:center;color:#e2e8f0;">
+                        <tr style="background:#15803d;color:#fff;font-weight:700;">
+                          <td style="padding:5px;">Symbol</td><td style="padding:5px;">Price</td>
+                          <td style="padding:5px;">Call Strike</td><td style="padding:5px;">Call Future</td>
+                          <td style="padding:5px;">Call Liq</td><td style="padding:5px;">Call Volume</td><td style="padding:5px;">Call OI</td>
+                        </tr>
+                        <tr style="background:#111827;">
+                          <td style="padding:6px;font-weight:700;">{_lv_tk}</td>
+                          <td style="padding:6px;">{_lv_spot:,.2f}</td>
+                          <td style="padding:6px;font-weight:700;color:#4ade80;">{_cd['c_strk']:g}</td>
+                          <td style="padding:6px;font-weight:700;">{_cd['c_fut']:g} {'🆕' if _cd['c_ratio']>=1.0 else ''}</td>
+                          <td style="padding:6px;">{_cd['c_fut']:g}</td>
+                          <td style="padding:6px;">{_c_vol_disp}<br><span style='color:#94a3b8;font-size:10px;'>만기합 {_cd['tot_c_vol']:,}</span></td>
+                          <td style="padding:6px;">{_cd['c_fut_oi']:,}<br><span style='color:#94a3b8;font-size:10px;'>만기합 {_cd['tot_c_oi']:,}</span></td>
+                        </tr>
+                        <tr style="background:#b91c1c;color:#fff;font-weight:700;">
+                          <td style="padding:5px;background:#0f172a;color:{_chg_clr};">{_lv_chg_p:+.2f}%</td>
+                          <td style="padding:5px;background:#0f172a;color:#94a3b8;">DTE {_cd['dte']}일</td>
+                          <td style="padding:5px;">Put Strike</td><td style="padding:5px;">Put Future</td>
+                          <td style="padding:5px;">Put Liq</td><td style="padding:5px;">Put Volume</td><td style="padding:5px;">Put OI</td>
+                        </tr>
+                        <tr style="background:#111827;">
+                          <td style="padding:6px;color:#94a3b8;">{_cd['exp']}</td>
+                          <td style="padding:6px;background:#78350f;color:#fde68a;font-weight:700;">MaxPain<br>${_cd['mp']:g}</td>
+                          <td style="padding:6px;font-weight:700;color:#f87171;">{_cd['p_strk']:g}</td>
+                          <td style="padding:6px;font-weight:700;">{_cd['p_fut']:g} {'🆕' if _cd['p_ratio']>=1.0 else ''}</td>
+                          <td style="padding:6px;">{_cd['p_fut']:g}</td>
+                          <td style="padding:6px;">{_p_vol_disp}<br><span style='color:#94a3b8;font-size:10px;'>만기합 {_cd['tot_p_vol']:,}</span></td>
+                          <td style="padding:6px;">{_cd['p_fut_oi']:,}<br><span style='color:#94a3b8;font-size:10px;'>만기합 {_cd['tot_p_oi']:,}</span></td>
+                        </tr>
+                      </table>
+                      <div style="display:flex;justify-content:center;margin-top:6px;margin-bottom:8px;">
+                        <span style="background:{_cd_p_bg};color:#fff;font-weight:700;padding:2px 24px;border-radius:4px;font-size:13px;">{_cd['p_delta']:+.1f}</span>
+                      </div>
+                      <div style="font-size:12px;color:#cbd5e1;line-height:1.55;">
+                        <div>• <b>콜 Fut {_cd['c_fut']:g}</b>: 거래 {_cd['c_fut_vol']:,} / OI {_cd['c_fut_oi']:,} = <b>{_cd['c_ratio']:.2f}배</b> · {_cd['c_new_txt']} (매수추정 {_cd['c_buy_p']}%)</div>
+                        <div>• <b>풋 Fut {_cd['p_fut']:g}</b>: 거래 {_cd['p_fut_vol']:,} / OI {_cd['p_fut_oi']:,} = <b>{_cd['p_ratio']:.2f}배</b> · {_cd['p_new_txt']} (매수추정 {_cd['p_buy_p']}%)</div>
+                        <div style="color:#94a3b8;">• {_cd['interp']}</div>
+                      </div>
+                    </div>
+                    """
+                    _cols_card[_cj].markdown(_card_html, unsafe_allow_html=True)
+
+            if _summary_tbl:
+                st.markdown("#### 📊 만기별 콜 · 풋 흐름 비교표")
+                st.dataframe(pd.DataFrame(_summary_tbl), use_container_width=True, hide_index=True)
+
+            with st.expander("🔔 장마감 요약 · 텔레그램 발송", expanded=True):
+                st.markdown("\n".join(_tg_close_lines))
+                if st.button("📩 이 레벨 흐름 텔레그램 전송", type="primary", key="btn_lv_tg_send"):
+                    if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_tg_close_lines))[0]:
+                        st.toast("✅ 레벨 흐름 요약 텔레그램 전송 완료!")
+                    else:
+                        st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
+        else:
+            st.warning(f"{_lv_tk} 옵션 체인 데이터를 불러오지 못했습니다.")
+
+    with _rad_tab_new:
+        _nw_tk = st.text_input("신규 포지션 조회 종목", value=sel_tk or "SOXL", key="nw_tk_in").strip().upper() or "SOXL"
+        _oi_hist_nw = load_json_file(OI_PATH, {})
+        _snaps_nw = _oi_hist_nw.get(_nw_tk, []) if isinstance(_oi_hist_nw, dict) else []
+        if len(_snaps_nw) >= 2:
+            _sn_prev, _sn_cur = _snaps_nw[-2], _snaps_nw[-1]
+            _sp_nw = float(_sn_cur.get("Spot", 0) or 0)
+            _prev_map = {}
+            for _r in _sn_prev.get("상세", []):
+                _k_nw = (str(_r.get("만기", ""))[:10], str(_r.get("구분", ""))[:1].upper(), float(_r.get("행사가", 0) or 0))
+                _prev_map[_k_nw] = _prev_map.get(_k_nw, 0) + int(_r.get("OI", 0) or 0)
+
+            _by_exp_new = {}
+            for _r in _sn_cur.get("상세", []):
+                _ex = str(_r.get("만기", ""))[:10]
+                _cp = str(_r.get("구분", ""))[:1].upper()
+                _k_v = float(_r.get("행사가", 0) or 0)
+                _cur_oi = int(_r.get("OI", 0) or 0)
+                _cur_vol = int(_r.get("거래량", 0) or 0)
+                if not _ex or _k_v <= 0 or _cur_oi <= 0:
+                    continue
+                _p_oi = _prev_map.get((_ex, _cp, _k_v), 0)
+                _d_oi = _cur_oi - _p_oi
+                if _d_oi >= 50:
+                    _pct = (_d_oi / _p_oi * 100.0) if _p_oi > 0 else 100.0
+                    _by_exp_new.setdefault(_ex, []).append({
+                        "exp": _ex, "cp": _cp, "k": _k_v, "prev_oi": _p_oi, "cur_oi": _cur_oi,
+                        "d_oi": _d_oi, "pct": _pct, "vol": _cur_vol,
+                    })
+
+            if _by_exp_new:
+                for _ex in sorted(_by_exp_new.keys())[:4]:
+                    _items = sorted(_by_exp_new[_ex], key=lambda x: x["d_oi"], reverse=True)[:5]
+                    _bull_oi = sum(x["d_oi"] for x in _items if x["cp"] == "C")
+                    _bear_oi = sum(x["d_oi"] for x in _items if x["cp"] == "P")
+                    _tot_nb = max(_bull_oi + _bear_oi, 1)
+                    _bull_pct = int(round(_bull_oi / _tot_nb * 100))
+                    with st.container(border=True):
+                        st.markdown(f"**🆕 {_nw_tk} · {_ex} 만기 · 전일 대비 새로 생긴 포지션** (기준일: `{str(_sn_cur.get('수집시각', ''))[:16]}`)")
+                        for _idx_i, _it in enumerate(_items, 1):
+                            _dist_p = ((_it["k"] - _sp_nw) / _sp_nw * 100.0) if _sp_nw > 0 else 0.0
+                            _new_sc = min(1.0, round(_it["d_oi"] / max(_it["vol"], _it["d_oi"], 1), 2))
+                            _dir_lbl = "🟢 상승 쪽 베팅" if _it["cp"] == "C" else "🔴 하락·헤지 쪽 베팅"
+                            st.markdown(
+                                f"**{_idx_i}. {_it['k']:g}{_it['cp']}** (신규) 거래 {_it['vol']:,}계약 (+{_it['pct']:.1f}%) | "
+                                f"OI: `{_it['prev_oi']:,} → {_it['cur_oi']:,}` (**Δ{_it['d_oi']:+,}계약**)<br>"
+                                f"<span style='color:#94a3b8;font-size:12px;'>→ {_dir_lbl} · 현재가 ${_sp_nw:.2f} 대비 {_dist_p:+.1f}% · 신규점수 {_new_sc:.2f}</span>",
+                                unsafe_allow_html=True,
+                            )
+                        _dom_txt = f"🟢 상승 쪽 베팅 우세 ({_bull_pct}%)" if _bull_pct >= 55 else (f"🔴 하락 쪽 베팅 우세 ({100-_bull_pct}%)" if _bull_pct <= 45 else f"🟡 양쪽 비슷 ({_bull_pct}%)")
+                        st.info(f"📋 정리: **{_dom_txt}** · 콜 신규 Δ{_bull_oi:,}계약 vs 풋 신규 Δ{_bear_oi:,}계약")
+            else:
+                st.info(f"{_nw_tk}의 전일 대비 +50계약 이상 신규 OI 급증 계약이 없습니다.")
+        else:
+            st.info(f"{_nw_tk}의 스냅샷이 2일 이상 쌓여야 어제 신규 포지션(ΔOI)을 비교할 수 있습니다. `📊 OI(미결제약정) 수집`에서 스냅샷을 저장해 주세요.")
+
+    with _rad_tab_ai:
+        _ai_tk = st.text_input("해석·추적할 종목", value=sel_tk or "SOXL", key="lv_ai_tk").strip().upper() or "SOXL"
+        _ai_rows, _ai_cb_sp = _fetch_cboe_multi_exp_rows(_ai_tk, max_exps=3)
+        _ai_mm = get_moomoo_live_snapshot(_ai_tk)
+        _ai_spot = float(_ai_mm.get("price", 0) or _ai_cb_sp or 0)
+        _ai_chg = float(_ai_mm.get("chg_pct", 0) or 0)
+
+        _col_interp, _col_track = st.columns(2)
+        _all_tr = load_json_file(LEVEL_TRACKER_PATH, {})
+        _tk_recs = _update_level_tracker_outcomes(_ai_tk, _all_tr.get(_ai_tk, []))
+
+        with _col_interp:
+            with st.container(border=True):
+                st.subheader(f"🧠 {_ai_tk} 만기 카드 해석 · ${_ai_spot:,.2f} ({_ai_chg:+.2f}%)")
+                if _ai_rows and _ai_spot > 0:
+                    _ai_exps = sorted(set(str(r.get("만기", ""))[:10] for r in _ai_rows if r.get("만기")))[:2]
+                    _exp_dirs = []
+                    _first_card_save = None
+                    for _e_i, _ex in enumerate(_ai_exps):
+                        _er = [r for r in _ai_rows if str(r.get("만기", ""))[:10] == _ex]
+                        _dte_e = max(int(_er[0].get("DTE", 1) or 1), 1)
+                        _mp_e = _calc_max_pain_for_exp(_er)
+                        _c_map, _p_map, _cv_map, _pv_map, _iv_map = {}, {}, {}, {}, {}
+                        for _r in _er:
+                            _k = float(_r.get("행사가", 0) or 0)
+                            if not (_ai_spot * 0.75 <= _k <= _ai_spot * 1.25):
+                                continue
+                            _oi = int(_r.get("OI", 0) or 0)
+                            _vl = int(_r.get("거래량", 0) or 0)
+                            _iv_map[_k] = float(_r.get("IV(%)", 35) or 35)
+                            if str(_r.get("구분", "")).lower().startswith("c"):
+                                _c_map[_k] = _c_map.get(_k, 0) + _oi
+                                _cv_map[_k] = _cv_map.get(_k, 0) + _vl
+                            else:
+                                _p_map[_k] = _p_map.get(_k, 0) + _oi
+                                _pv_map[_k] = _pv_map.get(_k, 0) + _vl
+                        _cw_e = max(_c_map, key=_c_map.get) if _c_map else _ai_spot
+                        _pw_e = max(_p_map, key=_p_map.get) if _p_map else _ai_spot
+                        _cf_e = max(_cv_map, key=_cv_map.get) if _cv_map else _cw_e
+                        _pf_e = max(_pv_map, key=_pv_map.get) if _pv_map else _pw_e
+                        _p_cw = _bs_touch_prob(_ai_spot, _cw_e, _iv_map.get(_cw_e, 40), _dte_e)
+                        _p_pw = _bs_touch_prob(_ai_spot, _pw_e, _iv_map.get(_pw_e, 40), _dte_e)
+                        _p_mp = _bs_touch_prob(_ai_spot, _mp_e, _iv_map.get(_mp_e, 40), _dte_e)
+                        _dir_e = "상방" if (_cf_e >= _cw_e and _pf_e >= _pw_e) else ("약세" if (_cf_e < _cw_e and _pf_e <= _pw_e) else "중립")
+                        _dir_ico = "🟢" if _dir_e == "상방" else ("🔴" if _dir_e == "약세" else "🟡")
+                        _exp_dirs.append(_dir_e)
+                        if _e_i == 0:
+                            _first_card_save = {
+                                "date": datetime.now().strftime("%Y-%m-%d"),
+                                "exp_date": _ex,
+                                "spot": round(_ai_spot, 2),
+                                "dir": _dir_e,
+                                "call_wall": _cw_e,
+                                "put_wall": _pw_e,
+                                "max_pain": _mp_e,
+                                "p_cw": _p_cw,
+                                "p_pw": _p_pw,
+                                "p_mp": _p_mp,
+                            }
+                        st.markdown(
+                            f"**📅 {_ex} 만기 ({_dte_e}일) · {'이번 만기' if _e_i==0 else '다음 만기'}**\n"
+                            f"- 콜 벽 `${_cw_e:g}` → 오늘 콜 거래 최다 `${_cf_e:g}` ({_cf_e - _cw_e:+g})\n"
+                            f"- 풋 벽 `${_pw_e:g}` → 오늘 풋 거래 최다 `${_pf_e:g}` ({_pf_e - _pw_e:+g})\n"
+                            f"- 맥스페인 `${_mp_e:g}` (현재가 대비 `{(_mp_e - _ai_spot)/_ai_spot*100:+.1f}%`)\n"
+                            f"- {_dir_ico} 방향: **{_dir_e}** | 만기까지 닿을 확률: 콜벽 **{_p_cw}%** · 풋벽 **{_p_pw}%** · 맥스페인 **{_p_mp}%**"
+                        )
+
+                    # Gamma flip estimate
+                    _g_by_k = {}
+                    for _r in _ai_rows:
+                        _k = float(_r.get("행사가", 0) or 0)
+                        if _ai_spot * 0.75 <= _k <= _ai_spot * 1.25:
+                            _g_by_k[_k] = _g_by_k.get(_k, 0.0) + float(_r.get("GEX($M)", 0) or 0)
+                    _g_ks = sorted(_g_by_k.keys())
+                    _g_flip = 0.0
+                    for _gi in range(len(_g_ks) - 1):
+                        _v1, _v2 = _g_by_k[_g_ks[_gi]], _g_by_k[_g_ks[_gi + 1]]
+                        if (_v1 < 0 <= _v2) or (_v1 > 0 >= _v2):
+                            _g_flip = round((_g_ks[_gi] + _g_ks[_gi + 1]) / 2.0, 2)
+                            break
+                    if _g_flip > 0:
+                        _gf_txt = "숏감마 구간 (변동성·출렁임 큼, 추격 주의)" if _ai_spot < _g_flip else "롱감마 구간 (변동성 억제·안정)"
+                        st.markdown(f"⚡ **감마 플립 `${_g_flip:,.2f}`** → 현재가 {'아래' if _ai_spot < _g_flip else '위'} = **{_gf_txt}**")
+
+                    _semi_peers = ["NVDA", "TSM", "MU", "AMD"]
+                    _peer_parts = []
+                    for _pt in _semi_peers:
+                        _pf = [f for f in all_raw_flows if str(f.get("ticker", "")).upper() == _pt]
+                        if _pf:
+                            _pb = sum(float(f.get("premium", 0) or 0) for f in _pf if str(f.get("cp", "")).upper().startswith("C"))
+                            _ptot = max(sum(float(f.get("premium", 0) or 0) for f in _pf), 1.0)
+                            _peer_parts.append(f"{_pt} {int(round(_pb/_ptot*100))}% (${_ptot/1e6:.1f}M)")
+                    if _peer_parts:
+                        st.caption("📡 관련 대장주 오늘 콜 비중: " + " | ".join(_peer_parts))
+
+                    _concl = " · ".join(f"{'이번' if i==0 else '다음'} 만기={d}" for i, d in enumerate(_exp_dirs))
+                    st.success(f"💎 **한줄결론**: {_concl}")
+
+                    if _first_card_save and st.button("💾 오늘 해석 기록 저장 (추적기에 추가)", key="btn_save_lv_track"):
+                        _tdate = _first_card_save["date"]
+                        _tk_recs = [r for r in _tk_recs if r.get("date") != _tdate]
+                        _tk_recs.append(_first_card_save)
+                        _all_tr[_ai_tk] = _tk_recs[-60:]
+                        save_json_file(LEVEL_TRACKER_PATH, _all_tr)
+                        st.toast(f"✅ {_ai_tk} ({_tdate}) 해석 기록 저장 완료!")
+                        st.rerun()
+                else:
+                    st.info(f"{_ai_tk} 옵션 데이터를 불러오지 못했습니다.")
+
+        with _col_track:
+            with st.container(border=True):
+                st.subheader(f"📈 {_ai_tk} 해석 추적기 · 기록 {len(_tk_recs)}건")
+                if _tk_recs:
+                    _d1_ok = [r for r in _tk_recs if r.get("ret1") is not None and r.get("dir") in ("상방", "약세")]
+                    _d1_hit = sum(1 for r in _d1_ok if (r["dir"] == "상방" and r["ret1"] > 0) or (r["dir"] == "약세" and r["ret1"] < 0))
+                    _d5_ok = [r for r in _tk_recs if r.get("ret5") is not None and r.get("dir") in ("상방", "약세")]
+                    _d5_hit = sum(1 for r in _d5_ok if (r["dir"] == "상방" and r["ret5"] > 0) or (r["dir"] == "약세" and r["ret5"] < 0))
+                    _mp_ok = [r for r in _tk_recs if r.get("mp_hit") is not None]
+                    _mp_hit = sum(1 for r in _mp_ok if r["mp_hit"])
+                    _cw_ok = [r for r in _tk_recs if r.get("cw_hit") is not None]
+                    _pw_ok = [r for r in _tk_recs if r.get("pw_hit") is not None]
+
+                    st.markdown(
+                        f"- **방향 적중률**: 1일 `{int(round(_d1_hit/len(_d1_ok)*100)) if _d1_ok else 0}%` ({len(_d1_ok)}건) · "
+                        f"5일 `{int(round(_d5_hit/len(_d5_ok)*100)) if _d5_ok else 0}%` ({len(_d5_ok)}건)\n"
+                        f"- **만기 때 맥스페인 ±2% 이내 마감**: `{int(round(_mp_hit/len(_mp_ok)*100)) if _mp_ok else 0}%` ({len(_mp_ok)}건)\n"
+                        f"- **실현 가능성 (예상 vs 실제)**: "
+                        f"콜벽 {int(round(sum(r.get('p_cw',0) for r in _cw_ok)/len(_cw_ok))) if _cw_ok else 0}% → 실제 {int(round(sum(1 for r in _cw_ok if r['cw_hit'])/len(_cw_ok)*100)) if _cw_ok else 0}% | "
+                        f"풋벽 {int(round(sum(r.get('p_pw',0) for r in _pw_ok)/len(_pw_ok))) if _pw_ok else 0}% → 실제 {int(round(sum(1 for r in _pw_ok if r['pw_hit'])/len(_pw_ok)*100)) if _pw_ok else 0}%"
+                    )
+                    st.markdown("**최근 기록**")
+                    for _rc in reversed(_tk_recs[-10:]):
+                        _r1s = f"{_rc['ret1']:+.2f}%" if _rc.get("ret1") is not None else "-"
+                        _r5s = f"{_rc['ret5']:+.2f}%" if _rc.get("ret5") is not None else "-"
+                        _ico_r = "🟢" if _rc.get("dir") == "상방" else ("🔴" if _rc.get("dir") == "약세" else "🟡")
+                        st.markdown(f"`{_rc.get('date')}` ${_rc.get('spot', 0):.2f} {_ico_r} {_rc.get('dir')} → 1일 `{_r1s}` / 5일 `{_r5s}` · 만기 {_rc.get('exp_date')}")
+                else:
+                    st.info("아직 저장된 해석 기록이 없습니다. 왼쪽 카드 하단 **'💾 오늘 해석 기록 저장'**을 누르시면 매일 적중률이 자동 추적됩니다.")
+
+    with _rad_tab_top:
+        _min_pct_opt = st.radio("최소 변화율 필터", ["전체", "+20% 이상", "+50% 이상", "+100% 이상"], horizontal=True, key="radar_min_pct")
+        _min_pct_v = {"전체": 0.0, "+20% 이상": 20.0, "+50% 이상": 50.0, "+100% 이상": 100.0}.get(_min_pct_opt, 0.0)
+        _cs10, _ps10, _dr10 = compute_oi_change_radar(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []))
+
+        _cs_f = [r for r in _cs10 if r["변화율(%)"] >= _min_pct_v]
+        _ps_f = [r for r in _ps10 if r["변화율(%)"] >= _min_pct_v]
+        _dr_f = [r for r in _dr10 if abs(r["변화율(%)"]) >= _min_pct_v]
+
+        _rt1, _rt2, _rt3 = st.tabs([f"🟢 콜 OI 급증 TOP10 ({len(_cs_f)})", f"🔴 풋 OI 급증 TOP10 ({len(_ps_f)})", f"🧹 OI 감소 TOP10 ({len(_dr_f)})"])
+        with _rt1:
+            if _cs_f: st.dataframe(pd.DataFrame(_cs_f), hide_index=True, use_container_width=True)
+            else: st.info("조건에 해당하는 콜 OI 급증 계약이 없습니다. (2일 이상 OI 스냅샷 필요)")
+        with _rt2:
+            if _ps_f: st.dataframe(pd.DataFrame(_ps_f), hide_index=True, use_container_width=True)
+            else: st.info("조건에 해당하는 풋 OI 급증 계약이 없습니다.")
+        with _rt3:
+            if _dr_f: st.dataframe(pd.DataFrame(_dr_f), hide_index=True, use_container_width=True)
+            else: st.info("조건에 해당하는 OI 감소 계약이 없습니다.")
+
+        if st.button("📩 OI Change Radar 텔레그램 전송", type="primary", key="btn_radar_tg"):
+            _rd_lines = ["📡 *[OptionHub OI Change Radar]*\n", "🟢 *콜 OI 급증 TOP 5*"] + [
+                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _cs_f[:5]
+            ] + ["", "🔴 *풋 OI 급증 TOP 5*"] + [
+                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _ps_f[:5]
+            ] + ["", "🧹 *OI 감소 TOP 5*"] + [
+                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _dr_f[:5]
+            ]
+            if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_rd_lines))[0]:
+                st.toast("✅ OI Change Radar 텔레그램 전송 완료!")
 
 
 @st.cache_data(ttl=240, show_spinner=False)
