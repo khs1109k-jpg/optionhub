@@ -11395,17 +11395,21 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             else:
                 st.warning(f"🟡 Perspicium 응답 지연/점검: {_e_ping}")
 
-        _pt_g, _pt_dl, _pt_gm, _pt_th, _pt_vg, _pt1, _pt2, _pt3, _pt4, _pt5 = st.tabs([
+        _pt_g, _pt_dl, _pt_gm, _pt_th, _pt_vg, _pt_vn, _pt_ch, _pt1, _pt2, _pt3, _pt4, _pt5, _pt_cor, _pt_mac = st.tabs([
             "⚡ GEX",
             "🔺 Delta",
             "🌀 Gamma",
             "⏳ Theta",
             "🌊 Vega",
+            "💧 Vanna",
+            "🕰️ Charm",
             "🔥 UOA 이상체결",
             "⚡ 3기준 GEX 비교",
             "📐 예상변동폭 & IV",
             "🧠 과거 유사패턴",
             "📊 계절성 · 섹터 · 리스크",
+            "🔗 상관관계",
+            "🌍 매크로·금리",
         ])
 
         def _render_single_greek_tab(_tk_g, _metric_nm, _col_hex, _key_suf):
@@ -11449,23 +11453,36 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             if _df_sg.empty:
                 st.info("선택한 기간/범위 내 행사가가 없습니다.")
                 return
-            if _metric_nm in ("Theta", "Vega"):
+            if _metric_nm in ("Theta", "Vega", "Vanna", "Charm"):
                 _vals_tv = []
                 for _, _r_tv in _df_sg.iterrows():
                     _kk = float(_r_tv.get("행사가", 0) or 0)
+                    _oiv = int(_r_tv.get("OI", 0) or 0)
                     _ivk = max(float(_r_tv.get("IV(%)", 30) or 30) / 100.0, 0.08)
-                    _ty = max(int(_r_tv.get("DTE", 7) or 7), 1) / 365.0
+                    _ty = max(int(_r_tv.get("DTE", 7) or 7), 3) / 365.0
+                    _cp_t = str(_r_tv.get("구분", "")).upper()
+                    _sgn_t = 1.0 if (_cp_t.startswith("C") or "콜" in _cp_t) else -1.0
                     try:
                         _sq = math.sqrt(_ty)
                         _d1 = (math.log(max(_sp_sg, 0.01) / max(_kk, 0.01)) + (0.045 + 0.5 * _ivk * _ivk) * _ty) / (_ivk * _sq)
+                        _d2 = _d1 - _ivk * _sq
                         _pdf = math.exp(-0.5 * _d1 * _d1) / math.sqrt(2.0 * math.pi)
-                        _v_out = ((_sp_sg * _pdf * _sq) / 100.0) if _metric_nm == "Vega" else (-(_sp_sg * _pdf * _ivk) / (2.0 * _sq) / 365.0)
+                        if _metric_nm == "Vega":
+                            _v_out = (_sp_sg * _pdf * _sq) / 100.0
+                        elif _metric_nm == "Theta":
+                            _v_out = -(_sp_sg * _pdf * _ivk) / (2.0 * _sq) / 365.0
+                        elif _metric_nm == "Vanna":
+                            _vanna = -_pdf * _d2 / _ivk
+                            _v_out = (_sgn_t * _vanna * _oiv * 100.0 * _sp_sg * 0.01) / 1e6
+                        else:
+                            _charm = -_pdf * (2.0 * 0.045 * _ty - _d2 * _ivk * _sq) / (2.0 * _ty * _ivk * _sq)
+                            _v_out = (_sgn_t * _charm * _oiv * 100.0 * _sp_sg / 365.0) / 1e6
                     except Exception:
                         _v_out = 0.0
                     _vals_tv.append(round(_v_out, 4))
                 _df_sg[_metric_nm] = _vals_tv
-            _val_col = {"GEX": "GEX($M)", "Delta": "DEX($M)", "Gamma": "Gamma", "Theta": "Theta", "Vega": "Vega"}[_metric_nm]
-            _agg_fn = "sum" if _metric_nm in ("GEX", "Delta") else "mean"
+            _val_col = {"GEX": "GEX($M)", "Delta": "DEX($M)", "Gamma": "Gamma", "Theta": "Theta", "Vega": "Vega", "Vanna": "Vanna", "Charm": "Charm"}[_metric_nm]
+            _agg_fn = "sum" if _metric_nm in ("GEX", "Delta", "Vanna", "Charm") else "mean"
             _df_sg["DW_Val"] = pd.to_numeric(_df_sg[_val_col], errors="coerce").fillna(0.0) * pd.to_numeric(_df_sg.get("Delta", 0), errors="coerce").fillna(0.0).abs()
             _grp_sg = _df_sg.groupby("행사가", as_index=False).agg({_val_col: _agg_fn, "DW_Val": _agg_fn, "OI": "sum", "거래량": "sum"}).sort_values("행사가")
             _grp_sg["CumVal"] = _grp_sg[_val_col].cumsum()
@@ -11507,6 +11524,24 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             _fig_dw.add_vline(x=_sp_sg, line_color="#ef4444", line_dash="dash", annotation_text=f"Spot: {_sp_sg:,.2f}")
             _fig_dw.update_layout(title=f"Delta-Weighted {_metric_nm} Exposure", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=360, margin=dict(l=20, r=20, t=48, b=24))
             st.plotly_chart(_fig_dw, use_container_width=True, key=f"sg_dw_{_key_suf}")
+
+            with st.expander(f"🧲 {_tk_g} 딜러 헤지 시뮬레이터 (Spot ±5% 이동 시 강제 매수/매도 추정)", expanded=False):
+                _sim_pcts = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+                _net_gex_tot = float(_df_sg["GEX($M)"].sum()) if "GEX($M)" in _df_sg.columns else 0.0
+                _sim_rows = []
+                for _sp_p in _sim_pcts:
+                    _px_s = round(_sp_sg * (1.0 + _sp_p / 100.0), 2)
+                    # Positive GEX -> price up => dealer sells (-), price down => dealer buys (+)
+                    _hedge_m = round(-_net_gex_tot * _sp_p, 2)
+                    _sim_rows.append({"변동(%)": f"{_sp_p:+d}%", "예상주가($)": _px_s, "딜러헤지수급($M)": _hedge_m})
+                _df_sim = pd.DataFrame(_sim_rows)
+                _fig_sim = _go_sg.Figure(_go_sg.Bar(
+                    x=_df_sim["변동(%)"], y=_df_sim["딜러헤지수급($M)"],
+                    marker_color=["#10b981" if v >= 0 else "#ef4444" for v in _df_sim["딜러헤지수급($M)"]],
+                    text=[f"{v:+.1f}M" for v in _df_sim["딜러헤지수급($M)"]], textposition="auto",
+                ))
+                _fig_sim.update_layout(title=f"{_tk_g} 주가 변동별 딜러 강제 헤지 수급 ($M · +매수/-매도)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=280, margin=dict(l=16, r=16, t=40, b=20))
+                st.plotly_chart(_fig_sim, use_container_width=True, key=f"sg_sim_{_key_suf}")
 
             _top15_sg = _grp_sg.reindex(_grp_sg[_val_col].abs().sort_values(ascending=False).index).head(15)
             st.dataframe(_top15_sg, hide_index=True, use_container_width=True)
@@ -11563,6 +11598,10 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             _render_single_greek_tab(_p_tk, "Theta", "#ec4899", "theta")
         with _pt_vg:
             _render_single_greek_tab(_p_tk, "Vega", "#14b8a6", "vega")
+        with _pt_vn:
+            _render_single_greek_tab(_p_tk, "Vanna", "#38bdf8", "vanna")
+        with _pt_ch:
+            _render_single_greek_tab(_p_tk, "Charm", "#f97316", "charm")
 
         with _pt1:
             _uc1, _uc2, _uc3 = st.columns([1.0, 1.5, 1.5])
@@ -11886,6 +11925,67 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             else:
                 st.info("우측 `📊 퀀트 통계 조회` 버튼을 눌러주세요.")
 
+
+
+        with _pt_cor:
+            st.subheader("🔗 종목 간 상관관계 히트맵 (Asset Correlation)")
+            _cor_c1, _cor_c2 = st.columns([2.4, 1.0])
+            _cor_tks = _cor_c1.multiselect("비교 종목군", ["SOXL", "SOXS", "SMH", "NVDA", "AMD", "TSM", "MU", "AVGO", "TSLA", "SPY", "QQQ"], default=["SOXL", "NVDA", "AMD", "TSM", "MU", "SPY", "QQQ"], key="persp_cor_tks")
+            _cor_per = _cor_c2.selectbox("기간", ["1mo", "3mo", "6mo", "1y"], index=1, key="persp_cor_per")
+            if len(_cor_tks) >= 2:
+                @st.cache_data(ttl=600, show_spinner=False)
+                def _fetch_corr_mat(tks_t, per_s):
+                    import yfinance as _yf_cr
+                    _df_c = _yf_cr.download(list(tks_t), period=per_s, progress=False)["Close"]
+                    return _df_c.pct_change().dropna().corr().round(2)
+                try:
+                    _corr_m = _fetch_corr_mat(tuple(_cor_tks), _cor_per)
+                    if not _corr_m.empty:
+                        import plotly.graph_objects as _go_cr
+                        _fig_cr = _go_cr.Figure(data=_go_cr.Heatmap(
+                            z=_corr_m.values, x=_corr_m.columns.tolist(), y=_corr_m.index.tolist(),
+                            colorscale="RdBu", zmid=0, text=_corr_m.values, texttemplate="%{text}",
+                        ))
+                        _fig_cr.update_layout(title=f"일일 수익률 상관계수 ({_cor_per})", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=440, margin=dict(l=20, r=20, t=44, b=20))
+                        st.plotly_chart(_fig_cr, use_container_width=True, key="persp_corr_hm")
+                except Exception as _ec:
+                    st.warning(f"상관관계 조회 오류: {_ec}")
+
+        with _pt_mac:
+            st.subheader("🌍 매크로 & 미국채 금리커브 (Macro Overview & Yield Curve)")
+            @st.cache_data(ttl=600, show_spinner=False)
+            def _fetch_macro_curve():
+                import yfinance as _yf_mc
+                _syms = {"3M": "^IRX", "5Y": "^FVX", "10Y": "^TNX", "30Y": "^TYX", "VIX": "^VIX", "DXY": "DX-Y.NYB", "WTI": "CL=F", "Gold": "GC=F"}
+                _out_m = {}
+                for _k, _s in _syms.items():
+                    try:
+                        _h = _yf_mc.Ticker(_s).history(period="5d", interval="1d")["Close"].dropna()
+                        if len(_h) >= 2:
+                            _out_m[_k] = (round(float(_h.iloc[-1]), 2), round(float(_h.iloc[-1] - _h.iloc[-2]), 2))
+                        elif len(_h) == 1:
+                            _out_m[_k] = (round(float(_h.iloc[-1]), 2), 0.0)
+                    except Exception:
+                        pass
+                return _out_m
+            _mac_d = _fetch_macro_curve()
+            if _mac_d:
+                _mc1, _mc2, _mc3, _mc4, _mc5 = st.columns(5)
+                _y10 = _mac_d.get("10Y", (0, 0))[0]
+                _y3m = _mac_d.get("3M", (0, 0))[0]
+                _spr = round(_y10 - _y3m, 2) if (_y10 and _y3m) else 0.0
+                _mc1.metric("미국채 10Y", f"{_y10:.2f}%", f"{_mac_d.get('10Y', (0,0))[1]:+.2f}")
+                _mc2.metric("10Y - 3M 스프레드", f"{_spr:+.2f}%p", "정상(우상향)" if _spr > 0 else "역전(경기침체 경계)")
+                _mc3.metric("VIX", f"{_mac_d.get('VIX', (0,0))[0]:.2f}", f"{_mac_d.get('VIX', (0,0))[1]:+.2f}")
+                _mc4.metric("달러인덱스(DXY)", f"{_mac_d.get('DXY', (0,0))[0]:.2f}", f"{_mac_d.get('DXY', (0,0))[1]:+.2f}")
+                _mc5.metric("WTI 유가", f"${_mac_d.get('WTI', (0,0))[0]:.2f}", f"{_mac_d.get('WTI', (0,0))[1]:+.2f}")
+                import plotly.graph_objects as _go_mc
+                _yc_x = [k for k in ("3M", "5Y", "10Y", "30Y") if k in _mac_d]
+                _yc_y = [_mac_d[k][0] for k in _yc_x]
+                if _yc_x:
+                    _fig_yc = _go_mc.Figure(_go_mc.Scatter(x=_yc_x, y=_yc_y, mode="lines+markers+text", text=[f"{v:.2f}%" for v in _yc_y], textposition="top center", line=dict(color="#10b981", width=3)))
+                    _fig_yc.update_layout(title="미국채 수익률 곡선 (US Treasury Yield Curve)", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=340, margin=dict(l=20, r=20, t=44, b=20), yaxis_title="금리 (%)")
+                    st.plotly_chart(_fig_yc, use_container_width=True, key="persp_yc_chart")
 
 if nav_menu == "🏆 Top Conviction Ranking":
     st.title("🏆 Top Conviction Ranking")
