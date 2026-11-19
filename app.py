@@ -8053,7 +8053,7 @@ def get_moomoo_live_snapshot(tk):
     try:
         if os.path.exists(db_p):
             con = sqlite3.connect(f"file:{db_p}?mode=ro", uri=True, timeout=2)
-            row = con.execute("SELECT data FROM quotes WHERE sym=?", (sym,)).fetchone()
+            row = con.execute("SELECT data FROM quotes WHERE sym IN (?, ?) ORDER BY ts DESC LIMIT 1", (clean, sym)).fetchone()
             con.close()
             if row and row[0]:
                 qd = json.loads(row[0])
@@ -8101,7 +8101,16 @@ def get_moomoo_live_snapshot(tk):
             _rs_px, _dfs_px = qctx.get_market_snapshot([sym])
             if _rs_px == RET_OK and _dfs_px is not None and not _dfs_px.empty:
                 _pr0 = _dfs_px.iloc[0]
-                for _pk in ("overnight_price", "after_price", "pre_price", "last_price"):
+                _kst_hm = (pd.Timestamp.now(tz="Asia/Seoul").hour * 100) + pd.Timestamp.now(tz="Asia/Seoul").minute
+                if 1000 <= _kst_hm < 1800:
+                    _pk_order = ("overnight_price", "after_price", "last_price", "pre_price")
+                elif 1800 <= _kst_hm < 2330:
+                    _pk_order = ("pre_price", "overnight_price", "last_price", "after_price")
+                elif _kst_hm >= 2330 or _kst_hm < 600:
+                    _pk_order = ("last_price", "pre_price", "after_price", "overnight_price")
+                else:
+                    _pk_order = ("after_price", "last_price", "overnight_price", "pre_price")
+                for _pk in _pk_order:
                     _pv = float(_pr0.get(_pk, 0) or 0)
                     if _pv > 0:
                         out["px"] = round(_pv, 2); out["ok"] = True; break
