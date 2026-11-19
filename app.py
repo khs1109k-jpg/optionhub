@@ -251,6 +251,69 @@ def _fetch_cboe_all_prem_bars(ticker, spot_ref=0.0):
     except Exception:
         return []
 
+@st.cache_data(ttl=240, show_spinner=False)
+def _fetch_cboe_multi_exp_rows(ticker, max_exps=10):
+    import urllib.request, re as _re_me
+    from datetime import datetime as _dt_me
+    try:
+        tk_u = str(ticker or "").strip().upper()
+        cboe_sym = {"SPX": "_SPX", "NDX": "_NDX", "VIX": "_VIX", "RUT": "_RUT"}.get(tk_u, tk_u)
+        url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{cboe_sym}.json"
+        raw = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=8).read().decode("utf-8"))
+        data_d = raw.get("data") or {}
+        opts = data_d.get("options") or []
+        if not opts:
+            return [], 0.0
+        spot = float(data_d.get("current_price") or data_d.get("close") or 0.0)
+        now_dt = _dt_me.now()
+        today_s = now_dt.strftime("%Y-%m-%d")
+        parsed = []
+        exp_set = set()
+        for o in opts:
+            occ = str(o.get("option") or "")
+            m = _re_me.match(r"^[A-Z]+(\d{6})([CP])(\d{8})$", occ)
+            if not m:
+                continue
+            yymmdd, cp_ch, k_raw = m.groups()
+            exp_s = f"20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+            if exp_s < today_s:
+                continue
+            K = int(k_raw) / 1000.0
+            oi = int(o.get("open_interest") or 0)
+            vol = int(o.get("volume") or 0)
+            if oi <= 0 and vol <= 0:
+                continue
+            exp_set.add(exp_s)
+            parsed.append((exp_s, cp_ch == "C", K, oi, vol, o))
+        target_exps = set(sorted(exp_set)[:max_exps])
+        rows = []
+        for exp_s, is_c, K, oi, vol, o in parsed:
+            if exp_s not in target_exps:
+                continue
+            try:
+                T = max((_dt_me.strptime(exp_s, "%Y-%m-%d") - now_dt).days / 365.0, 1.0 / 365.0)
+            except Exception:
+                T = 7.0 / 365.0
+            s_ref = spot if spot > 0 else K
+            iv = max(float(o.get("iv") or 0.30), 0.08)
+            delta, gamma = o.get("delta"), o.get("gamma")
+            if delta is None or gamma is None or float(gamma or 0) == 0:
+                delta, gamma = bs_greeks(s_ref, K, T, 0.045, iv, is_call=is_c)
+            else:
+                delta, gamma = float(delta), float(gamma)
+            sign = 1.0 if is_c else -1.0
+            gex_m = (sign * gamma * oi * 100.0 * (s_ref ** 2) * 0.01) / 1e6
+            dex_m = (delta * oi * 100.0 * s_ref) / 1e6
+            rows.append({
+                "만기": exp_s, "DTE": max(int(round(T * 365)), 0), "구분": "Call" if is_c else "Put",
+                "행사가": K, "OI": oi, "거래량": vol, "IV(%)": round(iv * 100, 1),
+                "Delta": round(delta, 3), "Gamma": round(gamma, 4),
+                "GEX($M)": round(gex_m, 3), "DEX($M)": round(dex_m, 3),
+            })
+        return rows, spot
+    except Exception:
+        return [], 0.0
+
 def fetch_yahoo_oi(ticker):
     """1순위 Cboe 공개 API(24시간 OCC OI) -> 실패 시 yfinance 폴백"""
     _cb_rows, _cb_sp, _cb_st = fetch_cboe_oi(ticker)
@@ -11329,16 +11392,29 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
         def _render_single_greek_tab(_tk_g, _metric_nm, _col_hex, _key_suf):
             import plotly.graph_objects as _go_sg
             from plotly.subplots import make_subplots as _mk_sub_sg
-            _cb_sg = _fetch_live_oi_fallback(_tk_g)
-            _rows_sg = (_cb_sg or {}).get("상세") or []
-            _sp_sg = float((_cb_sg or {}).get("Spot") or 0)
+            _rows_sg, _sp_sg = _fetch_cboe_multi_exp_rows(_tk_g, max_exps=10)
+            if not _rows_sg or _sp_sg <= 0:
+                _cb_sg = _fetch_live_oi_fallback(_tk_g)
+                _rows_sg = (_cb_sg or {}).get("상세") or []
+                _sp_sg = float((_cb_sg or {}).get("Spot") or 0)
             if not _rows_sg or _sp_sg <= 0:
                 st.warning(f"{_tk_g} 옵션 체인 데이터를 불러오지 못했습니다.")
                 return
             _df_sg_all = pd.DataFrame(_rows_sg)
-            _avail_exps = sorted(_df_sg_all["만기"].astype(str).unique().tolist()) if "만기" in _df_sg_all.columns else []
+            _raw_exps = sorted(_df_sg_all["만기"].astype(str).unique().tolist()) if "만기" in _df_sg_all.columns else []
+            def _tag_opex(es):
+                try:
+                    _d = pd.to_datetime(es)
+                    if _d.weekday() == 4 and 15 <= _d.day <= 21:
+                        return f"{es} (OPEX)"
+                except Exception:
+                    pass
+                return es
+            _exp_lbl_map = {_tag_opex(e): e for e in _raw_exps}
+            _avail_exps = list(_exp_lbl_map.keys())
             _sg_c1, _sg_c2 = st.columns([1.8, 1.2])
-            _sel_exps = _sg_c1.multiselect("📅 만기(기간) 선택 (비우면 전체)", _avail_exps, default=_avail_exps[:1] if _avail_exps else [], key=f"sg_exp_{_key_suf}")
+            _sel_exp_lbls = _sg_c1.multiselect("📅 만기(기간 · OPEX 포함) 선택 (비우면 전체)", _avail_exps, default=_avail_exps[:1] if _avail_exps else [], key=f"sg_exp_{_key_suf}")
+            _sel_exps = [_exp_lbl_map[l] for l in _sel_exp_lbls if l in _exp_lbl_map]
             _rng_sg = _sg_c2.slider("행사가 범위 (±%)", 0.10, 0.80, 0.15, 0.05, key=f"sg_rng_{_key_suf}")
             _df_sg = _df_sg_all.copy()
             if _sel_exps and "만기" in _df_sg.columns:
@@ -11408,7 +11484,20 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                 _fig_dw.update_layout(title=f"Delta-Weighted {_metric_nm} Exposure", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=300, margin=dict(l=12, r=12, t=38, b=20))
                 st.plotly_chart(_fig_dw, use_container_width=True, key=f"sg_dw_{_key_suf}")
 
-            st.dataframe(_grp_sg.reindex(_grp_sg[_val_col].abs().sort_values(ascending=False).index).head(15), hide_index=True, use_container_width=True)
+            _top15_sg = _grp_sg.reindex(_grp_sg[_val_col].abs().sort_values(ascending=False).index).head(15)
+            st.dataframe(_top15_sg, hide_index=True, use_container_width=True)
+            if st.button(f"📩 {_tk_g} {_metric_nm} 텔레그램 전송", type="primary", key=f"btn_sg_tg_{_key_suf}"):
+                _exp_txt = ", ".join(_sel_exp_lbls) if _sel_exp_lbls else "전체 만기"
+                _top5_txt = "\n".join(f"• ${float(r['행사가']):g}: {float(r[_val_col]):+,.3f} (OI {int(r['OI']):,})" for _, r in _top15_sg.head(5).iterrows())
+                _sg_msg = (
+                    f"⚡ *[{_tk_g} {_metric_nm} 분석]*\n"
+                    f"만기: {_exp_txt}\n"
+                    f"현재가: ${_sp_sg:,.2f} | {'Net' if _agg_fn=='sum' else '평균'} {_metric_nm}: {_tot_v:+,.3f}\n"
+                    f"Call Wall: ${_cw_k:g} | Put Wall: ${_pw_k:g} | 최대 집중: ${float(_pk_row['행사가']):g}\n\n"
+                    f"*상위 5개 행사가*\n{_top5_txt}"
+                )
+                if send_telegram_msg(tg_token, tg_chat_id, _sg_msg)[0]:
+                    st.toast(f"✅ {_tk_g} {_metric_nm} 텔레그램 전송 완료!")
 
         with _pt_g:
             _render_single_greek_tab(_p_tk, "GEX", "#10b981", "gex")
