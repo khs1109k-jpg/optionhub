@@ -12912,12 +12912,15 @@ if nav_menu == "📡 OI Change Radar":
 
                 # Flow direction check from all_raw_flows for this ticker
                 _c_buy_p, _p_buy_p = 50, 50
-                _tk_flows = [f for f in all_raw_flows if str(f.get("ticker", "")).upper() == _lv_tk]
+                _tk_flows = [r for r in (all_raw_flows or []) if (isinstance(r, dict) and str(r.get("ticker", "")).upper() == _lv_tk) or (isinstance(r, (list, tuple)) and len(r) > 4 and str(r[1]).upper() == _lv_tk)]
                 if _tk_flows:
-                    _cf_b = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("C") and "ASK" in str(f.get("side", "")).upper())
-                    _cf_t = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("C"))
-                    _pf_b = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("P") and "ASK" in str(f.get("side", "")).upper())
-                    _pf_t = sum(float(f.get("premium", 0) or 0) for f in _tk_flows if str(f.get("cp", "")).upper().startswith("P"))
+                    def _rf_cp(r): return str(r.get("cp", "") if isinstance(r, dict) else r[3]).upper()
+                    def _rf_sd(r): return str(r.get("side", "") if isinstance(r, dict) else r[4]).upper()
+                    def _rf_pm(r): return float(r.get("premium", 0) or 0) if isinstance(r, dict) else parse_prem_usd(r[14] if len(r) > 14 else "0")
+                    _cf_b = sum(_rf_pm(r) for r in _tk_flows if _rf_cp(r).startswith("C") and "A" in _rf_sd(r))
+                    _cf_t = sum(_rf_pm(r) for r in _tk_flows if _rf_cp(r).startswith("C"))
+                    _pf_b = sum(_rf_pm(r) for r in _tk_flows if _rf_cp(r).startswith("P") and "A" in _rf_sd(r))
+                    _pf_t = sum(_rf_pm(r) for r in _tk_flows if _rf_cp(r).startswith("P"))
                     if _cf_t > 0:
                         _c_buy_p = int(round(_cf_b / _cf_t * 100))
                     if _pf_t > 0:
@@ -13194,10 +13197,10 @@ if nav_menu == "📡 OI Change Radar":
                     _semi_peers = ["NVDA", "TSM", "MU", "AMD"]
                     _peer_parts = []
                     for _pt in _semi_peers:
-                        _pf = [f for f in all_raw_flows if str(f.get("ticker", "")).upper() == _pt]
+                        _pf = [r for r in (all_raw_flows or []) if (isinstance(r, dict) and str(r.get("ticker", "")).upper() == _pt) or (isinstance(r, (list, tuple)) and len(r) > 4 and str(r[1]).upper() == _pt)]
                         if _pf:
-                            _pb = sum(float(f.get("premium", 0) or 0) for f in _pf if str(f.get("cp", "")).upper().startswith("C"))
-                            _ptot = max(sum(float(f.get("premium", 0) or 0) for f in _pf), 1.0)
+                            _pb = sum((float(r.get("premium", 0) or 0) if isinstance(r, dict) else parse_prem_usd(r[14] if len(r) > 14 else "0")) for r in _pf if str(r.get("cp", "") if isinstance(r, dict) else r[3]).upper().startswith("C"))
+                            _ptot = max(sum((float(r.get("premium", 0) or 0) if isinstance(r, dict) else parse_prem_usd(r[14] if len(r) > 14 else "0")) for r in _pf), 1.0)
                             _peer_parts.append(f"{_pt} {int(round(_pb/_ptot*100))}% (${_ptot/1e6:.1f}M)")
                     if _peer_parts:
                         st.caption("📡 관련 대장주 오늘 콜 비중: " + " | ".join(_peer_parts))
