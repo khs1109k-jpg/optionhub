@@ -12595,13 +12595,13 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
     for _sr in (raw_flows_l or []):
         try:
             _tk = str(_sr[1]).strip().upper()
-            _cp = "Call" if "CALL" in str(_sr[3]).upper() else ("Put" if "PUT" in str(_sr[3]).upper() else "")
+            _cp = "Call" if "CALL" in str(_sr[3]).upper() or str(_sr[3]).upper().startswith("C") else ("Put" if "PUT" in str(_sr[3]).upper() or str(_sr[3]).upper().startswith("P") else "")
             _typ = str(_sr[13] if len(_sr) > 13 else "").upper()
-            _sd = str(_sr[10] if len(_sr) > 10 else "").upper()
+            _sd = str(_sr[10] if len(_sr) > 10 else (_sr[4] if len(_sr) > 4 else "")).upper()
             _d = flow_hints.setdefault((_tk, _cp), {"ask": 0, "bid": 0, "sweep": 0})
             if "SWEEP" in _typ: _d["sweep"] += 1
-            if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd: _d["ask"] += 1
-            elif "BID" in _sd or "BELOW" in _typ or "SELL" in _sd: _d["bid"] += 1
+            if "ASK" in _sd or "ABOVE" in _typ or "BUY" in _sd or _sd == "A": _d["ask"] += 1
+            elif "BID" in _sd or "BELOW" in _typ or "SELL" in _sd or _sd == "B": _d["bid"] += 1
         except Exception:
             pass
 
@@ -12620,6 +12620,7 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
         else:
             prev_sn, last_sn = snaps[-2], snaps[-1]
 
+        spot_tk = float(last_sn.get("Spot", 0) or 0)
         prev_map = {}
         for x in (prev_sn.get("상세") or []):
             k = (str(x.get("만기", "")), str(x.get("구분", "")), float(x.get("행사가", 0) or 0))
@@ -12637,8 +12638,10 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
                 continue
             vol_v = int(x.get("거래량", 0) or 0)
             voi_v = round(vol_v / max(now_oi, 1), 2)
+            new_pos_pct = round(min(100.0, max(delta_oi, 0) / max(vol_v, abs(delta_oi), 1) * 100.0), 1) if delta_oi > 0 else round(min(100.0, abs(delta_oi) / max(prev_oi, 1) * 100.0), 1)
             prem_usd = float(x.get("프리미엄($)", 0) or 0)
             chg_pct = round(delta_oi / prev_oi * 100.0, 1) if prev_oi > 0 else (100.0 if delta_oi > 0 else -100.0)
+            dte_v = int(x.get("DTE", 0) or 0)
 
             fh = flow_hints.get((tk, cp_norm), {"ask": 0, "bid": 0, "sweep": 0})
             if delta_oi > 0:
@@ -12656,21 +12659,51 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
                 else:
                     est_act = "STC/BTC (청산)"
 
+            # 기관 의도 자동 판독 (매집 / 헤지 / 차익실현 / 하방방어)
+            if delta_oi > 0:
+                if cp_norm == "Call":
+                    if "BTO" in est_act and (fh["ask"] >= fh["bid"] or voi_v >= 1.0):
+                        inst_intent = "🟢 매집 (콜 신규유입)"
+                    else:
+                        inst_intent = "🟡 상단 저항/커버드콜"
+                else:
+                    if "STO" in est_act or (spot_tk > 0 and stk_v <= spot_tk * 0.96 and fh["bid"] >= fh["ask"]):
+                        inst_intent = "🛡️ 하방방어 (풋 매도/지지)"
+                    else:
+                        inst_intent = "🟣 헤지 (하락 보험매수)"
+            else:
+                if cp_norm == "Call" and ("STC" in est_act or fh["bid"] >= fh["ask"]):
+                    inst_intent = "💰 차익실현 (콜 청산)"
+                elif cp_norm == "Put" and "BTC" in est_act:
+                    inst_intent = "💰 차익실현/숏커버"
+                else:
+                    inst_intent = "🧹 포지션 정리"
+
+            # OI Score (0~100)
+            sc_doi = min(30.0, abs(chg_pct) / 100.0 * 30.0)
+            sc_voi = min(20.0, voi_v / 2.5 * 20.0)
+            sc_new = min(20.0, new_pos_pct / 100.0 * 20.0)
+            sc_flw = (10.0 if fh["ask"] > 0 or fh["bid"] > 0 else 0.0) + (5.0 if fh["sweep"] > 0 else 0.0)
+            sc_prm = 15.0 if prem_usd >= 5e6 else (10.0 if prem_usd >= 1e6 else (5.0 if prem_usd >= 2e5 else 2.0))
+            oi_score = int(round(min(99, sc_doi + sc_voi + sc_new + sc_flw + sc_prm)))
+
             badge = "🔥 +100%↑" if chg_pct >= 100 else ("⚡ +50%↑" if chg_pct >= 50 else ("📈 +20%↑" if chg_pct >= 20 else ("📉 -20%↓" if chg_pct <= -20 else "-")))
             _rd_conf = 52 + (14 if abs(chg_pct) >= 20 else 7) + (10 if fh["ask"] > 0 or fh["bid"] > 0 else 0) + (9 if fh["sweep"] > 0 else 0) + (8 if prem_usd >= 5e6 else (5 if prem_usd >= 1e6 else 0)) + (4 if voi_v >= 1.5 else 0)
-            _rd_rsns = []
-            if delta_oi > 0: _rd_rsns.append("OI 증가")
-            else: _rd_rsns.append("OI 감소")
+            _rd_rsns = ["OI 증가" if delta_oi > 0 else "OI 감소"]
+            if voi_v >= 1.2: _rd_rsns.append(f"Vol/OI {voi_v}")
             if fh["ask"] > 0: _rd_rsns.append("Above Ask")
             if fh["sweep"] > 0: _rd_rsns.append("Sweep")
-            if prem_usd >= 1e6: _rd_rsns.append("Premium 증가")
+            if prem_usd >= 1e6: _rd_rsns.append("대형 프리미엄")
             rec = {
                 "종목": tk, "계약": f"${stk_v:g}{'C' if cp_norm == 'Call' else 'P'} ({exp_s[5:]})",
+                "OI Score": oi_score,
+                "DTE": dte_v,
                 "전일OI": prev_oi, "현재OI": now_oi, "ΔOI": delta_oi, "변화율(%)": chg_pct,
                 "구간": badge, "Vol/OI": voi_v,
+                "New Pos(%)": new_pos_pct,
                 "프리미엄": f"${prem_usd/1e6:.2f}M" if prem_usd >= 1e6 else f"${prem_usd/1e3:.0f}K",
-                "Sweep/Ask": f"S:{fh['sweep']} · A:{fh['ask']}",
-                "기관판독": est_act,
+                "OI Intent": est_act,
+                "기관 의도": inst_intent,
                 "신뢰도": f"{min(97, _rd_conf)}%",
                 "판독근거": " · ".join(_rd_rsns),
             }
@@ -12679,10 +12712,10 @@ def compute_oi_change_radar(oi_hist_d, raw_flows_l, big_flows_l):
             else:
                 oi_drop.append(rec)
 
-    call_surge.sort(key=lambda r: (r["ΔOI"], r["변화율(%)"]), reverse=True)
-    put_surge.sort(key=lambda r: (r["ΔOI"], r["변화율(%)"]), reverse=True)
+    call_surge.sort(key=lambda r: (r["OI Score"], r["ΔOI"]), reverse=True)
+    put_surge.sort(key=lambda r: (r["OI Score"], r["ΔOI"]), reverse=True)
     oi_drop.sort(key=lambda r: r["ΔOI"])
-    return call_surge[:10], put_surge[:10], oi_drop[:10]
+    return call_surge[:15], put_surge[:15], oi_drop[:15]
 
 
 LEVEL_TRACKER_PATH = os.path.expanduser("~/.optionhub_level_tracker.json")
@@ -12801,11 +12834,12 @@ if nav_menu == "📡 OI Change Radar":
     st.title("📡 OI Change Radar · 대장 레벨 흐름")
     st.caption("만기별 콜·풋 Strike→Future 흐름, 어제 신규 포지션, 만기 카드 해석·적중률 추적기, 전일 대비 OI 급증·청산 레이더")
 
-    _rad_tab_lv, _rad_tab_new, _rad_tab_ai, _rad_tab_top = st.tabs([
+    _rad_tab_lv, _rad_tab_new, _rad_tab_ai, _rad_tab_deep, _rad_tab_top = st.tabs([
         "🎯 만기별 콜·풋 요약 (Strike→Future)",
         "🆕 만기별 신규 포지션 (어제 ΔOI)",
         "🧠 만기 카드 해석 · 적중률 추적기",
-        "📡 전일 대비 OI 급증·감소 TOP10",
+        "📊 OI 심층분석 (DTE·Wall·히트맵·1/5/20일 추세)",
+        "📡 전일 대비 OI 급증·감소 TOP15 (기관 의도)",
     ])
 
     _lv_tk_list = ["SOXL", "NVDA", "TSLA", "MU", "QQQ", "SPY", "AMD", "PLTR", "AVGO", "SNDK"]
@@ -13373,6 +13407,126 @@ if nav_menu == "📡 OI Change Radar":
                 else:
                     st.info("아직 저장된 해석 기록이 없습니다. 왼쪽 카드 하단 **'💾 오늘 해석 기록 저장'**을 누르시면 매일 적중률이 자동 추적됩니다.")
 
+    with _rad_tab_deep:
+        _dp_oi_hist = load_json_file(OI_PATH, {})
+        _dp_tks = sorted([k for k, v in _dp_oi_hist.items() if isinstance(v, list) and len(v) >= 1])
+        _dp_def = _dp_tks.index(sel_tk) if sel_tk in _dp_tks else 0
+        _dp_tk = st.selectbox("심층 분석 종목 선택", _dp_tks or [sel_tk or "SOXL"], index=_dp_def if _dp_tks else 0, key="dp_oi_tk")
+        _dp_snaps = _dp_oi_hist.get(_dp_tk, [])
+
+        if _dp_snaps:
+            _dp_by_day = {}
+            for _s in _dp_snaps:
+                _dk = str(_s.get("수집시각", ""))[:10]
+                if _dk and _s.get("상세"):
+                    _dp_by_day[_dk] = _s
+            _dp_days = sorted(_dp_by_day.keys())
+            _dp_last = _dp_by_day[_dp_days[-1]] if _dp_days else _dp_snaps[-1]
+            _dp_spot = float(_dp_last.get("Spot", 0) or 0)
+            _dp_rows = _dp_last.get("상세") or []
+
+            # 8. OI Trend (1일 / 5일 / 20일)
+            st.markdown("#### 📈 OI Trend (1일 / 5일 / 20일 추세)")
+            _tot_now_oi = int(_dp_last.get("Call_OI", 0) or 0) + int(_dp_last.get("Put_OI", 0) or 0)
+            def _calc_trend_pct(n_days):
+                if len(_dp_days) < 2:
+                    return None, 0
+                idx_ref = max(0, len(_dp_days) - 1 - n_days)
+                if idx_ref == len(_dp_days) - 1:
+                    return None, 0
+                _ref_s = _dp_by_day[_dp_days[idx_ref]]
+                _ref_tot = int(_ref_s.get("Call_OI", 0) or 0) + int(_ref_s.get("Put_OI", 0) or 0)
+                if _ref_tot <= 0:
+                    return None, 0
+                return round((_tot_now_oi - _ref_tot) / _ref_tot * 100.0, 2), _tot_now_oi - _ref_tot
+
+            _t1_p, _t1_d = _calc_trend_pct(1)
+            _t5_p, _t5_d = _calc_trend_pct(5)
+            _t20_p, _t20_d = _calc_trend_pct(20)
+            _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+            _tc1.metric("총 미결제약정 (Call+Put)", f"{_tot_now_oi:,}")
+            _tc2.metric("1일 OI 추세", f"{_t1_p:+.1f}%" if _t1_p is not None else "데이터 부족", f"{_t1_d:+,}" if _t1_p is not None else None)
+            _tc3.metric("5일 OI 추세", f"{_t5_p:+.1f}%" if _t5_p is not None else "데이터 부족", f"{_t5_d:+,}" if _t5_p is not None else None)
+            _tc4.metric("20일 OI 추세", f"{_t20_p:+.1f}%" if _t20_p is not None else "데이터 부족", f"{_t20_d:+,}" if _t20_p is not None else None)
+
+            if len(_dp_days) >= 2:
+                _tr_dates = _dp_days[-20:]
+                _tr_c = [int(_dp_by_day[d].get("Call_OI", 0) or 0) for d in _tr_dates]
+                _tr_p = [int(_dp_by_day[d].get("Put_OI", 0) or 0) for d in _tr_dates]
+                _fig_tr = go.Figure()
+                _fig_tr.add_trace(go.Scatter(x=_tr_dates, y=_tr_c, mode="lines+markers", name="Call OI", line=dict(color="#22c55e", width=2.5)))
+                _fig_tr.add_trace(go.Scatter(x=_tr_dates, y=_tr_p, mode="lines+markers", name="Put OI", line=dict(color="#ef4444", width=2.5)))
+                _fig_tr.update_layout(title=f"{_dp_tk} 1일·5일·20일 Call/Put OI 추이", template="plotly_dark", height=300, margin=dict(l=40, r=20, t=40, b=25))
+                _fig_tr.update_xaxes(type="category")
+                st.plotly_chart(_fig_tr, use_container_width=True, key=f"dp_tr_ch_{_dp_tk}")
+
+            # 4. DTE별 OI 분석
+            st.markdown("#### ⏳ DTE별 OI 분석 (초단기 0~7일 · 단기 8~30일 · 중장기 31일+)")
+            _dte_buckets = {"초단기 (0~7일)": {"c_oi": 0, "p_oi": 0, "vol": 0}, "단기 (8~30일)": {"c_oi": 0, "p_oi": 0, "vol": 0}, "중장기 (31일+)": {"c_oi": 0, "p_oi": 0, "vol": 0}}
+            for _r in _dp_rows:
+                _dte = int(_r.get("DTE", 0) or 0)
+                _b_k = "초단기 (0~7일)" if _dte <= 7 else ("단기 (8~30일)" if _dte <= 30 else "중장기 (31일+)")
+                _oi_v = int(_r.get("OI", 0) or 0)
+                _vl_v = int(_r.get("거래량", 0) or 0)
+                if str(_r.get("구분", "")).lower().startswith("c"):
+                    _dte_buckets[_b_k]["c_oi"] += _oi_v
+                else:
+                    _dte_buckets[_b_k]["p_oi"] += _oi_v
+                _dte_buckets[_b_k]["vol"] += _vl_v
+            _dte_tbl = []
+            for _bk, _bv in _dte_buckets.items():
+                _tot_b = _bv["c_oi"] + _bv["p_oi"]
+                _pc_b = round(_bv["p_oi"] / _bv["c_oi"], 2) if _bv["c_oi"] > 0 else 0.0
+                _b_int = "🟢 매집/강세 우위" if _pc_b <= 0.75 else ("🛡️ 헤지/하방방어 우위" if _pc_b >= 1.2 else "🟡 균형/박스권")
+                _dte_tbl.append({"DTE 구간": _bk, "Call OI": f"{_bv['c_oi']:,}", "Put OI": f"{_bv['p_oi']:,}", "총 OI": f"{_tot_b:,}", "거래량": f"{_bv['vol']:,}", "P/C OI": _pc_b, "기관 의도": _b_int})
+            st.dataframe(pd.DataFrame(_dte_tbl), use_container_width=True, hide_index=True)
+
+            # 5. Call Wall / Put Wall 추적 + 7. OI Heatmap
+            _c_col_w, _c_col_h = st.columns([1, 1.3])
+            with _c_col_w:
+                st.markdown("#### 🧱 Call Wall / Put Wall 일별 추적")
+                _w_hist_rows = []
+                for _dk in _dp_days[-10:]:
+                    _sn_w = _dp_by_day[_dk]
+                    _sp_w = float(_sn_w.get("Spot", 0) or 0)
+                    _cm, _pm = {}, {}
+                    for _x in (_sn_w.get("상세") or []):
+                        _k = float(_x.get("행사가", 0) or 0)
+                        _o = int(_x.get("OI", 0) or 0)
+                        if _k <= 0 or _o <= 0:
+                            continue
+                        if str(_x.get("구분", "")).lower().startswith("c"):
+                            _cm[_k] = _cm.get(_k, 0) + _o
+                        else:
+                            _pm[_k] = _pm.get(_k, 0) + _o
+                    _cw = max({k: v for k, v in _cm.items() if _sp_w <= 0 or k >= _sp_w * 0.98} or _cm, key=lambda k: _cm[k], default=0)
+                    _pw = max({k: v for k, v in _pm.items() if _sp_w <= 0 or k <= _sp_w * 1.02} or _pm, key=lambda k: _pm[k], default=0)
+                    _w_hist_rows.append({"날짜": _dk, "현재가": f"${_sp_w:.2f}", "Call Wall": f"${_cw:g}" if _cw else "-", "Put Wall": f"${_pw:g}" if _pw else "-"})
+                if _w_hist_rows:
+                    st.dataframe(pd.DataFrame(_w_hist_rows[::-1]), use_container_width=True, hide_index=True)
+
+            with _c_col_h:
+                st.markdown("#### 🌡️ 가격대별 5일 OI Heatmap")
+                _hm_mat_dp = {}
+                for _dk in _dp_days[-5:]:
+                    for _x in (_dp_by_day[_dk].get("상세") or []):
+                        _kh = float(_x.get("행사가", 0) or 0)
+                        if _dp_spot > 0 and not (0.7 * _dp_spot <= _kh <= 1.3 * _dp_spot):
+                            continue
+                        _lb = f"${_kh:g}"
+                        _hm_mat_dp.setdefault(_lb, {})[_dk] = _hm_mat_dp.get(_lb, {}).get(_dk, 0) + int(_x.get("OI", 0) or 0)
+                if _hm_mat_dp:
+                    _df_dp_hm = pd.DataFrame.from_dict(_hm_mat_dp, orient="index").fillna(0).astype(int)
+                    _df_dp_hm["_t"] = _df_dp_hm.sum(axis=1)
+                    _df_dp_hm = _df_dp_hm.sort_values("_t", ascending=False).head(12).drop(columns=["_t"])
+                    _df_dp_hm = _df_dp_hm.loc[sorted(_df_dp_hm.index, key=lambda s: float(s.replace("$", "")))]
+                    _fig_dhm = go.Figure(data=go.Heatmap(z=_df_dp_hm.values, x=list(_df_dp_hm.columns), y=list(_df_dp_hm.index), colorscale="YlOrRd", text=_df_dp_hm.values, texttemplate="%{text:,}"))
+                    _fig_dhm.update_layout(template="plotly_dark", height=320, margin=dict(l=55, r=15, t=15, b=25))
+                    _fig_dhm.update_xaxes(type="category")
+                    st.plotly_chart(_fig_dhm, use_container_width=True, key=f"dp_hm_{_dp_tk}")
+        else:
+            st.info("수집된 OI 스냅샷이 없습니다. `📊 OI(미결제약정) 수집`에서 스냅샷을 저장해 주세요.")
+
     with _rad_tab_top:
         _min_pct_opt = st.radio("최소 변화율 필터", ["전체", "+20% 이상", "+50% 이상", "+100% 이상"], horizontal=True, key="radar_min_pct")
         _min_pct_v = {"전체": 0.0, "+20% 이상": 20.0, "+50% 이상": 50.0, "+100% 이상": 100.0}.get(_min_pct_opt, 0.0)
@@ -13382,7 +13536,19 @@ if nav_menu == "📡 OI Change Radar":
         _ps_f = [r for r in _ps10 if r["변화율(%)"] >= _min_pct_v]
         _dr_f = [r for r in _dr10 if abs(r["변화율(%)"]) >= _min_pct_v]
 
-        _rt1, _rt2, _rt3 = st.tabs([f"🟢 콜 OI 급증 TOP10 ({len(_cs_f)})", f"🔴 풋 OI 급증 TOP10 ({len(_ps_f)})", f"🧹 OI 감소 TOP10 ({len(_dr_f)})"])
+        _all_rad = _cs_f + _ps_f + _dr_f
+        if _all_rad:
+            _n_acc = sum(1 for r in _all_rad if "매집" in r.get("기관 의도", ""))
+            _n_hdg = sum(1 for r in _all_rad if "헤지" in r.get("기관 의도", ""))
+            _n_prf = sum(1 for r in _all_rad if "차익실현" in r.get("기관 의도", ""))
+            _n_def = sum(1 for r in _all_rad if "하방방어" in r.get("기관 의도", ""))
+            _ik1, _ik2, _ik3, _ik4 = st.columns(4)
+            _ik1.metric("🟢 기관 매집", f"{_n_acc}건")
+            _ik2.metric("🟣 하방 헤지", f"{_n_hdg}건")
+            _ik3.metric("🛡️ 하방 방어", f"{_n_def}건")
+            _ik4.metric("💰 차익 실현", f"{_n_prf}건")
+
+        _rt1, _rt2, _rt3 = st.tabs([f"🟢 콜 OI 급증 TOP15 ({len(_cs_f)})", f"🔴 풋 OI 급증 TOP15 ({len(_ps_f)})", f"🧹 OI 감소 TOP15 ({len(_dr_f)})"])
         with _rt1:
             if _cs_f: st.dataframe(pd.DataFrame(_cs_f), hide_index=True, use_container_width=True)
             else: st.info("조건에 해당하는 콜 OI 급증 계약이 없습니다. (2일 이상 OI 스냅샷 필요)")
@@ -13395,11 +13561,11 @@ if nav_menu == "📡 OI Change Radar":
 
         if st.button("📩 OI Change Radar 텔레그램 전송", type="primary", key="btn_radar_tg"):
             _rd_lines = ["📡 *[OptionHub OI Change Radar]*\n", "🟢 *콜 OI 급증 TOP 5*"] + [
-                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _cs_f[:5]
+                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['OI Intent']} | {r['기관 의도']} (점수 {r['OI Score']})" for r in _cs_f[:5]
             ] + ["", "🔴 *풋 OI 급증 TOP 5*"] + [
-                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _ps_f[:5]
+                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['OI Intent']} | {r['기관 의도']} (점수 {r['OI Score']})" for r in _ps_f[:5]
             ] + ["", "🧹 *OI 감소 TOP 5*"] + [
-                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['기관판독']}" for r in _dr_f[:5]
+                f"• {r['종목']} {r['계약']} {r['ΔOI']:+,} ({r['변화율(%)']:+.1f}%) | {r['OI Intent']} | {r['기관 의도']} (점수 {r['OI Score']})" for r in _dr_f[:5]
             ]
             if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_rd_lines))[0]:
                 st.toast("✅ OI Change Radar 텔레그램 전송 완료!")
