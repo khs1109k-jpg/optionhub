@@ -1841,6 +1841,7 @@ def compute_market_and_sector_consensus(oi_hist_d, raw_flows_l, big_flows_l):
     return mkt_dir, risk_score, mkt_res, sec_res, ins_bias, sec_cnts, ins_subj, dp_map, tide_d
 
 MENU_ITEMS = [
+    "🏛️ Institution Dashboard",
     "📝 오늘의 종합평",
     "🏆 Top Conviction Ranking",
     "🏦 Smart Money Tracker",
@@ -1885,7 +1886,10 @@ _menu_cfg = load_json_file(MENU_CFG_PATH, {"order": list(MENU_ITEMS), "hidden": 
 _saved_order = [m for m in _menu_cfg.get("order", MENU_ITEMS) if m in MENU_ITEMS]
 for _m in MENU_ITEMS:
     if _m not in _saved_order:
-        _saved_order.append(_m)
+        if _m == "🏛️ Institution Dashboard":
+            _saved_order.insert(0, _m)
+        else:
+            _saved_order.append(_m)
 _hidden_set = set(_menu_cfg.get("hidden", []))
 _aliases = _menu_cfg.get("aliases", {})
 _visible_menus = [_m for _m in _saved_order if _m not in _hidden_set] or list(MENU_ITEMS)
@@ -12217,6 +12221,219 @@ def compute_smart_money_streaks(oi_hist_d, raw_flows_l, big_flows_l):
 
     results.sort(key=lambda r: (1 if r["is_alert"] else 0, max(r["acc_days"], r["dist_days"]), r["cum_prem"]), reverse=True)
     return results
+
+
+if nav_menu == "🏛️ Institution Dashboard":
+    st.title("🏛️ Institution Dashboard (기관 포지션 라이프사이클 추적)")
+    st.caption("1일 · 5일 · 20일 · 60일 다기간 기관 포지션 변화(매집 · 헤지 · 청산)와 Gamma Shift · Wall Migration · Dealer Trap · Pin Risk를 최상단에서 통합 추적합니다.")
+
+    _oi_inst = load_json_file(OI_PATH, {})
+    _bf_inst = load_json_file(BIG_FLOWS_PATH, [])
+
+    # Build multi-horizon (1d / 5d / 20d / 60d) institutional metrics across all tracked tickers
+    _inst_rows = []
+    _inst_detail_map = {}
+    for _tk_i, _snaps_i in (_oi_inst or {}).items():
+        if not isinstance(_snaps_i, list) or not _snaps_i:
+            continue
+        _by_d = {}
+        for _s in _snaps_i:
+            _dk = str(_s.get("수집시각", ""))[:10]
+            if _dk:
+                _by_d[_dk] = _s
+        _days_i = sorted(_by_d.keys())
+        if not _days_i:
+            continue
+        _last_s = _by_d[_days_i[-1]]
+        _sp_i = float(_last_s.get("Spot", 0) or 0)
+        _mm_i = get_moomoo_live_snapshot(_tk_i)
+        if float(_mm_i.get("px", 0) or 0) > 0:
+            _sp_i = float(_mm_i["px"])
+
+        _c_now = int(_last_s.get("Call_OI", 0) or 0)
+        _p_now = int(_last_s.get("Put_OI", 0) or 0)
+        _tot_now = _c_now + _p_now
+        _gex_now = float(_last_s.get("Net_GEX_M", 0) or 0)
+
+        def _win_delta(n_d):
+            if len(_days_i) < 2:
+                return 0.0, 0.0, 0, 0
+            _idx_r = max(0, len(_days_i) - 1 - n_d)
+            if _idx_r == len(_days_i) - 1:
+                return 0.0, 0.0, 0, 0
+            _rs = _by_d[_days_i[_idx_r]]
+            _rtot = int(_rs.get("Call_OI", 0) or 0) + int(_rs.get("Put_OI", 0) or 0)
+            _rgex = float(_rs.get("Net_GEX_M", 0) or 0)
+            _oi_pct = round((_tot_now - _rtot) / max(_rtot, 1) * 100.0, 1)
+            _gex_diff = round(_gex_now - _rgex, 2)
+            _dc = _c_now - int(_rs.get("Call_OI", 0) or 0)
+            _dp = _p_now - int(_rs.get("Put_OI", 0) or 0)
+            return _oi_pct, _gex_diff, _dc, _dp
+
+        _d1_p, _d1_g, _d1_c, _d1_pu = _win_delta(1)
+        _d5_p, _d5_g, _d5_c, _d5_pu = _win_delta(5)
+        _d20_p, _d20_g, _d20_c, _d20_pu = _win_delta(20)
+        _d60_p, _d60_g, _d60_c, _d60_pu = _win_delta(60)
+
+        # Call Wall / Put Wall migration + MaxPain + Pin Risk
+        def _walls_for_snap(_sn_w):
+            _spw = float(_sn_w.get("Spot", 0) or _sp_i or 0)
+            _cm, _pm = {}, {}
+            _min_dte = 99
+            for _x in (_sn_w.get("상세") or []):
+                _k = float(_x.get("행사가", 0) or 0)
+                _o = int(_x.get("OI", 0) or 0)
+                _dt_x = int(_x.get("DTE", 7) or 7)
+                if _dt_x > 0:
+                    _min_dte = min(_min_dte, _dt_x)
+                if _k <= 0 or _o <= 0:
+                    continue
+                if str(_x.get("구분", "")).lower().startswith("c"):
+                    _cm[_k] = _cm.get(_k, 0) + _o
+                else:
+                    _pm[_k] = _pm.get(_k, 0) + _o
+            _cw = max({k: v for k, v in _cm.items() if _spw <= 0 or k >= _spw * 0.98} or _cm, key=lambda k: _cm[k], default=0)
+            _pw = max({k: v for k, v in _pm.items() if _spw <= 0 or k <= _spw * 1.02} or _pm, key=lambda k: _pm[k], default=0)
+            return _cw, _pw, _min_dte
+
+        _cw_now, _pw_now, _min_dte = _walls_for_snap(_last_s)
+        _ref_5_sn = _by_d[_days_i[max(0, len(_days_i) - 6)]]
+        _cw_5, _pw_5, _ = _walls_for_snap(_ref_5_sn)
+        _cw_mig = round(_cw_now - _cw_5, 2) if (_cw_now and _cw_5) else 0.0
+        _pw_mig = round(_pw_now - _pw_5, 2) if (_pw_now and _pw_5) else 0.0
+
+        # Auto classify: 기관 매집 / 기관 헤지 / 기관 청산
+        if (_d1_p < -5.0 or _d5_p < -8.0) and (_d1_c < 0):
+            _inst_cls = "🔴 기관 청산"
+            _lifecycle = "🧹 차익실현·청산"
+        elif (_d1_pu > max(_d1_c, 0) and _d1_p > 0) or (_gex_now < 0 and _d5_pu > _d5_c):
+            _inst_cls = "🟣 기관 헤지"
+            _lifecycle = "🛡️ 헤지·방어 전환"
+        elif _d1_c > 0 or _d5_p >= 3.0 or _cw_mig > 0:
+            _inst_cls = "🟢 기관 매집"
+            _lifecycle = "🚀 추세 확장" if _d5_p >= 10.0 else "🌱 초기 매집"
+        else:
+            _inst_cls = "🟡 중립 관망"
+            _lifecycle = "⚖️ 균형 유지"
+
+        # Dealer Trap Detector
+        if _gex_now < 0 and _d1_c > 500 and _sp_i > 0 and _cw_now > 0 and _sp_i >= _cw_now * 0.96:
+            _trap = "🔥 숏감마 스퀴즈 함정"
+        elif _gex_now < 0 and _sp_i > 0 and _pw_now > 0 and _sp_i <= _pw_now * 1.03:
+            _trap = "⚠️ 하방 가속(풋월 이탈) 주의"
+        elif _gex_now > 0 and _cw_now > 0 and _sp_i >= _cw_now * 0.99:
+            _trap = "🧱 콜월 상단 저항(불트랩 주의)"
+        else:
+            _trap = "✅ 특이 함정 없음"
+
+        # Pin Risk Score (0~100)
+        _dte_sc = 40 if _min_dte <= 2 else (28 if _min_dte <= 5 else (15 if _min_dte <= 10 else 5))
+        _gex_sc = 30 if _gex_now > 0 else 10
+        _near_wall = min(abs(_sp_i - _cw_now) / max(_sp_i, 1), abs(_sp_i - _pw_now) / max(_sp_i, 1)) if (_sp_i > 0 and _cw_now > 0 and _pw_now > 0) else 0.1
+        _prox_sc = max(5, min(30, int(round((1.0 - min(_near_wall, 0.15) / 0.15) * 30))))
+        _pin_score = min(99, _dte_sc + _gex_sc + _prox_sc)
+
+        # Institution Ranking Score (0~100)
+        _rk_score = 50 + min(20, max(-15, int(round(_d5_p)))) + (12 if "매집" in _inst_cls else (-10 if "청산" in _inst_cls else 0)) + (10 if _cw_mig > 0 else 0) + (8 if _gex_now >= 0 else -5)
+        _rk_score = max(5, min(99, _rk_score))
+
+        _row_obj = {
+            "종목": _tk_i,
+            "현재가": f"${_sp_i:,.2f}" if _sp_i > 0 else "-",
+            "기관 분류": _inst_cls,
+            "라이프사이클": _lifecycle,
+            "1일 ΔOI": f"{_d1_p:+.1f}%",
+            "5일 ΔOI": f"{_d5_p:+.1f}%",
+            "20일 ΔOI": f"{_d20_p:+.1f}%",
+            "60일 ΔOI": f"{_d60_p:+.1f}%",
+            "Gamma Shift(5일)": f"{_d5_g:+.2f}M",
+            "Wall 이동": f"CW {_cw_mig:+g} / PW {_pw_mig:+g}",
+            "Dealer Trap": _trap,
+            "Pin Risk": _pin_score,
+            "기관 점수": _rk_score,
+        }
+        _inst_rows.append(_row_obj)
+        _inst_detail_map[_tk_i] = {
+            "days": _days_i, "by_d": _by_d, "row": _row_obj,
+            "cw": _cw_now, "pw": _pw_now, "gex": _gex_now, "sp": _sp_i,
+            "d1_g": _d1_g, "d5_g": _d5_g, "d20_g": _d20_g, "d60_g": _d60_g,
+        }
+
+    # 최상단 통합 KPI 배너
+    _n_acc_i = sum(1 for r in _inst_rows if "매집" in r["기관 분류"])
+    _n_hdg_i = sum(1 for r in _inst_rows if "헤지" in r["기관 분류"])
+    _n_liq_i = sum(1 for r in _inst_rows if "청산" in r["기관 분류"])
+    _n_trp_i = sum(1 for r in _inst_rows if "없음" not in r["Dealer Trap"])
+
+    _ik_c1, _ik_c2, _ik_c3, _ik_c4, _ik_c5 = st.columns(5)
+    _ik_c1.metric("추적 종목 수", f"{len(_inst_rows)}개")
+    _ik_c2.metric("🟢 기관 매집", f"{_n_acc_i}개")
+    _ik_c3.metric("🟣 기관 헤지", f"{_n_hdg_i}개")
+    _ik_c4.metric("🔴 기관 청산", f"{_n_liq_i}개")
+    _ik_c5.metric("⚠️ Dealer Trap 포착", f"{_n_trp_i}개")
+
+    if _inst_rows:
+        _inst_rows.sort(key=lambda r: r["기관 점수"], reverse=True)
+        _sel_inst_tk = st.selectbox("🔍 포지션 라이프사이클 상세 추적 종목", [r["종목"] for r in _inst_rows], index=0, key="inst_dash_tk")
+        _det_i = _inst_detail_map[_sel_inst_tk]
+        _r_sel = _det_i["row"]
+
+        st.markdown(
+            f"<div style='background:#0b1626;border:1px solid #1e3a5f;border-radius:10px;padding:14px 18px;margin-bottom:12px;'>"
+            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;'>{_sel_inst_tk} ({_r_sel['현재가']}) &nbsp;|&nbsp; {_r_sel['기관 분류']} &nbsp;·&nbsp; {_r_sel['라이프사이클']}</div>"
+            f"<div style='color:#cbd5e1;font-size:13px;margin-top:6px;'>"
+            f"1일 <b>{_r_sel['1일 ΔOI']}</b> · 5일 <b>{_r_sel['5일 ΔOI']}</b> · 20일 <b>{_r_sel['20일 ΔOI']}</b> · 60일 <b>{_r_sel['60일 ΔOI']}</b> &nbsp;|&nbsp; "
+            f"Pin Risk: <b>{_r_sel['Pin Risk']}/100</b> &nbsp;|&nbsp; {_r_sel['Dealer Trap']}"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        _id_t1, _id_t2, _id_t3 = st.tabs([
+            "🏆 6. Institution Ranking & Dealer Trap",
+            "📈 1·2. Lifecycle & Gamma Shift (1·5·20·60일)",
+            "🧱 3·5. Call/Put Wall Migration & Pin Risk",
+        ])
+
+        with _id_t1:
+            st.dataframe(pd.DataFrame(_inst_rows), hide_index=True, use_container_width=True)
+
+        with _id_t2:
+            _ds_60 = _det_i["days"][-60:]
+            _c_series = [int(_det_i["by_d"][d].get("Call_OI", 0) or 0) for d in _ds_60]
+            _p_series = [int(_det_i["by_d"][d].get("Put_OI", 0) or 0) for d in _ds_60]
+            _g_series = [float(_det_i["by_d"][d].get("Net_GEX_M", 0) or 0) for d in _ds_60]
+            _fig_lc = make_subplots(specs=[[{"secondary_y": True}]])
+            _fig_lc.add_trace(go.Scatter(x=_ds_60, y=_c_series, name="Call OI", line=dict(color="#22c55e", width=2.4)), secondary_y=False)
+            _fig_lc.add_trace(go.Scatter(x=_ds_60, y=_p_series, name="Put OI", line=dict(color="#ef4444", width=2.4)), secondary_y=False)
+            _fig_lc.add_trace(go.Bar(x=_ds_60, y=_g_series, name="Net GEX($M)", marker_color="rgba(56,189,248,0.45)"), secondary_y=True)
+            _fig_lc.update_layout(title=f"{_sel_inst_tk} 최대 60일 Position Lifecycle & Gamma Shift", template="plotly_dark", height=360, margin=dict(l=40, r=40, t=45, b=25))
+            _fig_lc.update_xaxes(type="category")
+            st.plotly_chart(_fig_lc, use_container_width=True, key=f"inst_lc_{_sel_inst_tk}")
+
+            _gm1, _gm2, _gm3, _gm4 = st.columns(4)
+            _gm1.metric("1일 Gamma Shift", f"{_det_i['d1_g']:+.2f}M")
+            _gm2.metric("5일 Gamma Shift", f"{_det_i['d5_g']:+.2f}M")
+            _gm3.metric("20일 Gamma Shift", f"{_det_i['d20_g']:+.2f}M")
+            _gm4.metric("60일 Gamma Shift", f"{_det_i['d60_g']:+.2f}M")
+
+        with _id_t3:
+            _wm_rows = []
+            for _d_w in _det_i["days"][-20:]:
+                _sn_w = _det_i["by_d"][_d_w]
+                _spw = float(_sn_w.get("Spot", 0) or 0)
+                _cm, _pm = {}, {}
+                for _x in (_sn_w.get("상세") or []):
+                    _k = float(_x.get("행사가", 0) or 0)
+                    _o = int(_x.get("OI", 0) or 0)
+                    if _k <= 0 or _o <= 0: continue
+                    if str(_x.get("구분", "")).lower().startswith("c"): _cm[_k] = _cm.get(_k, 0) + _o
+                    else: _pm[_k] = _pm.get(_k, 0) + _o
+                _cw_d = max({k: v for k, v in _cm.items() if _spw <= 0 or k >= _spw * 0.98} or _cm, key=lambda k: _cm[k], default=0)
+                _pw_d = max({k: v for k, v in _pm.items() if _spw <= 0 or k <= _spw * 1.02} or _pm, key=lambda k: _pm[k], default=0)
+                _wm_rows.append({"날짜": _d_w, "Spot": f"${_spw:.2f}", "Call Wall": f"${_cw_d:g}" if _cw_d else "-", "Put Wall": f"${_pw_d:g}" if _pw_d else "-", "Net GEX($M)": f"{float(_sn_w.get('Net_GEX_M',0) or 0):+.2f}M"})
+            st.dataframe(pd.DataFrame(_wm_rows[::-1]), hide_index=True, use_container_width=True)
+    else:
+        st.info("수집된 OI 스냅샷이 없습니다. `📊 OI(미결제약정) 수집`에서 종목별 스냅샷을 저장해 주세요.")
 
 
 if nav_menu == "🏦 Smart Money Tracker":
