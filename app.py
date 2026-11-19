@@ -3196,6 +3196,18 @@ if nav_menu == "⚡ 무무 실시간 차트":
                 "bii": [], "macd": [], "macd_sig": [], "macd_hist": [], "rsi": [],
             }, pd.DataFrame()
         df_c = pd.DataFrame(c_list)
+        for _col_n in ("time", "open", "high", "low", "close", "volume"):
+            if _col_n in df_c.columns:
+                df_c[_col_n] = pd.to_numeric(df_c[_col_n], errors="coerce")
+        df_c["volume"] = df_c["volume"].fillna(0.0)
+        df_c = df_c.dropna(subset=["time", "open", "high", "low", "close"]).reset_index(drop=True)
+        if df_c.empty:
+            return {
+                "candles": [], "volumes": [], "vwap": [], "bb_up": [], "bb_dn": [],
+                "ma20": [], "ma200": [], "tenkan": [], "kijun": [], "span_a": [],
+                "span_b": [], "chikou": [], "cloud": [], "vpvr": [], "cvd": [],
+                "bii": [], "macd": [], "macd_sig": [], "macd_hist": [], "rsi": [],
+            }, pd.DataFrame()
         _pos_vols = df_c["volume"][df_c["volume"] > 0]
         if len(_pos_vols) >= 10:
             _v_med = float(_pos_vols.median() or 0)
@@ -3250,8 +3262,11 @@ if nav_menu == "⚡ 무무 실시간 차트":
             step = (p_max - p_min) / bins
             v_arr = [0.0] * bins
             for _, rc in df_c.iterrows():
-                idx_b = min(bins - 1, max(0, int((float(rc["close"]) - p_min) / step)))
-                v_arr[idx_b] += float(rc["volume"])
+                _cv_v = float(rc["close"])
+                if pd.isna(_cv_v) or pd.isna(p_min) or step <= 0:
+                    continue
+                idx_b = min(bins - 1, max(0, int((_cv_v - p_min) / step)))
+                v_arr[idx_b] += float(rc["volume"] or 0)
             v_mx = max(v_arr) or 1.0
             for bi in range(bins):
                 vpvr_local.append({"p": round(p_min + (bi + 0.5) * step, 2), "pct": round(v_arr[bi] / v_mx, 3)})
