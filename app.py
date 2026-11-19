@@ -11397,6 +11397,12 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                 _cb_sg = _fetch_live_oi_fallback(_tk_g)
                 _rows_sg = (_cb_sg or {}).get("상세") or []
                 _sp_sg = float((_cb_sg or {}).get("Spot") or 0)
+            try:
+                _mm_sp_s = get_moomoo_live_snapshot(_tk_g)
+                if _mm_sp_s.get("px", 0) > 0:
+                    _sp_sg = float(_mm_sp_s["px"])
+            except Exception:
+                pass
             if not _rows_sg or _sp_sg <= 0:
                 st.warning(f"{_tk_g} 옵션 체인 데이터를 불러오지 못했습니다.")
                 return
