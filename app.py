@@ -13061,9 +13061,11 @@ if nav_menu == "📡 OI Change Radar":
                 import matplotlib.font_manager as _fm_lv
                 try:
                     _kr_cands = [f for f in _fm_lv.findSystemFonts() if any(k in f.lower() for k in ("nanum", "noto", "malgun", "gulim", "dotum", "gothic", "un"))]
-                    if _kr_cands:
-                        _fm_lv.fontManager.addfont(_kr_cands[0])
-                        _prop = _fm_lv.FontProperties(fname=_kr_cands[0])
+                    _kr_bold = [f for f in _kr_cands if "bold" in f.lower()]
+                    _pick_f = (_kr_bold or _kr_cands)[0] if _kr_cands else None
+                    if _pick_f:
+                        _fm_lv.fontManager.addfont(_pick_f)
+                        _prop = _fm_lv.FontProperties(fname=_pick_f)
                         _plt_lv.rcParams["font.family"] = _prop.get_name()
                 except Exception:
                     pass
@@ -13071,7 +13073,8 @@ if nav_menu == "📡 OI Change Radar":
 
                 _show_c = cards_s[:2]
                 _n_c = max(len(_show_c), 1)
-                _fig, _ax = _plt_lv.subplots(figsize=(15.0, 6.2), dpi=160)
+                _fig_h = 9.8 if _n_c == 2 else 5.4
+                _fig, _ax = _plt_lv.subplots(figsize=(10.8, _fig_h), dpi=180)
                 _fig.patch.set_facecolor("#07111e")
                 _ax.set_facecolor("#07111e")
                 _ax.set_xlim(0, 100)
@@ -13079,66 +13082,75 @@ if nav_menu == "📡 OI Change Radar":
                 _ax.axis("off")
 
                 _chg_col = "#22c55e" if chg_s >= 0 else "#ef4444"
-                _ax.add_patch(_mpatch_lv.FancyBboxPatch((1.5, 90), 97, 7.5, boxstyle="round,pad=0.3", facecolor="#0b1626", edgecolor="#1e3a5f", linewidth=1.1))
-                _ax.text(3.0, 93.7, f"{tk_s}  |  Last: ${sp_s:,.2f}", color="#f8fafc", fontsize=13.5, fontweight="bold", va="center")
-                _ax.text(24.5, 93.7, f"({chg_s:+.2f}%)", color=_chg_col, fontsize=12.5, fontweight="bold", va="center")
-                _ax.text(34.5, 93.7, "· OI 기준: 전 거래일 마감 (Cboe 실시간 체인)", color="#94a3b8", fontsize=10.0, va="center")
+                _hdr_y = 92.5 if _n_c == 2 else 88.0
+                _hdr_h = 6.0 if _n_c == 2 else 10.0
+                _ax.add_patch(_mpatch_lv.FancyBboxPatch((1.5, _hdr_y), 97, _hdr_h, boxstyle="round,pad=0.3", facecolor="#0b1626", edgecolor="#1e3a5f", linewidth=1.3))
+                _ax.text(3.2, _hdr_y + _hdr_h/2, f"{tk_s}  |  Last: ${sp_s:,.2f}", color="#f8fafc", fontsize=16, fontweight="bold", va="center")
+                _ax.text(34.0, _hdr_y + _hdr_h/2, f"({chg_s:+.2f}%)", color=_chg_col, fontsize=15, fontweight="bold", va="center")
+                _ax.text(47.0, _hdr_y + _hdr_h/2, "Cboe 실시간 체인 (전 거래일 OI)", color="#cbd5e1", fontsize=11.5, fontweight="bold", va="center")
 
-                _w = 47.5 if _n_c == 2 else 97.0
+                _x0 = 1.5
+                _w = 97.0
                 for _idx_p, _c in enumerate(_show_c):
-                    _x0 = 1.5 + _idx_p * 49.5
-                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0, 3), _w, 84, boxstyle="round,pad=0.5", facecolor="#0c1421", edgecolor="#1e293b", linewidth=1.2))
+                    # Vertical stack: Card 0 top half, Card 1 bottom half
+                    _y_bot = (47.5 - _idx_p * 46.0) if _n_c == 2 else 3.0
+                    _ch = 43.0 if _n_c == 2 else 81.0
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0, _y_bot), _w, _ch, boxstyle="round,pad=0.4", facecolor="#0c1421", edgecolor="#334155", linewidth=1.4))
+
+                    # Helper to map relative 0..100 inside card to canvas Y
+                    def _cy(rel):
+                        return _y_bot + _ch * (rel / 100.0)
+
                     # Top Call delta pill
                     _c_bg = "#16a34a" if _c["c_delta"] >= 0 else "#65a30d"
-                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + _w/2 - 4.8, 82.0), 9.6, 4.2, boxstyle="round,pad=0.25", facecolor=_c_bg, edgecolor="none"))
-                    _ax.text(_x0 + _w/2, 84.1, f"{_c['c_delta']:+.1f}", color="#ffffff", fontsize=9.8, fontweight="bold", ha="center", va="center")
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + _w/2 - 6.0, _cy(91.5)), 12.0, _ch*0.068, boxstyle="round,pad=0.25", facecolor=_c_bg, edgecolor="none"))
+                    _ax.text(_x0 + _w/2, _cy(94.9), f"{_c['c_delta']:+.1f}", color="#ffffff", fontsize=12.5, fontweight="bold", ha="center", va="center")
 
-                    # Call header bar (7 cols)
-                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 72.5), _w - 2, 7.2, facecolor="#15803d", edgecolor="none"))
-                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 61.5), _w - 2, 11.0, facecolor="#111827", edgecolor="none"))
+                    # Call header + values (7 cols)
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, _cy(79.0)), _w - 2, _ch*0.105, facecolor="#15803d", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, _cy(64.5)), _w - 2, _ch*0.145, facecolor="#111827", edgecolor="none"))
                     _hdrs_c = ["Symbol", "Price", "Call Strike", "Call Future", "Call Liq", "Call Volume", "Call OI"]
                     _vals_c = [tk_s, f"{sp_s:.2f}", f"{_c['c_strk']:g}", f"{_c['c_fut']:g}", f"{_c['c_fut']:g}", f"{_c['c_fut_vol']:,}", f"{_c['c_fut_oi']:,}"]
                     _subs_c = ["", "", "", "", "", f"만기합 {_c['tot_c_vol']:,}", f"만기합 {_c['tot_c_oi']:,}"]
                     for _ci_k, (_hc, _vc, _sc) in enumerate(zip(_hdrs_c, _vals_c, _subs_c)):
                         _cx = _x0 + 1 + (_w - 2) * (_ci_k + 0.5) / 7.0
-                        _ax.text(_cx, 76.1, _hc, color="#ffffff", fontsize=7.6, fontweight="bold", ha="center", va="center")
-                        _col_vc = "#4ade80" if _ci_k == 2 else "#e2e8f0"
-                        _y_vc = 68.3 if _sc else 67.0
-                        _ax.text(_cx, _y_vc, _vc, color=_col_vc, fontsize=8.4, fontweight="bold" if _ci_k in (0,2,3) else "normal", ha="center", va="center")
+                        _ax.text(_cx, _cy(84.2), _hc, color="#ffffff", fontsize=11.0, fontweight="bold", ha="center", va="center")
+                        _col_vc = "#4ade80" if _ci_k == 2 else "#f8fafc"
+                        _y_vc = _cy(73.8) if _sc else _cy(71.8)
+                        _ax.text(_cx, _y_vc, _vc, color=_col_vc, fontsize=12.5, fontweight="bold", ha="center", va="center")
                         if _sc:
-                            _ax.text(_cx, 63.6, _sc, color="#94a3b8", fontsize=6.4, ha="center", va="center")
+                            _ax.text(_cx, _cy(67.2), _sc, color="#cbd5e1", fontsize=9.2, fontweight="bold", ha="center", va="center")
 
-                    # Put header bar (7 cols)
-                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 54.0), (_w - 2)*2/7, 7.2, facecolor="#0f172a", edgecolor="none"))
-                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1 + (_w - 2)*2/7, 54.0), (_w - 2)*5/7, 7.2, facecolor="#b91c1c", edgecolor="none"))
-                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 42.5), _w - 2, 11.5, facecolor="#111827", edgecolor="none"))
-                    # MaxPain amber box
-                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1 + (_w - 2)/7, 42.5), (_w - 2)/7, 11.5, facecolor="#78350f", edgecolor="none"))
+                    # Put header + values (7 cols)
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, _cy(54.0)), (_w - 2)*2/7, _ch*0.105, facecolor="#0f172a", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1 + (_w - 2)*2/7, _cy(54.0)), (_w - 2)*5/7, _ch*0.105, facecolor="#b91c1c", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, _cy(39.0)), _w - 2, _ch*0.150, facecolor="#111827", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1 + (_w - 2)/7, _cy(39.0)), (_w - 2)/7, _ch*0.150, facecolor="#78350f", edgecolor="none"))
                     _hdrs_p = [f"{chg_s:+.2f}%", f"DTE {_c['dte']}일", "Put Strike", "Put Future", "Put Liq", "Put Volume", "Put OI"]
                     _vals_p = [_c["exp"], f"MaxPain\n${_c['mp']:g}", f"{_c['p_strk']:g}", f"{_c['p_fut']:g}", f"{_c['p_fut']:g}", f"{_c['p_fut_vol']:,}", f"{_c['p_fut_oi']:,}"]
                     _subs_p = ["", "", "", "", "", f"만기합 {_c['tot_p_vol']:,}", f"만기합 {_c['tot_p_oi']:,}"]
                     for _ci_k, (_hp, _vp, _sp_t) in enumerate(zip(_hdrs_p, _vals_p, _subs_p)):
                         _cx = _x0 + 1 + (_w - 2) * (_ci_k + 0.5) / 7.0
-                        _hcol = _chg_col if _ci_k == 0 else ("#94a3b8" if _ci_k == 1 else "#ffffff")
-                        _ax.text(_cx, 57.6, _hp, color=_hcol, fontsize=7.6, fontweight="bold", ha="center", va="center")
-                        _vcol = "#94a3b8" if _ci_k == 0 else ("#fde68a" if _ci_k == 1 else ("#f87171" if _ci_k == 2 else "#e2e8f0"))
-                        _y_vp = 49.5 if _sp_t else 48.2
-                        _ax.text(_cx, _y_vp, _vp, color=_vcol, fontsize=8.0 if _ci_k <= 1 else 8.4, fontweight="bold" if _ci_k in (1,2,3) else "normal", ha="center", va="center")
+                        _hcol = _chg_col if _ci_k == 0 else ("#cbd5e1" if _ci_k == 1 else "#ffffff")
+                        _ax.text(_cx, _cy(59.2), _hp, color=_hcol, fontsize=11.0, fontweight="bold", ha="center", va="center")
+                        _vcol = "#cbd5e1" if _ci_k == 0 else ("#fde68a" if _ci_k == 1 else ("#f87171" if _ci_k == 2 else "#f8fafc"))
+                        _y_vp = _cy(48.5) if _sp_t else _cy(46.5)
+                        _ax.text(_cx, _y_vp, _vp, color=_vcol, fontsize=11.2 if _ci_k <= 1 else 12.5, fontweight="bold", ha="center", va="center")
                         if _sp_t:
-                            _ax.text(_cx, 44.5, _sp_t, color="#94a3b8", fontsize=6.4, ha="center", va="center")
+                            _ax.text(_cx, _cy(41.8), _sp_t, color="#cbd5e1", fontsize=9.2, fontweight="bold", ha="center", va="center")
 
                     # Bottom Put delta pill
                     _p_bg = "#dc2626" if _c["p_delta"] < 0 else "#ea580c"
-                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + _w/2 - 4.8, 36.2), 9.6, 4.2, boxstyle="round,pad=0.25", facecolor=_p_bg, edgecolor="none"))
-                    _ax.text(_x0 + _w/2, 38.3, f"{_c['p_delta']:+.1f}", color="#ffffff", fontsize=9.8, fontweight="bold", ha="center", va="center")
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + _w/2 - 6.0, _cy(30.2)), 12.0, _ch*0.068, boxstyle="round,pad=0.25", facecolor=_p_bg, edgecolor="none"))
+                    _ax.text(_x0 + _w/2, _cy(33.6), f"{_c['p_delta']:+.1f}", color="#ffffff", fontsize=12.5, fontweight="bold", ha="center", va="center")
 
                     # Bullet lines + CBOE Match
-                    _ax.text(_x0 + 1.8, 30.5, f"• 콜 Fut {_c['c_fut']:g}: 거래 {_c['c_fut_vol']:,} / OI {_c['c_fut_oi']:,} = {_c['c_ratio']:.2f}배 · {_c['c_new_txt']} (매수 {_c['c_buy_p']}%)", color="#cbd5e1", fontsize=7.6, va="center")
-                    _ax.text(_x0 + 1.8, 24.0, f"• 풋 Fut {_c['p_fut']:g}: 거래 {_c['p_fut_vol']:,} / OI {_c['p_fut_oi']:,} = {_c['p_ratio']:.2f}배 · {_c['p_new_txt']} (매수 {_c['p_buy_p']}%)", color="#cbd5e1", fontsize=7.6, va="center")
-                    _itxt = _c["interp"][:72] + ("..." if len(_c["interp"]) > 72 else "")
-                    _ax.text(_x0 + 1.8, 17.5, f"• {_itxt}", color="#94a3b8", fontsize=7.2, va="center")
-                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + 1.8, 7.0), 14.5, 5.2, boxstyle="round,pad=0.25", facecolor="#052e16", edgecolor="#166534", linewidth=0.9))
-                    _ax.text(_x0 + 9.0, 9.6, "✅ CBOE와 일치", color="#4ade80", fontsize=7.6, fontweight="bold", ha="center", va="center")
+                    _ax.text(_x0 + 2.0, _cy(23.2), f"• 콜 Fut {_c['c_fut']:g}: 거래 {_c['c_fut_vol']:,} / OI {_c['c_fut_oi']:,} = {_c['c_ratio']:.2f}배 · {_c['c_new_txt']} (매수 {_c['c_buy_p']}%)", color="#e2e8f0", fontsize=10.8, fontweight="bold", va="center")
+                    _ax.text(_x0 + 2.0, _cy(16.0), f"• 풋 Fut {_c['p_fut']:g}: 거래 {_c['p_fut_vol']:,} / OI {_c['p_fut_oi']:,} = {_c['p_ratio']:.2f}배 · {_c['p_new_txt']} (매수 {_c['p_buy_p']}%)", color="#e2e8f0", fontsize=10.8, fontweight="bold", va="center")
+                    _itxt = _c["interp"][:68] + ("..." if len(_c["interp"]) > 68 else "")
+                    _ax.text(_x0 + 2.0, _cy(8.8), f"• {_itxt}", color="#94a3b8", fontsize=10.0, fontweight="bold", va="center")
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + 81.0, _cy(3.2)), 16.5, _ch*0.068, boxstyle="round,pad=0.25", facecolor="#052e16", edgecolor="#166534", linewidth=1.1))
+                    _ax.text(_x0 + 89.25, _cy(6.6), "✅ CBOE와 일치", color="#4ade80", fontsize=10.0, fontweight="bold", ha="center", va="center")
 
                 _buf = _io_lv.BytesIO()
                 _fig.savefig(_buf, format="png", bbox_inches="tight", facecolor=_fig.get_facecolor())
@@ -13149,7 +13161,7 @@ if nav_menu == "📡 OI Change Radar":
                 st.markdown("  \n".join(_tg_close_lines))
                 if st.button("📩 이 레벨 흐름 그래픽 + 요약 텔레그램 전송", type="primary", key="btn_lv_tg_send"):
                     _lv_png = _build_level_flow_png(_lv_tk, _lv_spot, _lv_chg_p, _parsed_exp_cards)
-                    _cap_txt = "\n".join(_tg_close_lines) + "\n✅ CBOE와 일치"
+                    _cap_txt = "\n".join(_tg_close_lines).replace("*", "") + "\n✅ CBOE와 일치"
                     if send_telegram_photo_bytes(tg_token, tg_chat_id, _lv_png, caption=_cap_txt)[0]:
                         st.toast("✅ 레벨 흐름 그래픽 텔레그램 전송 완료!")
                     else:
