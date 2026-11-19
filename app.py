@@ -12402,7 +12402,8 @@ if nav_menu == "🏛️ Institution Dashboard":
             _c_series = [int(_det_i["by_d"][d].get("Call_OI", 0) or 0) for d in _ds_60]
             _p_series = [int(_det_i["by_d"][d].get("Put_OI", 0) or 0) for d in _ds_60]
             _g_series = [float(_det_i["by_d"][d].get("Net_GEX_M", 0) or 0) for d in _ds_60]
-            _fig_lc = make_subplots(specs=[[{"secondary_y": True}]])
+            from plotly.subplots import make_subplots as _mk_sub_inst
+            _fig_lc = _mk_sub_inst(specs=[[{"secondary_y": True}]])
             _fig_lc.add_trace(go.Scatter(x=_ds_60, y=_c_series, name="Call OI", line=dict(color="#22c55e", width=2.4)), secondary_y=False)
             _fig_lc.add_trace(go.Scatter(x=_ds_60, y=_p_series, name="Put OI", line=dict(color="#ef4444", width=2.4)), secondary_y=False)
             _fig_lc.add_trace(go.Bar(x=_ds_60, y=_g_series, name="Net GEX($M)", marker_color="rgba(56,189,248,0.45)"), secondary_y=True)
