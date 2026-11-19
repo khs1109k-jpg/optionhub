@@ -11529,16 +11529,17 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
                     _fig_m, _ax1 = _plt_sg.subplots(figsize=(10, 4.8), facecolor="#07111e")
                     _ax1.set_facecolor("#0b1626")
                     _xs = [float(k) for k in _grp_sg["행사가"]]
-                    _ys = [float(v) for v in _grp_sg[_val_col]]
-                    _ax1.bar(_xs, _ys, width=max(0.4, (max(_xs) - min(_xs)) / max(len(_xs) * 1.4, 10)), color=_bar_cols, alpha=0.92)
+                    _bw = max(0.4, (max(_xs) - min(_xs)) / max(len(_xs) * 1.45, 10)) if len(_xs) > 1 else 0.6
+                    _c_vals = [float(_c_by_k.get(k, 0.0)) for k in _xs]
+                    _p_vals = [float(_p_by_k.get(k, 0.0)) for k in _xs]
+                    _ax1.bar(_xs, _c_vals, width=_bw, color="#10b981", alpha=0.92, label=f"Call {_metric_nm}")
+                    _ax1.bar(_xs, _p_vals, width=_bw, color="#ef4444", alpha=0.92, label=f"Put {_metric_nm}")
                     _ax1.axhline(0, color="#334155", linewidth=0.9)
                     _ax1.axvline(_sp_sg, color="#ef4444", linestyle="--", linewidth=1.4, label=f"Spot ${_sp_sg:,.2f}")
-                    _ax2 = _ax1.twinx()
-                    _ax2.plot(_xs, _grp_sg["CumVal"].tolist(), color="#f8fafc", linewidth=2.0, label="Cumulative")
-                    _ax1.set_title(f"{_tk_g} Net {_metric_nm} Exposure ({_exp_txt})", color="#f8fafc", fontsize=12, fontweight="bold")
-                    _ax1.tick_params(colors="#cbd5e1"); _ax2.tick_params(colors="#cbd5e1")
+                    _ax1.set_title(f"{_tk_g} Put vs Call {_metric_nm} Exposure ({_exp_txt})", color="#f8fafc", fontsize=12, fontweight="bold")
+                    _ax1.legend(loc="upper left", facecolor="#07111e", edgecolor="#1e293b", labelcolor="#f8fafc", fontsize=9)
+                    _ax1.tick_params(colors="#cbd5e1")
                     for _spn in _ax1.spines.values(): _spn.set_color("#1e293b")
-                    for _spn in _ax2.spines.values(): _spn.set_color("#1e293b")
                     _buf_sg = _io_sg.BytesIO()
                     _plt_sg.tight_layout()
                     _fig_m.savefig(_buf_sg, format="png", dpi=150, facecolor="#07111e")
