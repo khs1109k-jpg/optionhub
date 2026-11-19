@@ -12693,55 +12693,337 @@ if nav_menu == "📊 Backtest Center":
         st.warning("선택한 조건에 해당하는 최근 1년 거래 표본이 없습니다. 기준 점수나 종목을 조정해 보세요.")
 
 
-if nav_menu == "🚨 AI Alert Center":
-    st.title("🚨 AI Alert Center (실시간 6대 경보 & 알림 대시보드)")
-    st.caption("Conviction 85+ · Trend Reversal 8+ · Gamma Flip · Smart Money($10M+) · OI Explosion(+30%) · Dark Pool 감시")
+CUSTOM_ALERT_RULES_PATH = os.path.expanduser("~/.optionhub_custom_alerts.json")
+CUSTOM_ALERT_SENT_PATH = os.path.expanduser("~/.optionhub_custom_alerts_sent.json")
 
-    _ac1, _ac2, _ac3 = st.columns([1.4, 1.4, 1.2])
-    _auto_tg_al = _ac1.checkbox("📩 조건 충족 시 텔레그램 자동 전송", value=True, key="al_auto_tg_chk")
-    _sev_filt = _ac2.selectbox("중요도 필터", ["전체", "🔴 Critical", "🟠 High", "🟡 Medium"], key="al_sev_filt")
-    _scan_now = _ac3.button("🔍 지금 즉시 6대 알림 스캔", type="primary", use_container_width=True, key="btn_al_scan_now")
 
-    _al_hist, _al_new = evaluate_ai_alerts(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), auto_tg=_auto_tg_al, tg_tok=tg_token, tg_cid=tg_chat_id)
-    if _scan_now:
-        st.toast(f"✅ 스캔 완료! 신규 알림 {len(_al_new)}건")
+def _load_custom_alert_rules():
+    default_rules = [
+        {
+            "id": "smart_money_default",
+            "name": "🔥 Smart Money Alert",
+            "enabled": True,
+            "auto_tg": True,
+            "sources": ["OI", "Flow", "GEX", "Dark Pool", "InsiderFinance"],
+            "tickers": "ALL",
+            "min_prem_m": 1.0,
+            "side_req": "Above Ask",
+            "min_dte": 90,
+            "min_vol_oi": 3.0,
+            "min_oi_chg": 0.0,
+            "gex_cond": "무관",
+        }
+    ]
+    rules = load_json_file(CUSTOM_ALERT_RULES_PATH, None)
+    if not isinstance(rules, list) or not rules:
+        save_json_file(CUSTOM_ALERT_RULES_PATH, default_rules)
+        return default_rules
+    return rules
 
-    _today_s_al = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
-    _today_list = [a for a in _al_hist if a.get("date") == _today_s_al]
-    _c_cr = sum(1 for a in _today_list if "Critical" in a.get("severity", ""))
-    _c_hi = sum(1 for a in _today_list if "High" in a.get("severity", ""))
-    _c_md = sum(1 for a in _today_list if "Medium" in a.get("severity", ""))
 
-    _m1, _m2, _m3, _m4 = st.columns(4)
-    _m1.metric("🔴 Critical (오늘)", f"{_c_cr}건")
-    _m2.metric("🟠 High (오늘)", f"{_c_hi}건")
-    _m3.metric("🟡 Medium (오늘)", f"{_c_md}건")
-    _m4.metric("📋 최근 저장 히스토리", f"{min(50, len(_al_hist))} / 50건")
+def _eval_custom_alert_rules(rules, oi_hist_d, raw_flows_l, big_flows_l, auto_tg=True, tg_tok="", tg_cid=""):
+    sent_cache = load_json_file(CUSTOM_ALERT_SENT_PATH, {})
+    if not isinstance(sent_cache, dict):
+        sent_cache = {}
+    today_s = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
 
-    _show_als = [a for a in _al_hist[:50] if (_sev_filt == "전체" or a.get("severity") == _sev_filt)]
-    if _show_als:
-        st.dataframe(pd.DataFrame([
-            {
-                "발생시각": a.get("time", "")[-8:],
-                "중요도": a.get("severity", ""),
-                "유형": a.get("type", ""),
-                "종목": a.get("ticker", ""),
-                "알림 내용": a.get("title", ""),
-                "AI 요약": a.get("summary", ""),
+    # Pre-index Dark Pool & InsiderFinance tickers
+    dp_raw = load_json_file(os.path.expanduser("~/.optionhub_darkpool_prints.json"), [])
+    dp_tks = set()
+    if isinstance(dp_raw, list):
+        for d in dp_raw:
+            if isinstance(d, dict) and d.get("ticker"):
+                dp_tks.add(str(d["ticker"]).upper().strip())
+
+    ins_raw = load_json_file(os.path.expanduser("~/.optionhub_insider_mails.json"), {})
+    ins_txt = json.dumps(ins_raw, ensure_ascii=False).upper() if ins_raw else ""
+
+    # Pre-index OI metrics by ticker
+    oi_meta = {}
+    for tk, snaps in (oi_hist_d or {}).items():
+        if not isinstance(snaps, list) or not snaps:
+            continue
+        last_s = snaps[-1]
+        prev_s = snaps[-2] if len(snaps) >= 2 else None
+        c_now = int(last_s.get("Call_OI", 0) or 0)
+        p_now = int(last_s.get("Put_OI", 0) or 0)
+        tot_now = c_now + p_now
+        oi_chg = 0.0
+        if prev_s:
+            tot_prev = int(prev_s.get("Call_OI", 0) or 0) + int(prev_s.get("Put_OI", 0) or 0)
+            if tot_prev > 0:
+                oi_chg = round((tot_now - tot_prev) / tot_prev * 100.0, 1)
+        gex_now = float(last_s.get("Net_GEX_M", 0) or 0)
+        gex_prev = float(prev_s.get("Net_GEX_M", 0) or 0) if prev_s else gex_now
+        max_voi = 0.0
+        max_dte = 0
+        for x in (last_s.get("상세") or []):
+            o_v = int(x.get("OI", 0) or 0)
+            v_v = int(x.get("거래량", 0) or 0)
+            d_v = int(x.get("DTE", 0) or 0)
+            if o_v > 0:
+                max_voi = max(max_voi, v_v / o_v)
+            max_dte = max(max_dte, d_v)
+        oi_meta[tk] = {
+            "oi_chg": oi_chg, "gex": gex_now, "gex_prev": gex_prev,
+            "max_voi": round(max_voi, 2), "max_dte": max_dte,
+            "spot": float(last_s.get("Spot", 0) or 0),
+        }
+
+    # Aggregate Flow contracts
+    flow_candidates = []
+    for r in (raw_flows_l or []):
+        try:
+            tk = str(r[1]).strip().upper()
+            if not tk:
+                continue
+            prem = parse_prem_usd(r[14] if len(r) > 14 else "0")
+            sd = str(r[4]).upper()
+            typ = str(r[13] if len(r) > 13 else "").upper()
+            dte = 0
+            try:
+                dte = int(float(str(r[6]).replace("d", "").strip() or 0))
+            except Exception:
+                dte = 0
+            voi = 0.0
+            try:
+                vol_r = float(str(r[7] if len(r) > 7 else 0).replace(",", "") or 0)
+                oi_r = float(str(r[8] if len(r) > 8 else 0).replace(",", "") or 0)
+                if oi_r > 0:
+                    voi = round(vol_r / oi_r, 2)
+            except Exception:
+                pass
+            flow_candidates.append({
+                "tk": tk, "prem": prem, "is_ask": ("A" in sd or "ABOVE" in typ),
+                "is_sweep": ("SWEEP" in typ), "dte": dte, "voi": voi,
+                "desc": f"{r[3]} ${r[5]} ({r[2]})",
+            })
+        except Exception:
+            pass
+
+    matches = []
+    new_sent = False
+    for rule in rules:
+        if not rule.get("enabled", True):
+            continue
+        r_tks = str(rule.get("tickers", "ALL")).upper().strip()
+        allow_set = None if r_tks in ("", "ALL", "전체") else set(x.strip() for x in r_tks.split(",") if x.strip())
+        min_prem = float(rule.get("min_prem_m", 0) or 0) * 1e6
+        side_req = str(rule.get("side_req", "전체"))
+        min_dte = int(rule.get("min_dte", 0) or 0)
+        min_voi = float(rule.get("min_vol_oi", 0) or 0)
+        min_oi_chg = float(rule.get("min_oi_chg", 0) or 0)
+        gex_cond = str(rule.get("gex_cond", "무관"))
+        srcs = set(rule.get("sources") or [])
+
+        cand_tks = allow_set if allow_set else (set(oi_meta.keys()) | set(f["tk"] for f in flow_candidates))
+        for tk in sorted(cand_tks):
+            om = oi_meta.get(tk, {"oi_chg": 0.0, "gex": 0.0, "gex_prev": 0.0, "max_voi": 0.0, "max_dte": 0, "spot": 0.0})
+            tk_flows = [f for f in flow_candidates if f["tk"] == tk]
+
+            # Check Flow conditions
+            best_f = None
+            for f in tk_flows:
+                if f["prem"] < min_prem:
+                    continue
+                if side_req == "Above Ask" and not f["is_ask"]:
+                    continue
+                if side_req == "Sweep" and not f["is_sweep"]:
+                    continue
+                if side_req == "Above Ask + Sweep" and not (f["is_ask"] and f["is_sweep"]):
+                    continue
+                if min_dte > 0 and max(f["dte"], om["max_dte"]) < min_dte:
+                    continue
+                if min_voi > 0 and max(f["voi"], om["max_voi"]) < min_voi:
+                    continue
+                if best_f is None or f["prem"] > best_f["prem"]:
+                    best_f = f
+
+            if min_prem > 0 or side_req != "전체":
+                if best_f is None:
+                    continue
+            if min_oi_chg > 0 and om["oi_chg"] < min_oi_chg:
+                continue
+            if gex_cond == "숏감마 전환 (Net GEX < 0)" and not (om["gex"] < 0 and om["gex_prev"] >= 0):
+                continue
+            if gex_cond == "롱감마 전환 (Net GEX > 0)" and not (om["gex"] > 0 and om["gex_prev"] <= 0):
+                continue
+            if gex_cond == "Gamma Flip 돌파" and not ((om["gex"] < 0 <= om["gex_prev"]) or (om["gex"] > 0 >= om["gex_prev"])):
+                continue
+            if "Dark Pool" in srcs and len(srcs) == 1 and tk not in dp_tks:
+                continue
+            if "InsiderFinance" in srcs and len(srcs) == 1 and tk not in ins_txt:
+                continue
+
+            if not best_f and min_oi_chg <= 0 and gex_cond == "무관":
+                continue
+
+            prem_disp = f"${best_f['prem']/1e6:.2f}M" if best_f else "-"
+            voi_disp = max(best_f["voi"] if best_f else 0, om["max_voi"])
+            dte_disp = max(best_f["dte"] if best_f else 0, om["max_dte"])
+            hits = []
+            if best_f: hits.append("Flow")
+            if om["oi_chg"] != 0: hits.append(f"OI {om['oi_chg']:+.1f}%")
+            if om["gex"] != 0: hits.append(f"GEX {om['gex']:+.1f}M")
+            if tk in dp_tks: hits.append("Dark Pool")
+            if tk in ins_txt: hits.append("InsiderFinance")
+
+            m_obj = {
+                "규칙": rule["name"],
+                "종목": tk,
+                "프리미엄": prem_disp,
+                "Vol/OI": voi_disp,
+                "DTE": f"{dte_disp}일",
+                "OI변화": f"{om['oi_chg']:+.1f}%",
+                "감지 소스": " · ".join(hits) if hits else "조건 충족",
+                "상세": best_f["desc"] if best_f else f"GEX {om['gex']:+.2f}M",
             }
-            for a in _show_als
-        ]), hide_index=True, use_container_width=True)
+            matches.append(m_obj)
 
-        _top_a = _show_als[0]
-        with st.container(border=True):
-            st.markdown(f"### {_top_a['severity']} {_top_a['title']}")
-            st.markdown(f"**상세:** {_top_a['detail']}")
-            st.info(f"🤖 **AI 요약:** {_top_a['summary']}")
-            if st.button("📩 이 알림 텔레그램으로 다시 보내기", key="btn_al_resend_tg"):
-                if send_telegram_msg(tg_token, tg_chat_id, f"{_top_a['severity']} *{_top_a['title']}*\n{_top_a['detail']}\n↳ {_top_a['summary']}")[0]:
-                    st.toast("✅ 텔레그램 재전송 완료!")
-    else:
-        st.info("아직 조건을 충족한 알림이 없습니다. 상단 '지금 즉시 6대 알림 스캔'을 누르거나 장중 데이터가 들어오면 자동 기록됩니다.")
+            dedup_k = f"{today_s}|{rule['id']}|{tk}"
+            if auto_tg and rule.get("auto_tg", True) and tg_tok and tg_cid and dedup_k not in sent_cache:
+                tg_txt = (
+                    f"{rule['name']}\n"
+                    f"종목: *{tk}* | {m_obj['상세']}\n"
+                    f"프리미엄: {prem_disp} | Vol/OI: {voi_disp} | DTE: {dte_disp}일\n"
+                    f"소스: {m_obj['감지 소스']}"
+                )
+                if send_telegram_msg(tg_tok, tg_cid, tg_txt)[0]:
+                    sent_cache[dedup_k] = True
+                    new_sent = True
+
+    if new_sent:
+        save_json_file(CUSTOM_ALERT_SENT_PATH, sent_cache)
+    return matches
+
+
+if nav_menu == "🚨 AI Alert Center":
+    st.title("🚨 AI Alert Center (커스텀 조건 + 6대 실시간 경보)")
+    st.caption("OI · Flow · GEX · Dark Pool · InsiderFinance 조건을 직접 설정하면 충족 시 텔레그램으로 자동 알림을 전송합니다.")
+
+    _al_tab_custom, _al_tab_sys = st.tabs([
+        "⚙️ 사용자 조건 알림 빌더 (Smart Money Alert)",
+        "📡 기본 6대 AI 경보 히스토리",
+    ])
+
+    with _al_tab_custom:
+        _c_rules = _load_custom_alert_rules()
+        _auto_tg_custom = st.checkbox("📩 커스텀 조건 충족 시 텔레그램 자동 전송 활성화", value=True, key="al_cust_auto_tg")
+
+        with st.expander("➕ 새 알림 조건 추가하기 (예: Premium > 1M, Above Ask, DTE > 90, Vol/OI > 3 → Smart Money Alert)", expanded=False):
+            with st.form("form_add_alert_rule"):
+                _rc1, _rc2 = st.columns(2)
+                _r_name = _rc1.text_input("알림 이름 (예: 🔥 Smart Money Alert)", value="🔥 Smart Money Alert")
+                _r_tks = _rc2.text_input("감시 종목 (ALL 또는 쉼표 구분: NVDA,TSLA,SOXL)", value="ALL")
+                _r_srcs = st.multiselect("감시 데이터 소스", ["OI", "Flow", "GEX", "Dark Pool", "InsiderFinance"], default=["OI", "Flow", "GEX", "Dark Pool", "InsiderFinance"])
+                _rc3, _rc4, _rc5, _rc6 = st.columns(4)
+                _r_prem = _rc3.number_input("최소 Premium ($M)", min_value=0.0, value=1.0, step=0.5)
+                _r_side = _rc4.selectbox("체결 방향", ["전체", "Above Ask", "Sweep", "Above Ask + Sweep"], index=1)
+                _r_dte = _rc5.number_input("최소 DTE (일)", min_value=0, value=90, step=10)
+                _r_voi = _rc6.number_input("최소 Volume/OI", min_value=0.0, value=3.0, step=0.5)
+                _rc7, _rc8 = st.columns(2)
+                _r_oichg = _rc7.number_input("최소 OI 변화율 (%)", min_value=0.0, value=0.0, step=5.0)
+                _r_gex = _rc8.selectbox("GEX 변화 조건", ["무관", "숏감마 전환 (Net GEX < 0)", "롱감마 전환 (Net GEX > 0)", "Gamma Flip 돌파"])
+                if st.form_submit_button("💾 알림 규칙 저장", type="primary"):
+                    import time as _tm_al
+                    _c_rules.append({
+                        "id": f"rule_{int(_tm_al.time())}",
+                        "name": _r_name.strip() or "🔥 Custom Alert",
+                        "enabled": True,
+                        "auto_tg": True,
+                        "sources": _r_srcs,
+                        "tickers": _r_tks.strip().upper() or "ALL",
+                        "min_prem_m": float(_r_prem),
+                        "side_req": _r_side,
+                        "min_dte": int(_r_dte),
+                        "min_vol_oi": float(_r_voi),
+                        "min_oi_chg": float(_r_oichg),
+                        "gex_cond": _r_gex,
+                    })
+                    save_json_file(CUSTOM_ALERT_RULES_PATH, _c_rules)
+                    st.toast("✅ 새 알림 규칙이 저장되었습니다!")
+                    st.rerun()
+
+        st.subheader("📋 등록된 알림 규칙")
+        for _ri, _rl in enumerate(_c_rules):
+            _rc_a, _rc_b, _rc_c = st.columns([3.5, 1, 0.8])
+            _rc_a.markdown(
+                f"**{_rl['name']}** | 종목: `{_rl.get('tickers','ALL')}` | "
+                f"Prem ≥ `${_rl.get('min_prem_m',0)}M` · `{_rl.get('side_req','전체')}` · "
+                f"DTE ≥ `{_rl.get('min_dte',0)}일` · Vol/OI ≥ `{_rl.get('min_vol_oi',0)}` · GEX: `{_rl.get('gex_cond','무관')}`"
+            )
+            _en_v = _rc_b.checkbox("활성화", value=bool(_rl.get("enabled", True)), key=f"rl_en_{_rl['id']}")
+            if _en_v != bool(_rl.get("enabled", True)):
+                _c_rules[_ri]["enabled"] = _en_v
+                save_json_file(CUSTOM_ALERT_RULES_PATH, _c_rules)
+            if _rc_c.button("🗑️ 삭제", key=f"rl_del_{_rl['id']}"):
+                _c_rules.pop(_ri)
+                save_json_file(CUSTOM_ALERT_RULES_PATH, _c_rules)
+                st.rerun()
+
+        _cust_matches = _eval_custom_alert_rules(
+            _c_rules, load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []),
+            auto_tg=_auto_tg_custom, tg_tok=tg_token, tg_cid=tg_chat_id
+        )
+        st.subheader(f"🎯 실시간 조건 매칭 결과 ({len(_cust_matches)}건)")
+        if _cust_matches:
+            st.dataframe(pd.DataFrame(_cust_matches), hide_index=True, use_container_width=True)
+            if st.button("📩 매칭된 커스텀 알림 텔레그램 일괄 전송", type="primary", key="btn_cust_tg_now"):
+                _msg_c = "🚨 *[OptionHub 커스텀 알림]*\n\n" + "\n".join(
+                    f"• {m['규칙']} | *{m['종목']}* {m['상세']} (Prem {m['프리미엄']}, Vol/OI {m['Vol/OI']}, DTE {m['DTE']})"
+                    for m in _cust_matches[:10]
+                )
+                if send_telegram_msg(tg_token, tg_chat_id, _msg_c)[0]:
+                    st.toast("✅ 커스텀 알림 텔레그램 전송 완료!")
+        else:
+            st.info("현재 설정된 커스텀 조건에 매칭된 종목이 없습니다. 조건을 완화하거나 장중 실시간 데이터가 유입되면 자동 감지됩니다.")
+
+    with _al_tab_sys:
+        _ac1, _ac2, _ac3 = st.columns([1.4, 1.4, 1.2])
+        _auto_tg_al = _ac1.checkbox("📩 조건 충족 시 텔레그램 자동 전송", value=True, key="al_auto_tg_chk")
+        _sev_filt = _ac2.selectbox("중요도 필터", ["전체", "🔴 Critical", "🟠 High", "🟡 Medium"], key="al_sev_filt")
+        _scan_now = _ac3.button("🔍 지금 즉시 6대 알림 스캔", type="primary", use_container_width=True, key="btn_al_scan_now")
+
+        _al_hist, _al_new = evaluate_ai_alerts(load_json_file(OI_PATH, {}), all_raw_flows, load_json_file(BIG_FLOWS_PATH, []), auto_tg=_auto_tg_al, tg_tok=tg_token, tg_cid=tg_chat_id)
+        if _scan_now:
+            st.toast(f"✅ 스캔 완료! 신규 알림 {len(_al_new)}건")
+
+        _today_s_al = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+        _today_list = [a for a in _al_hist if a.get("date") == _today_s_al]
+        _c_cr = sum(1 for a in _today_list if "Critical" in a.get("severity", ""))
+        _c_hi = sum(1 for a in _today_list if "High" in a.get("severity", ""))
+        _c_md = sum(1 for a in _today_list if "Medium" in a.get("severity", ""))
+
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("🔴 Critical (오늘)", f"{_c_cr}건")
+        _m2.metric("🟠 High (오늘)", f"{_c_hi}건")
+        _m3.metric("🟡 Medium (오늘)", f"{_c_md}건")
+        _m4.metric("📋 최근 저장 히스토리", f"{min(50, len(_al_hist))} / 50건")
+
+        _show_als = [a for a in _al_hist[:50] if (_sev_filt == "전체" or a.get("severity") == _sev_filt)]
+        if _show_als:
+            st.dataframe(pd.DataFrame([
+                {
+                    "발생시각": a.get("time", "")[-8:],
+                    "중요도": a.get("severity", ""),
+                    "유형": a.get("type", ""),
+                    "종목": a.get("ticker", ""),
+                    "알림 내용": a.get("title", ""),
+                    "AI 요약": a.get("summary", ""),
+                }
+                for a in _show_als
+            ]), hide_index=True, use_container_width=True)
+
+            _top_a = _show_als[0]
+            with st.container(border=True):
+                st.markdown(f"### {_top_a['severity']} {_top_a['title']}")
+                st.markdown(f"**상세:** {_top_a['detail']}")
+                st.info(f"🤖 **AI 요약:** {_top_a['summary']}")
+                if st.button("📩 이 알림 텔레그램으로 다시 보내기", key="btn_al_resend_tg"):
+                    if send_telegram_msg(tg_token, tg_chat_id, f"{_top_a['severity']} *{_top_a['title']}*\n{_top_a['detail']}\n↳ {_top_a['summary']}")[0]:
+                        st.toast("✅ 텔레그램 재전송 완료!")
+        else:
+            st.info("아직 조건을 충족한 알림이 없습니다. 상단 '지금 즉시 6대 알림 스캔'을 누르거나 장중 데이터가 들어오면 자동 기록됩니다.")
 
 
 TG_SCHED_CFG_PATH = os.path.expanduser("~/.optionhub_tg_scheduler_cfg.json")
