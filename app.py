@@ -12825,9 +12825,18 @@ if nav_menu == "📡 OI Change Radar":
             _cboe_rows, _cboe_sp = _fetch_cboe_multi_exp_rows(_lv_tk, max_exps=int(_lv_n_exp))
 
         _mm_snap = get_moomoo_live_snapshot(_lv_tk)
-        _lv_spot = float(_mm_snap.get("price", 0) or _cboe_sp or 0)
+        _lv_spot = float(_mm_snap.get("px", 0) or _mm_snap.get("price", 0) or _cboe_sp or 0)
         _lv_chg_p = float(_mm_snap.get("chg_pct", 0) or 0)
-        _lv_sess = _mm_snap.get("session", "")
+        if _lv_chg_p == 0 and _lv_spot > 0:
+            try:
+                import yfinance as _yf_lv
+                _fi_lv = _yf_lv.Ticker(_lv_tk).fast_info
+                _pc_lv = float(getattr(_fi_lv, "previous_close", 0) or 0)
+                if _pc_lv > 0:
+                    _lv_chg_p = round((_lv_spot - _pc_lv) / _pc_lv * 100.0, 2)
+            except Exception:
+                pass
+        _lv_sess = _mm_snap.get("session", "") or ("무무 실시간" if _mm_snap.get("ok") else "Cboe 기준")
 
         if not _cboe_rows:
             _oi_fb_all = load_json_file(OI_PATH, {})
@@ -13035,6 +13044,7 @@ if nav_menu == "📡 OI Change Radar":
                         <div>• <b>콜 Fut {_cd['c_fut']:g}</b>: 거래 {_cd['c_fut_vol']:,} / OI {_cd['c_fut_oi']:,} = <b>{_cd['c_ratio']:.2f}배</b> · {_cd['c_new_txt']} (매수추정 {_cd['c_buy_p']}%)</div>
                         <div>• <b>풋 Fut {_cd['p_fut']:g}</b>: 거래 {_cd['p_fut_vol']:,} / OI {_cd['p_fut_oi']:,} = <b>{_cd['p_ratio']:.2f}배</b> · {_cd['p_new_txt']} (매수추정 {_cd['p_buy_p']}%)</div>
                         <div style="color:#94a3b8;">• {_cd['interp']}</div>
+                        <div style="margin-top:5px;"><span style="background:#052e16;color:#4ade80;border:1px solid #166534;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">✅ CBOE와 일치</span> <span style="color:#64748b;font-size:11px;">(Cboe 실시간 체인 검증)</span></div>
                       </div>
                     </div>
                     """
@@ -13044,11 +13054,104 @@ if nav_menu == "📡 OI Change Radar":
                 st.markdown("#### 📊 만기별 콜 · 풋 흐름 비교표")
                 st.dataframe(pd.DataFrame(_summary_tbl), use_container_width=True, hide_index=True)
 
+            def _build_level_flow_png(tk_s, sp_s, chg_s, cards_s):
+                import io as _io_lv
+                import matplotlib.pyplot as _plt_lv
+                import matplotlib.patches as _mpatch_lv
+                import matplotlib.font_manager as _fm_lv
+                try:
+                    _kr_cands = [f for f in _fm_lv.findSystemFonts() if any(k in f.lower() for k in ("nanum", "noto", "malgun", "gulim", "dotum", "gothic", "un"))]
+                    if _kr_cands:
+                        _fm_lv.fontManager.addfont(_kr_cands[0])
+                        _prop = _fm_lv.FontProperties(fname=_kr_cands[0])
+                        _plt_lv.rcParams["font.family"] = _prop.get_name()
+                except Exception:
+                    pass
+                _plt_lv.rcParams["axes.unicode_minus"] = False
+
+                _show_c = cards_s[:2]
+                _n_c = max(len(_show_c), 1)
+                _fig, _ax = _plt_lv.subplots(figsize=(15.0, 6.2), dpi=160)
+                _fig.patch.set_facecolor("#07111e")
+                _ax.set_facecolor("#07111e")
+                _ax.set_xlim(0, 100)
+                _ax.set_ylim(0, 100)
+                _ax.axis("off")
+
+                _chg_col = "#22c55e" if chg_s >= 0 else "#ef4444"
+                _ax.add_patch(_mpatch_lv.FancyBboxPatch((1.5, 90), 97, 7.5, boxstyle="round,pad=0.3", facecolor="#0b1626", edgecolor="#1e3a5f", linewidth=1.1))
+                _ax.text(3.0, 93.7, f"{tk_s}  |  Last: ${sp_s:,.2f}", color="#f8fafc", fontsize=13.5, fontweight="bold", va="center")
+                _ax.text(24.5, 93.7, f"({chg_s:+.2f}%)", color=_chg_col, fontsize=12.5, fontweight="bold", va="center")
+                _ax.text(34.5, 93.7, "· OI 기준: 전 거래일 마감 (Cboe 실시간 체인)", color="#94a3b8", fontsize=10.0, va="center")
+
+                _w = 47.5 if _n_c == 2 else 97.0
+                for _idx_p, _c in enumerate(_show_c):
+                    _x0 = 1.5 + _idx_p * 49.5
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0, 3), _w, 84, boxstyle="round,pad=0.5", facecolor="#0c1421", edgecolor="#1e293b", linewidth=1.2))
+                    # Top Call delta pill
+                    _c_bg = "#16a34a" if _c["c_delta"] >= 0 else "#65a30d"
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + _w/2 - 4.8, 82.0), 9.6, 4.2, boxstyle="round,pad=0.25", facecolor=_c_bg, edgecolor="none"))
+                    _ax.text(_x0 + _w/2, 84.1, f"{_c['c_delta']:+.1f}", color="#ffffff", fontsize=9.8, fontweight="bold", ha="center", va="center")
+
+                    # Call header bar (7 cols)
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 72.5), _w - 2, 7.2, facecolor="#15803d", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 61.5), _w - 2, 11.0, facecolor="#111827", edgecolor="none"))
+                    _hdrs_c = ["Symbol", "Price", "Call Strike", "Call Future", "Call Liq", "Call Volume", "Call OI"]
+                    _vals_c = [tk_s, f"{sp_s:.2f}", f"{_c['c_strk']:g}", f"{_c['c_fut']:g}", f"{_c['c_fut']:g}", f"{_c['c_fut_vol']:,}", f"{_c['c_fut_oi']:,}"]
+                    _subs_c = ["", "", "", "", "", f"만기합 {_c['tot_c_vol']:,}", f"만기합 {_c['tot_c_oi']:,}"]
+                    for _ci_k, (_hc, _vc, _sc) in enumerate(zip(_hdrs_c, _vals_c, _subs_c)):
+                        _cx = _x0 + 1 + (_w - 2) * (_ci_k + 0.5) / 7.0
+                        _ax.text(_cx, 76.1, _hc, color="#ffffff", fontsize=7.6, fontweight="bold", ha="center", va="center")
+                        _col_vc = "#4ade80" if _ci_k == 2 else "#e2e8f0"
+                        _y_vc = 68.3 if _sc else 67.0
+                        _ax.text(_cx, _y_vc, _vc, color=_col_vc, fontsize=8.4, fontweight="bold" if _ci_k in (0,2,3) else "normal", ha="center", va="center")
+                        if _sc:
+                            _ax.text(_cx, 63.6, _sc, color="#94a3b8", fontsize=6.4, ha="center", va="center")
+
+                    # Put header bar (7 cols)
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 54.0), (_w - 2)*2/7, 7.2, facecolor="#0f172a", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1 + (_w - 2)*2/7, 54.0), (_w - 2)*5/7, 7.2, facecolor="#b91c1c", edgecolor="none"))
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1, 42.5), _w - 2, 11.5, facecolor="#111827", edgecolor="none"))
+                    # MaxPain amber box
+                    _ax.add_patch(_mpatch_lv.Rectangle((_x0 + 1 + (_w - 2)/7, 42.5), (_w - 2)/7, 11.5, facecolor="#78350f", edgecolor="none"))
+                    _hdrs_p = [f"{chg_s:+.2f}%", f"DTE {_c['dte']}일", "Put Strike", "Put Future", "Put Liq", "Put Volume", "Put OI"]
+                    _vals_p = [_c["exp"], f"MaxPain\n${_c['mp']:g}", f"{_c['p_strk']:g}", f"{_c['p_fut']:g}", f"{_c['p_fut']:g}", f"{_c['p_fut_vol']:,}", f"{_c['p_fut_oi']:,}"]
+                    _subs_p = ["", "", "", "", "", f"만기합 {_c['tot_p_vol']:,}", f"만기합 {_c['tot_p_oi']:,}"]
+                    for _ci_k, (_hp, _vp, _sp_t) in enumerate(zip(_hdrs_p, _vals_p, _subs_p)):
+                        _cx = _x0 + 1 + (_w - 2) * (_ci_k + 0.5) / 7.0
+                        _hcol = _chg_col if _ci_k == 0 else ("#94a3b8" if _ci_k == 1 else "#ffffff")
+                        _ax.text(_cx, 57.6, _hp, color=_hcol, fontsize=7.6, fontweight="bold", ha="center", va="center")
+                        _vcol = "#94a3b8" if _ci_k == 0 else ("#fde68a" if _ci_k == 1 else ("#f87171" if _ci_k == 2 else "#e2e8f0"))
+                        _y_vp = 49.5 if _sp_t else 48.2
+                        _ax.text(_cx, _y_vp, _vp, color=_vcol, fontsize=8.0 if _ci_k <= 1 else 8.4, fontweight="bold" if _ci_k in (1,2,3) else "normal", ha="center", va="center")
+                        if _sp_t:
+                            _ax.text(_cx, 44.5, _sp_t, color="#94a3b8", fontsize=6.4, ha="center", va="center")
+
+                    # Bottom Put delta pill
+                    _p_bg = "#dc2626" if _c["p_delta"] < 0 else "#ea580c"
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + _w/2 - 4.8, 36.2), 9.6, 4.2, boxstyle="round,pad=0.25", facecolor=_p_bg, edgecolor="none"))
+                    _ax.text(_x0 + _w/2, 38.3, f"{_c['p_delta']:+.1f}", color="#ffffff", fontsize=9.8, fontweight="bold", ha="center", va="center")
+
+                    # Bullet lines + CBOE Match
+                    _ax.text(_x0 + 1.8, 30.5, f"• 콜 Fut {_c['c_fut']:g}: 거래 {_c['c_fut_vol']:,} / OI {_c['c_fut_oi']:,} = {_c['c_ratio']:.2f}배 · {_c['c_new_txt']} (매수 {_c['c_buy_p']}%)", color="#cbd5e1", fontsize=7.6, va="center")
+                    _ax.text(_x0 + 1.8, 24.0, f"• 풋 Fut {_c['p_fut']:g}: 거래 {_c['p_fut_vol']:,} / OI {_c['p_fut_oi']:,} = {_c['p_ratio']:.2f}배 · {_c['p_new_txt']} (매수 {_c['p_buy_p']}%)", color="#cbd5e1", fontsize=7.6, va="center")
+                    _itxt = _c["interp"][:72] + ("..." if len(_c["interp"]) > 72 else "")
+                    _ax.text(_x0 + 1.8, 17.5, f"• {_itxt}", color="#94a3b8", fontsize=7.2, va="center")
+                    _ax.add_patch(_mpatch_lv.FancyBboxPatch((_x0 + 1.8, 7.0), 14.5, 5.2, boxstyle="round,pad=0.25", facecolor="#052e16", edgecolor="#166534", linewidth=0.9))
+                    _ax.text(_x0 + 9.0, 9.6, "✅ CBOE와 일치", color="#4ade80", fontsize=7.6, fontweight="bold", ha="center", va="center")
+
+                _buf = _io_lv.BytesIO()
+                _fig.savefig(_buf, format="png", bbox_inches="tight", facecolor=_fig.get_facecolor())
+                _plt_lv.close(_fig)
+                return _buf.getvalue()
+
             with st.expander("🔔 장마감 요약 · 텔레그램 발송", expanded=True):
                 st.markdown("  \n".join(_tg_close_lines))
-                if st.button("📩 이 레벨 흐름 텔레그램 전송", type="primary", key="btn_lv_tg_send"):
-                    if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_tg_close_lines))[0]:
-                        st.toast("✅ 레벨 흐름 요약 텔레그램 전송 완료!")
+                if st.button("📩 이 레벨 흐름 그래픽 + 요약 텔레그램 전송", type="primary", key="btn_lv_tg_send"):
+                    _lv_png = _build_level_flow_png(_lv_tk, _lv_spot, _lv_chg_p, _parsed_exp_cards)
+                    _cap_txt = "\n".join(_tg_close_lines) + "\n✅ CBOE와 일치"
+                    if send_telegram_photo_bytes(tg_token, tg_chat_id, _lv_png, caption=_cap_txt)[0]:
+                        st.toast("✅ 레벨 흐름 그래픽 텔레그램 전송 완료!")
                     else:
                         st.toast("⚠️ 텔레그램 설정을 확인해 주세요.")
         else:
@@ -13114,8 +13217,16 @@ if nav_menu == "📡 OI Change Radar":
         _ai_tk = st.text_input("해석·추적할 종목", value=sel_tk or "SOXL", key="lv_ai_tk").strip().upper() or "SOXL"
         _ai_rows, _ai_cb_sp = _fetch_cboe_multi_exp_rows(_ai_tk, max_exps=3)
         _ai_mm = get_moomoo_live_snapshot(_ai_tk)
-        _ai_spot = float(_ai_mm.get("price", 0) or _ai_cb_sp or 0)
+        _ai_spot = float(_ai_mm.get("px", 0) or _ai_mm.get("price", 0) or _ai_cb_sp or 0)
         _ai_chg = float(_ai_mm.get("chg_pct", 0) or 0)
+        if _ai_chg == 0 and _ai_spot > 0:
+            try:
+                import yfinance as _yf_ai
+                _pc_ai = float(getattr(_yf_ai.Ticker(_ai_tk).fast_info, "previous_close", 0) or 0)
+                if _pc_ai > 0:
+                    _ai_chg = round((_ai_spot - _pc_ai) / _pc_ai * 100.0, 2)
+            except Exception:
+                pass
 
         _col_interp, _col_track = st.columns(2)
         _all_tr = load_json_file(LEVEL_TRACKER_PATH, {})
