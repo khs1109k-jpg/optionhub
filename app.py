@@ -13960,12 +13960,44 @@ if nav_menu == "🌑 Dark Pool Classification":
 
 
 if nav_menu == "🧠 AI Consensus":
-    st.title("🧠 AI Consensus Engine (9대 데이터 통합 합의)")
-    st.caption("GEX · DEX · OI · Option Flow · Smart Money · Dark Pool · InsiderFinance · Market Tide · Conviction 통합 합의")
+    st.title("🧠 AI Consensus 통합 의사결정 허브")
+    st.caption("기존 GEX · OI · Flow · Dark Pool · InsiderFinance · Smart Money 데이터를 하나로 통합해 최종 강세/약세/중립 판정과 신뢰도를 자동 산출합니다.")
 
     _oi_c = load_json_file(OI_PATH, {})
     _bf_c = load_json_file(BIG_FLOWS_PATH, [])
     _mc_dir, _mc_risk, _mc_list, _sc_list, _ins_b, _ins_cnts, _ins_subj, _dp_m, _td_d = compute_market_and_sector_consensus(_oi_c, all_raw_flows, _bf_c)
+
+    _c_tks = ["SOXL", "NVDA", "TSLA", "MU", "AMD", "META", "AAPL", "MSFT", "AVGO", "QQQ", "SPY", "SOXX"]
+    _def_cs_idx = _c_tks.index(sel_tk) if sel_tk in _c_tks else 0
+    _sel_cs_tk = st.selectbox("🔍 통합 분석 종목 선택", _c_tks, index=_def_cs_idx, key="cs_sel_tk")
+    _cs = compute_ai_consensus(_sel_cs_tk, _oi_c, all_raw_flows, _bf_c, _ins_b, _dp_m, _td_d)
+
+    # 최종 판정 히어로 배너 (수치 해석 없이 바로 강세/약세/중립 + 신뢰도)
+    _vd_bg = "#052e16" if "강세" in _cs["dir"] else ("#450a0a" if "약세" in _cs["dir"] else "#1e293b")
+    _vd_bd = "#16a34a" if "강세" in _cs["dir"] else ("#dc2626" if "약세" in _cs["dir"] else "#64748b")
+    _vd_cl = "#4ade80" if "강세" in _cs["dir"] else ("#f87171" if "약세" in _cs["dir"] else "#e2e8f0")
+    _mm_cs = get_moomoo_live_snapshot(_sel_cs_tk)
+    _cs_spot = float(_mm_cs.get("px", 0) or 0)
+    if _cs_spot <= 0 and _sel_cs_tk in _oi_c and _oi_c[_sel_cs_tk]:
+        _cs_spot = float(_oi_c[_sel_cs_tk][-1].get("Spot", 0) or 0)
+
+    st.markdown(
+        f"""
+        <div style="background:{_vd_bg};border:2px solid {_vd_bd};border-radius:12px;padding:16px 20px;margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+            <div>
+              <div style="color:#94a3b8;font-size:13px;font-weight:600;">{_sel_cs_tk} {f'(${_cs_spot:,.2f})' if _cs_spot>0 else ''} · 9대 데이터 통합 최종 판정</div>
+              <div style="color:{_vd_cl};font-size:28px;font-weight:800;margin-top:2px;">{_cs['dir']} &nbsp;|&nbsp; 신뢰도 {_cs['conf']}%</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="color:#cbd5e1;font-size:14px;">통합 점수: <b>{_cs['score']} / 100</b> &nbsp;·&nbsp; 시장 합의: <b>{_mc_dir}</b> &nbsp;·&nbsp; Risk Score: <b>{_mc_risk}/100</b></div>
+              <div style="color:#e2e8f0;font-size:13px;margin-top:4px;">💡 {_cs['최종']}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     _tm1, _tm2, _tm3, _tm4, _tm5 = st.columns(5)
     _tm1.metric("AI Market Consensus", _mc_dir)
@@ -13973,16 +14005,15 @@ if nav_menu == "🧠 AI Consensus":
     for _mcol, _mr in zip((_tm3, _tm4, _tm5), _mc_list):
         _mcol.metric(f"{_mr['tk']}", _mr["dir"], f"점수 {_mr['strength']}/100")
 
-    _c_tks = ["NVDA", "TSLA", "META", "AMD", "MU", "SOXL", "AAPL", "MSFT", "AVGO", "SPY", "QQQ", "SOXX"]
-    _sel_cs_tk = st.selectbox("🔍 종목별 9대 데이터 AI Consensus 상세", _c_tks, index=0, key="cs_sel_tk")
-    _cs = compute_ai_consensus(_sel_cs_tk, _oi_c, all_raw_flows, _bf_c, _ins_b, _dp_m, _td_d)
+    _hub_t1, _hub_t2, _hub_t3, _hub_t4 = st.tabs([
+        "1️⃣ AI Consensus & 6대 타임프레임",
+        "2️⃣ OI Intent & Call/Put Wall 추적",
+        "3️⃣ Sector Rotation Dashboard",
+        "4️⃣ InsiderFinance Parser & 전체 종목 판정표",
+    ])
 
-    with st.container(border=True):
-        _h1, _h2, _h3 = st.columns(3)
-        _h1.metric(f"🧠 {_cs['tk']} Consensus Score", f"{_cs['score']} / 100")
-        _h2.metric("최종 합의 방향", _cs["dir"])
-        _h3.metric("신뢰도", f"{_cs['conf']}%")
-
+    with _hub_t1:
+        st.subheader(f"📊 {_sel_cs_tk} 6대 핵심 소스 판정")
         _f1, _f2, _f3, _f4, _f5, _f6 = st.columns(6)
         _f1.metric("GEX", _cs["GEX"])
         _f2.metric("OI", _cs["OI"])
@@ -13991,33 +14022,135 @@ if nav_menu == "🧠 AI Consensus":
         _f5.metric("InsiderFinance", _cs["InsiderFinance"])
         _f6.metric("Smart Money", _cs["Smart Money"])
 
-        _t1, _t2, _t3 = st.columns(3)
-        _t1.metric("단기 (GEX·Flow)", _cs["단기"])
-        _t2.metric("중기 (OI·Tide)", _cs["중기"])
-        _t3.metric("장기 (SM·DP·Insider)", _cs["장기"])
-        st.info(f"💡 **최종 해석:** {_cs['최종']}")
+        st.subheader("⏱️ 단기 / 중기 / 장기 타임프레임 통합 분석")
+        def _tf_dir_badge(val):
+            s = str(val)
+            if "강세" in s or "상방" in s or "매수" in s or "유입" in s: return "🟢 강세", "#16a34a"
+            if "약세" in s or "하방" in s or "매도" in s or "이탈" in s: return "🔴 약세", "#dc2626"
+            return "🟡 중립", "#ca8a04"
 
-    _sc_c1, _sc_c2 = st.columns(2)
-    with _sc_c1:
-        st.subheader("📊 Sector Consensus")
-        st.dataframe(pd.DataFrame(_sc_list), hide_index=True, use_container_width=True)
-    with _sc_c2:
-        st.subheader("📧 InsiderFinance 이메일 자동 파싱 (5대 섹션)")
-        st.caption(f"최신 메일: {_ins_subj}")
-        st.dataframe(pd.DataFrame([
-            {"섹션": "AI Market Insights", "감지": _ins_cnts["insights"]},
-            {"섹션": "AI Noteworthy Trades", "감지": _ins_cnts["noteworthy"]},
-            {"섹션": "AI Options Plays", "감지": _ins_cnts["plays"]},
-            {"섹션": "ETF Flow", "감지": _ins_cnts["etf"]},
-            {"섹션": "Unusual Flow", "감지": _ins_cnts["unusual"]},
-        ]), hide_index=True, use_container_width=True)
+        _tf_items = [
+            ("⚡ 단기 (1~3일)", "GEX · 실시간 Flow · 0~7DTE", _cs["단기"]),
+            ("📅 중기 (1~3주)", "OI 누적 변화 · Market Tide · 8~30DTE", _cs["중기"]),
+            ("🏛️ 장기 (1개월+)", "Smart Money · Dark Pool · InsiderFinance", _cs["장기"]),
+        ]
+        _tf_cols = st.columns(3)
+        _tf_dirs = []
+        for _tcol, (_t_title, _t_sub, _t_val) in zip(_tf_cols, _tf_items):
+            _t_lbl, _t_clr = _tf_dir_badge(_t_val)
+            _tf_dirs.append(_t_lbl)
+            _tcol.markdown(
+                f"<div style='background:#0c1421;border:1px solid {_t_clr};border-radius:10px;padding:12px;'>"
+                f"<div style='color:#94a3b8;font-size:12px;'>{_t_title}</div>"
+                f"<div style='color:#f8fafc;font-size:20px;font-weight:800;margin:4px 0;'>{_t_lbl} ({_t_val})</div>"
+                f"<div style='color:#cbd5e1;font-size:12px;'>근거: {_t_sub}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        _agree_cnt = max(_tf_dirs.count("🟢 강세"), _tf_dirs.count("🔴 약세"), _tf_dirs.count("🟡 중립"))
+        st.caption(f"🎯 타임프레임 일치도: **{_agree_cnt}/3 일치** — 3개 구간이 같은 방향일수록 추세 지속 신뢰도가 높습니다.")
 
-    if st.button("📩 AI Consensus 브리핑 텔레그램 전송", type="primary", key="btn_cs_tg"):
+    with _hub_t2:
+        _c_oi_int, _c_wall_tr = st.columns(2)
+        with _c_oi_int:
+            st.subheader(f"🧭 OI Intent Engine ({_sel_cs_tk} 및 주요 급증)")
+            _cs10_h, _ps10_h, _dr10_h = compute_oi_change_radar(_oi_c, all_raw_flows, _bf_c)
+            _all_int = _cs10_h + _ps10_h + _dr10_h
+            _tk_int = [r for r in _all_int if r.get("종목") == _sel_cs_tk] or _all_int[:10]
+            if _tk_int:
+                _n_acc = sum(1 for r in _tk_int if "매집" in r.get("기관 의도", ""))
+                _n_hdg = sum(1 for r in _tk_int if "헤지" in r.get("기관 의도", ""))
+                _n_def = sum(1 for r in _tk_int if "하방방어" in r.get("기관 의도", ""))
+                _n_prf = sum(1 for r in _tk_int if "차익실현" in r.get("기관 의도", ""))
+                _oi_verdict = "🟢 기관 매집/하방방어 우세 (강세)" if (_n_acc + _n_def) > (_n_hdg + _n_prf) else ("🔴 헤지/차익실현 우세 (주의)" if (_n_hdg + _n_prf) > (_n_acc + _n_def) else "🟡 매집·헤지 혼조 (중립)")
+                st.info(f"**OI Intent 종합 판정:** {_oi_verdict} (매집 {_n_acc} · 하방방어 {_n_def} · 헤지 {_n_hdg} · 차익실현 {_n_prf})")
+                st.dataframe(pd.DataFrame(_tk_int)[["종목", "계약", "OI Score", "Vol/OI", "New Pos(%)", "OI Intent", "기관 의도", "신뢰도"]], hide_index=True, use_container_width=True)
+            else:
+                st.info("2일 이상 OI 스냅샷이 쌓이면 BTO/STO/STC/BTC 및 기관 의도가 자동 산출됩니다.")
+
+        with _c_wall_tr:
+            st.subheader(f"🧱 Call Wall / Put Wall Tracker ({_sel_cs_tk})")
+            _snaps_w = _oi_c.get(_sel_cs_tk, []) if isinstance(_oi_c, dict) else []
+            _by_d_w = {str(s.get("수집시각", ""))[:10]: s for s in _snaps_w if s.get("상세")}
+            _w_rows = []
+            for _dk in sorted(_by_d_w.keys())[-10:]:
+                _sw = _by_d_w[_dk]
+                _spw = float(_sw.get("Spot", 0) or 0)
+                _cm, _pm = {}, {}
+                for _x in (_sw.get("상세") or []):
+                    _k = float(_x.get("행사가", 0) or 0)
+                    _o = int(_x.get("OI", 0) or 0)
+                    if _k <= 0 or _o <= 0: continue
+                    if str(_x.get("구분", "")).lower().startswith("c"): _cm[_k] = _cm.get(_k, 0) + _o
+                    else: _pm[_k] = _pm.get(_k, 0) + _o
+                _cw = max({k: v for k, v in _cm.items() if _spw <= 0 or k >= _spw * 0.98} or _cm, key=lambda k: _cm[k], default=0)
+                _pw = max({k: v for k, v in _pm.items() if _spw <= 0 or k <= _spw * 1.02} or _pm, key=lambda k: _pm[k], default=0)
+                _w_rows.append({"날짜": _dk, "Spot": f"${_spw:.2f}", "Call Wall": f"${_cw:g}" if _cw else "-", "Put Wall": f"${_pw:g}" if _pw else "-", "_cw_n": _cw, "_pw_n": _pw})
+            if _w_rows:
+                _last_w = _w_rows[-1]
+                _prev_w = _w_rows[-2] if len(_w_rows) >= 2 else _last_w
+                _cw_mv = _last_w["_cw_n"] - _prev_w["_cw_n"]
+                _pw_mv = _last_w["_pw_n"] - _prev_w["_pw_n"]
+                _w_note = f"Call Wall {'상향 ↑' if _cw_mv>0 else ('하향 ↓' if _cw_mv<0 else '유지')} ({_last_w['Call Wall']}) · Put Wall {'상향 ↑' if _pw_mv>0 else ('하향 ↓' if _pw_mv<0 else '유지')} ({_last_w['Put Wall']})"
+                st.success(f"**벽 이동 요약:** {_w_note}")
+                st.dataframe(pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in _w_rows[::-1]]), hide_index=True, use_container_width=True)
+            else:
+                st.info(f"{_sel_cs_tk}의 저장된 OI 스냅샷이 없습니다.")
+
+    with _hub_t3:
+        st.subheader("🔄 Sector Rotation Dashboard (섹터별 자금·강세 로테이션)")
+        if _sc_list:
+            _df_sc = pd.DataFrame(_sc_list)
+            st.dataframe(_df_sc, hide_index=True, use_container_width=True)
+            try:
+                _sc_num_col = next((c for c in _df_sc.columns if "점수" in c or "Score" in c or "강도" in c), None)
+                _sc_name_col = _df_sc.columns[0]
+                if _sc_num_col:
+                    _fig_sc = go.Figure(go.Bar(
+                        x=_df_sc[_sc_name_col], y=pd.to_numeric(_df_sc[_sc_num_col], errors="coerce").fillna(50),
+                        marker_color=["#22c55e" if float(v or 50) >= 60 else ("#ef4444" if float(v or 50) <= 40 else "#eab308") for v in pd.to_numeric(_df_sc[_sc_num_col], errors="coerce").fillna(50)],
+                        text=_df_sc[_sc_num_col], textposition="outside"
+                    ))
+                    _fig_sc.update_layout(title="섹터별 AI 합의 강도 (높을수록 자금 유입·강세 주도)", template="plotly_dark", height=320, margin=dict(l=30, r=20, t=40, b=30))
+                    st.plotly_chart(_fig_sc, use_container_width=True, key="hub_sec_rot_ch")
+            except Exception:
+                pass
+
+    with _hub_t4:
+        _c_ins, _c_all_cs = st.columns([1, 1.3])
+        with _c_ins:
+            st.subheader("📧 InsiderFinance Parser (5대 섹션)")
+            st.caption(f"최신 메일: {_ins_subj}")
+            st.dataframe(pd.DataFrame([
+                {"섹션": "AI Market Insights", "감지 건수": _ins_cnts["insights"]},
+                {"섹션": "AI Noteworthy Trades", "감지 건수": _ins_cnts["noteworthy"]},
+                {"섹션": "AI Options Plays", "감지 건수": _ins_cnts["plays"]},
+                {"섹션": "ETF Flow", "감지 건수": _ins_cnts["etf"]},
+                {"섹션": "Unusual Flow", "감지 건수": _ins_cnts["unusual"]},
+            ]), hide_index=True, use_container_width=True)
+            if isinstance(_ins_b, dict) and _ins_b:
+                _ins_rows = [{"티커": k, "신호": v.get("dir", v) if isinstance(v, dict) else str(v)} for k, v in list(_ins_b.items())[:12]]
+                st.markdown("**파싱된 주요 티커 신호**")
+                st.dataframe(pd.DataFrame(_ins_rows), hide_index=True, use_container_width=True)
+
+        with _c_all_cs:
+            st.subheader("🏆 주요 종목 통합 판정 리더보드 (판정 + 신뢰도)")
+            _lb_rows = []
+            for _tk_l in _c_tks:
+                _c_l = compute_ai_consensus(_tk_l, _oi_c, all_raw_flows, _bf_c, _ins_b, _dp_m, _td_d)
+                _lb_rows.append({
+                    "티커": _tk_l, "최종 판정": _c_l["dir"], "신뢰도": f"{_c_l['conf']}%",
+                    "점수": _c_l["score"], "단기": _c_l["단기"], "중기": _c_l["중기"], "장기": _c_l["장기"],
+                })
+            _lb_rows.sort(key=lambda r: r["점수"], reverse=True)
+            st.dataframe(pd.DataFrame(_lb_rows), hide_index=True, use_container_width=True)
+
+    if st.button("📩 AI Consensus 통합 브리핑 텔레그램 전송", type="primary", key="btn_cs_tg"):
         _cs_msg = (
-            f"🧠 *[AI Consensus Engine]*\n"
+            f"🧠 *[AI Consensus 통합 판정]*\n"
             f"시장: {_mc_dir} | Risk Score: {_mc_risk}/100\n"
             + " · ".join(f"{x['tk']} {x['dir']}({x['strength']})" for x in _mc_list)
-            + f"\n\n*{_cs['tk']}* {_cs['score']}/100 ({_cs['dir']}, 신뢰도 {_cs['conf']}%)\n"
+            + f"\n\n*{_cs['tk']}* → *{_cs['dir']}* (점수 {_cs['score']}/100, 신뢰도 {_cs['conf']}%)\n"
             f"단기 {_cs['단기']} · 중기 {_cs['중기']} · 장기 {_cs['장기']}\n"
             f"↳ {_cs['최종']}"
         )
