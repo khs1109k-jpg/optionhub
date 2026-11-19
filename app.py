@@ -11313,13 +11313,78 @@ if nav_menu == "🔮 Perspicium 퀀트·UOA":
             else:
                 st.warning(f"🟡 Perspicium 응답 지연/점검: {_e_ping}")
 
-        _pt1, _pt2, _pt3, _pt4, _pt5 = st.tabs([
+        _pt_g, _pt_dl, _pt_gm, _pt_th, _pt_vg, _pt1, _pt2, _pt3, _pt4, _pt5 = st.tabs([
+            "⚡ GEX",
+            "🔺 Delta",
+            "🌀 Gamma",
+            "⏳ Theta",
+            "🌊 Vega",
             "🔥 UOA 이상체결",
             "⚡ 3기준 GEX 비교",
             "📐 예상변동폭 & IV",
             "🧠 과거 유사패턴",
             "📊 계절성 · 섹터 · 리스크",
         ])
+
+        def _render_single_greek_tab(_tk_g, _metric_nm, _col_hex, _key_suf):
+            import plotly.graph_objects as _go_sg
+            _rng_sg = st.slider("행사가 범위 (±%)", 0.15, 0.80, 0.30, 0.05, key=f"sg_rng_{_key_suf}")
+            _cb_sg = _fetch_live_oi_fallback(_tk_g)
+            _rows_sg = (_cb_sg or {}).get("상세") or []
+            _sp_sg = float((_cb_sg or {}).get("Spot") or 0)
+            if not _rows_sg or _sp_sg <= 0:
+                st.warning(f"{_tk_g} 옵션 체인 데이터를 불러오지 못했습니다.")
+                return
+            _df_sg = pd.DataFrame(_rows_sg)
+            if "행사가" in _df_sg.columns:
+                _df_sg = _df_sg[(_df_sg["행사가"] >= _sp_sg * (1 - _rng_sg)) & (_df_sg["행사가"] <= _sp_sg * (1 + _rng_sg))].copy()
+            if _df_sg.empty:
+                st.info("선택한 범위 내 행사가가 없습니다.")
+                return
+            if _metric_nm in ("Theta", "Vega"):
+                _vals_tv = []
+                for _, _r_tv in _df_sg.iterrows():
+                    _kk = float(_r_tv.get("행사가", 0) or 0)
+                    _ivk = max(float(_r_tv.get("IV(%)", 30) or 30) / 100.0, 0.08)
+                    _ty = max(int(_r_tv.get("DTE", 7) or 7), 1) / 365.0
+                    try:
+                        _sq = math.sqrt(_ty)
+                        _d1 = (math.log(max(_sp_sg, 0.01) / max(_kk, 0.01)) + (0.045 + 0.5 * _ivk * _ivk) * _ty) / (_ivk * _sq)
+                        _pdf = math.exp(-0.5 * _d1 * _d1) / math.sqrt(2.0 * math.pi)
+                        _v_out = ((_sp_sg * _pdf * _sq) / 100.0) if _metric_nm == "Vega" else (-(_sp_sg * _pdf * _ivk) / (2.0 * _sq) / 365.0)
+                    except Exception:
+                        _v_out = 0.0
+                    _vals_tv.append(round(_v_out, 4))
+                _df_sg[_metric_nm] = _vals_tv
+            _val_col = {"GEX": "GEX($M)", "Delta": "DEX($M)", "Gamma": "Gamma", "Theta": "Theta", "Vega": "Vega"}[_metric_nm]
+            _agg_fn = "sum" if _metric_nm in ("GEX", "Delta") else "mean"
+            _grp_sg = _df_sg.groupby("행사가", as_index=False).agg({_val_col: _agg_fn, "OI": "sum", "거래량": "sum"})
+            _tot_v = float(_grp_sg[_val_col].sum()) if _agg_fn == "sum" else float(_grp_sg[_val_col].mean())
+            _pk_row = _grp_sg.iloc[_grp_sg[_val_col].abs().argmax()]
+            _m1, _m2, _m3 = st.columns(3)
+            _m1.metric(f"{_tk_g} 현재가", f"${_sp_sg:,.2f}")
+            _m2.metric(f"{'Net ' if _agg_fn=='sum' else '평균 '}{_metric_nm}", f"{_tot_v:+,.3f}" + ("M" if _metric_nm in ("GEX", "Delta") else ""))
+            _m3.metric(f"최대 집중 행사가", f"${float(_pk_row['행사가']):g}", f"{float(_pk_row[_val_col]):+,.3f}")
+            _fig_sg = _go_sg.Figure()
+            _fig_sg.add_trace(_go_sg.Bar(
+                x=_grp_sg["행사가"], y=_grp_sg[_val_col], name=_metric_nm,
+                marker_color=(["#10b981" if float(v) >= 0 else "#ef4444" for v in _grp_sg[_val_col]] if _metric_nm in ("GEX", "Delta") else _col_hex),
+            ))
+            _fig_sg.add_vline(x=_sp_sg, line_color="#ffffff", line_dash="dash", annotation_text=f"Spot ${_sp_sg:,.2f}")
+            _fig_sg.update_layout(title=f"{_tk_g} 행사가별 {_metric_nm} 단독 분포", template="plotly_dark", paper_bgcolor="#07111e", plot_bgcolor="#0b1626", height=360, margin=dict(l=16, r=16, t=40, b=20))
+            st.plotly_chart(_fig_sg, use_container_width=True, key=f"sg_chart_{_key_suf}")
+            st.dataframe(_grp_sg.reindex(_grp_sg[_val_col].abs().sort_values(ascending=False).index).head(15), hide_index=True, use_container_width=True)
+
+        with _pt_g:
+            _render_single_greek_tab(_p_tk, "GEX", "#10b981", "gex")
+        with _pt_dl:
+            _render_single_greek_tab(_p_tk, "Delta", "#a855f7", "delta")
+        with _pt_gm:
+            _render_single_greek_tab(_p_tk, "Gamma", "#f59e0b", "gamma")
+        with _pt_th:
+            _render_single_greek_tab(_p_tk, "Theta", "#ec4899", "theta")
+        with _pt_vg:
+            _render_single_greek_tab(_p_tk, "Vega", "#14b8a6", "vega")
 
         with _pt1:
             _uc1, _uc2, _uc3 = st.columns([1.0, 1.5, 1.5])
