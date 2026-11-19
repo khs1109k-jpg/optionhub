@@ -13045,7 +13045,7 @@ if nav_menu == "📡 OI Change Radar":
                 st.dataframe(pd.DataFrame(_summary_tbl), use_container_width=True, hide_index=True)
 
             with st.expander("🔔 장마감 요약 · 텔레그램 발송", expanded=True):
-                st.markdown("\n".join(_tg_close_lines))
+                st.markdown("  \n".join(_tg_close_lines))
                 if st.button("📩 이 레벨 흐름 텔레그램 전송", type="primary", key="btn_lv_tg_send"):
                     if send_telegram_msg(tg_token, tg_chat_id, "\n".join(_tg_close_lines))[0]:
                         st.toast("✅ 레벨 흐름 요약 텔레그램 전송 완료!")
@@ -13157,8 +13157,9 @@ if nav_menu == "📡 OI Change Radar":
                         _dir_ico = "🟢" if _dir_e == "상방" else ("🔴" if _dir_e == "약세" else "🟡")
                         _exp_dirs.append(_dir_e)
                         if _e_i == 0:
+                            from datetime import datetime as _dt_lv_now
                             _first_card_save = {
-                                "date": datetime.now().strftime("%Y-%m-%d"),
+                                "date": _dt_lv_now.now().strftime("%Y-%m-%d"),
                                 "exp_date": _ex,
                                 "spot": round(_ai_spot, 2),
                                 "dir": _dir_e,
