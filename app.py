@@ -6628,7 +6628,9 @@ if nav_menu == "📊 OI(미결제약정) 수집":
         _snaps_hm = [_by_day_hm[k] for k in sorted(_by_day_hm.keys())[-5:]]
         _wall_rows = []
         _oi_mat = {}
+        _oi_mat_sum = {}
         _dates_hm = []
+        _ref_sp_hm = float((_snaps_hm[-1].get("Spot", 0) if _snaps_hm else 0) or 0)
         for _sn in _snaps_hm:
             _dt_h = str(_sn.get("수집시각", _sn.get("날짜", "-")))[:10]
             _dates_hm.append(_dt_h)
@@ -6650,12 +6652,16 @@ if nav_menu == "📊 OI(미결제약정) 수집":
             _pw_h = max(_p_near_h, key=_p_near_h.get) if _p_near_h else None
             _net_g_h = round(sum(float(x.get("GEX($M)", 0) or 0) for x in _det_h), 2)
             _wall_rows.append({"날짜": _dt_h, "Spot": f"${_sp_h:.2f}" if _sp_h else "-", "Call Wall": f"${_cw_h:g}" if _cw_h else "-", "Put Wall": f"${_pw_h:g}" if _pw_h else "-", "Net GEX($M)": f"{_net_g_h:+.2f}M"})
+            _sp_flt = _ref_sp_hm if _ref_sp_hm > 0 else _sp_h
             for _x in _det_h:
                 _k_h = float(_x.get("행사가", 0) or 0)
-                if _sp_h > 0 and not (0.7 * _sp_h <= _k_h <= 1.3 * _sp_h):
+                if _sp_flt > 0 and not (0.65 * _sp_flt <= _k_h <= 1.35 * _sp_flt):
                     continue
+                _oi_v_h = int(_x.get("OI", 0) or 0)
                 _lbl_k = f"${_k_h:g} {'C' if _x.get('구분')=='Call' else 'P'}"
-                _oi_mat.setdefault(_lbl_k, {})[_dt_h] = _oi_mat.get(_lbl_k, {}).get(_dt_h, 0) + int(_x.get("OI", 0) or 0)
+                _oi_mat.setdefault(_lbl_k, {})[_dt_h] = _oi_mat.get(_lbl_k, {}).get(_dt_h, 0) + _oi_v_h
+                _lbl_sum = f"${_k_h:g}"
+                _oi_mat_sum.setdefault(_lbl_sum, {})[_dt_h] = _oi_mat_sum.get(_lbl_sum, {}).get(_dt_h, 0) + _oi_v_h
 
         if _wall_rows:
             st.markdown("**📌 날짜별 Call Wall / Put Wall 이동 추적**")
@@ -6681,21 +6687,40 @@ if nav_menu == "📊 OI(미결제약정) 수집":
                 _c_al2.warning("⚠️ **OPEX · 대형 OI 청산(Unwind -25%+) 경보**\n\n" + "\n".join(f"- {u}" for u in _unwinds[:4]))
 
         if _oi_mat:
-            _df_hm = pd.DataFrame.from_dict(_oi_mat, orient="index").fillna(0).astype(int)
+            _hm_c1, _hm_c2 = st.columns(2)
+            _hm_mode = _hm_c1.radio("보기 방식", ["Call / Put 분리", "가격대별 합산 (Call+Put)"], horizontal=True, key=f"oi_hm_mode_{_hm_tk}")
+            _hm_sort = _hm_c2.radio("정렬 기준", ["가격대별 (가격 순)", "OI 합계 순"], horizontal=True, key=f"oi_hm_sort_{_hm_tk}")
+            _src_mat = _oi_mat_sum if _hm_mode == "가격대별 합산 (Call+Put)" else _oi_mat
+            _df_hm = pd.DataFrame.from_dict(_src_mat, orient="index").fillna(0).astype(int)
             _df_hm["_tot"] = _df_hm.sum(axis=1)
-            _df_hm = _df_hm.sort_values("_tot", ascending=False).head(15).drop(columns=["_tot"])
+            _df_hm_top = _df_hm.sort_values("_tot", ascending=False).head(15)
+            _top_oi_order = list(_df_hm_top.index)
+            if _hm_sort == "가격대별 (가격 순)":
+                def _strike_sort_key(_lbl):
+                    _p = str(_lbl).replace("$", "").split()
+                    try:
+                        _num = float(_p[0])
+                    except Exception:
+                        _num = 0.0
+                    _cp = 0 if (len(_p) > 1 and _p[1] == "P") else 1
+                    return (_num, _cp)
+                _sorted_idx = sorted(_df_hm_top.index, key=_strike_sort_key)
+                _df_hm = _df_hm_top.loc[_sorted_idx].drop(columns=["_tot"])
+            else:
+                _df_hm = _df_hm_top.drop(columns=["_tot"])
             if not _df_hm.empty:
+                _hm_title_suffix = "가격대별 합산" if _hm_mode == "가격대별 합산 (Call+Put)" else "행사가별"
                 fig_hm = go.Figure(data=go.Heatmap(
                     z=_df_hm.values, x=list(_df_hm.columns), y=list(_df_hm.index),
                     colorscale="YlOrRd", text=_df_hm.values, texttemplate="%{text:,}",
                     hovertemplate="행사가: %{y}<br>날짜: %{x}<br>OI: %{z:,}<extra></extra>"
                 ))
-                fig_hm.update_layout(title=f"{_hm_tk} 행사가별 5일 OI 누적 히트맵 (상위 15개)", template="plotly_dark", height=420, margin=dict(l=70, r=20, t=45, b=30))
+                fig_hm.update_layout(title=f"{_hm_tk} {_hm_title_suffix} 5일 OI 누적 히트맵 (상위 15개)", template="plotly_dark", height=440, margin=dict(l=70, r=20, t=45, b=30))
                 fig_hm.update_xaxes(type="category")
                 st.plotly_chart(fig_hm, use_container_width=True)
 
                 # 📈 행사가별 날짜별 OI 증감 추이 꺾은선 차트
-                _all_hm_strikes = list(_df_hm.index)
+                _all_hm_strikes = _top_oi_order
                 _sel_line_k = st.multiselect(
                     "📈 추이 비교할 행사가 선택 (기본 상위 6개)",
                     _all_hm_strikes,
